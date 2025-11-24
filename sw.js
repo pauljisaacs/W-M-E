@@ -1,4 +1,4 @@
-const CACHE_NAME = 'wav-player-v2';
+const CACHE_NAME = 'wav-player-v3';
 const ASSETS = [
   './',
   './index.html',
@@ -6,8 +6,15 @@ const ASSETS = [
   './app.js',
   './metadata-handler.js',
   './audio-engine.js',
+  './audio-processor.js',
   './mixer.js',
-  './file-io.js'
+  './mixer-metadata.js',
+  './file-io.js',
+  './lame.min.js',
+  './manifest.json',
+  './favicon.ico',
+  './icon-192.png',
+  './icon-512.png'
 ];
 
 self.addEventListener('install', (event) => {
