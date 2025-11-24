@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WAV Metadata & Player</title>
+    <link rel="icon" type="image/x-icon" href="favicon.ico">
+    <link rel="stylesheet" href="style.css">
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#1e1e1e">
+</head>
+
+<body>
+    <div class="app-container">
+        <!-- Header & Import -->
+        <header class="app-header">
+            <h1>WAV Metadata & Player</h1>
+            <div class="header-controls">
+                <button id="import-btn" class="btn primary">Import Audio Files</button>
+                <div class="batch-actions">
+                    <button id="batch-edit-btn" class="btn secondary" disabled>Edit Selected</button>
+                    <button id="batch-save-btn" class="btn secondary" disabled>Save Selected</button>
+                    <button id="batch-remove-btn" class="btn secondary" disabled>Remove Selected</button>
+                </div>
+            </div>
+        </header>
+        <input type="file" id="file-input" multiple accept=".wav,.mp3,.aac" style="display: none;">
+
+        <!-- Metadata List -->
+        <section class="metadata-section">
+            <div class="table-container">
+                <table id="metadata-table">
+                    <thead>
+                        <tr id="table-header">
+                            <th draggable="true" data-column="0">Ch</th>
+                            <th draggable="true" data-column="1">Bits</th>
+                            <th draggable="true" data-column="2">Sample Rate</th>
+                            <th draggable="true" data-column="3">Filename</th>
+                            <th draggable="true" data-column="4">Format</th>
+                            <th draggable="true" data-column="5">Scene</th>
+                            <th draggable="true" data-column="6">Take</th>
+                            <th draggable="true" data-column="7">Duration</th>
+                            <th draggable="true" data-column="8">TC Start</th>
+                            <th draggable="true" data-column="9">FPS</th>
+                            <th draggable="true" data-column="10">Notes</th>
+                            <th draggable="true" data-column="11">Tape</th>
+                            <th draggable="true" data-column="12">Project</th>
+                            <th draggable="true" data-column="13">Date</th>
+                        </tr>
+                    </thead>
+                    <tbody id="file-list-body">
+                        <!-- Rows will be populated here -->
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- File Operations Toolbar -->
+        <div class="file-operations-toolbar">
+            <button id="view-ixml-btn" class="btn secondary" disabled>View iXML</button>
+            <button id="view-bext-btn" class="btn secondary" disabled>View bEXT</button>
+            <button id="normalize-btn" class="btn secondary" disabled>Normalize</button>
+            <button id="rename-btn" class="btn secondary" disabled>Rename</button>
+            <button id="export-btn" class="btn secondary" disabled>Export</button>
+            <button id="save-mix-btn" class="btn secondary" disabled>Save Mix to File</button>
+            <button id="load-mix-btn" class="btn secondary" disabled>Load Mix from File</button>
+        </div>
+
+        <!-- Player & Waveform -->
+        <section class="player-section collapsible expanded">
+            <div class="section-header">
+                <h2>Player & Waveform</h2>
+                <button class="toggle-btn">▼</button>
+            </div>
+            <div class="section-content">
+                <div id="region-selector" class="region-selector"></div>
+                <div class="waveform-container">
+                    <canvas id="waveform-canvas"></canvas>
+                    <div id="region-overlay" class="region-overlay"></div>
+                    <div id="playhead"></div>
+                </div>
+                <div class="transport-controls">
+                    <button id="play-btn" class="btn-icon">▶</button>
+                    <button id="stop-btn" class="btn-icon">⏹</button>
+                    <button id="loop-btn" class="btn-icon">↻</button>
+                    <div class="time-display">
+                        <span id="current-time">00:00:00.00</span> / <span id="total-time">00:00:00.00</span>
+                    </div>
+                    <div class="time-display" style="margin-left: 1rem;">
+                        <span style="color: var(--text-muted); font-size: 0.9em;">TC:</span>
+                        <span id="current-timecode">00:00:00:00</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Mixer -->
+        <section class="mixer-section collapsible expanded">
+            <div class="section-header">
+                <h2>Channel Mixer <span id="mixer-filename"
+                        style="font-weight: normal; font-size: 0.8em; color: var(--text-secondary); margin-left: 10px;"></span>
+                </h2>
+                <button class="toggle-btn">▼</button>
+            </div>
+            <div class="section-content">
+                <div id="mixer-container" class="mixer-strips">
+                    <!-- Channel strips will be generated here -->
+                </div>
+            </div>
+        </section>
+
+        <!-- Batch Edit Modal -->
+        <div id="batch-edit-modal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2>Batch Edit Metadata</h2>
+                    <button class="modal-close" id="modal-close-btn">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <p class="modal-info">Editing <span id="selected-count">0</span> selected file(s)</p>
+
+                    <div class="batch-edit-form">
+                        <div class="form-row">
+                            <input type="checkbox" id="apply-scene" class="apply-checkbox">
+                            <label for="apply-scene">Scene:</label>
+                            <input type="text" id="batch-scene" placeholder="Scene name">
+                        </div>
+
+                        <div class="form-row">
+                            <input type="checkbox" id="apply-take" class="apply-checkbox">
+                            <label for="apply-take">Take:</label>
+                            <input type="text" id="batch-take" placeholder="Take number">
+                        </div>
+
+                        <div class="form-row">
+                            <input type="checkbox" id="apply-project" class="apply-checkbox">
+                            <label for="apply-project">Project:</label>
+                            <input type="text" id="batch-project" placeholder="Project name">
+                        </div>
+
+                        <div class="form-row">
+                            <input type="checkbox" id="apply-tape" class="apply-checkbox">
+                            <label for="apply-tape">Tape:</label>
+                            <input type="text" id="batch-tape" placeholder="Tape name">
+                        </div>
+
+                        <div class="form-row">
+                            <input type="checkbox" id="apply-notes" class="apply-checkbox">
+                            <label for="apply-notes">Notes:</label>
+                            <textarea id="batch-notes" placeholder="Notes" rows="3"></textarea>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button id="batch-apply-btn" class="btn primary">Apply Changes</button>
+                    <button id="batch-cancel-btn" class="btn secondary">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- iXML Viewer Modal -->
+        <div id="ixml-modal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2>iXML Data</h2>
+                    <button class="modal-close" id="ixml-close-btn">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <pre id="ixml-content"
+                        style="background-color: var(--bg-dark); padding: 1rem; border-radius: 4px; overflow-x: auto; overflow-y: auto; height: 28rem; min-height: 28rem; font-size: 0.85rem; line-height: 1.4; white-space: pre-wrap;"></pre>
+                </div>
+                <div class="modal-footer">
+                    <button id="ixml-modal-close-btn" class="btn secondary">Close</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- bEXT Viewer Modal -->
+        <div id="bext-modal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2>bEXT Data</h2>
+                    <button class="modal-close" id="bext-close-btn">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <pre id="bext-content"
+                        style="background-color: var(--bg-dark); padding: 1rem; border-radius: 4px; overflow-x: auto; overflow-y: auto; height: 28rem; min-height: 28rem; font-size: 0.85rem; line-height: 1.4; white-space: pre-wrap;"></pre>
+                </div>
+                <div class="modal-footer">
+                    <button id="bext-modal-close-btn" class="btn secondary">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Normalize Modal -->
+    <div id="normalize-modal" class="modal">
+        <div class="modal-content small-modal">
+            <div class="modal-header">
+                <h3>Normalize Audio</h3>
+                <button class="close-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p>Normalize the peak level of selected files to:</p>
+                <div class="input-group">
+                    <label for="normalize-target">Target Level (dBFS):</label>
+                    <input type="number" id="normalize-target" min="-20" max="0" step="0.1" value="-1.0">
+                </div>
+                <p class="info-text">This will analyze the entire file and apply gain to bring the highest peak to this
+                    level.</p>
+            </div>
+            <div class="modal-footer">
+                <button id="cancel-normalize-btn" class="btn secondary">Cancel</button>
+                <button id="confirm-normalize-btn" class="btn primary">Normalize</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <!-- Rename Modal -->
+    <div id="rename-modal" class="modal">
+        <div class="modal-content small-modal">
+            <div class="modal-header">
+                <h3>Batch Rename</h3>
+                <button class="close-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="input-group">
+                    <label>Pattern:</label>
+                    <div class="radio-group">
+                        <label><input type="radio" name="rename-pattern" value="scene-take" checked>
+                            [Scene][Sep2][Take]</label>
+                        <label><input type="radio" name="rename-pattern" value="project-scene-take">
+                            [Project][Sep1][Scene][Sep2][Take]</label>
+                    </div>
+                </div>
+
+                <div class="input-group" id="sep1-group" style="display: none;">
+                    <label for="rename-sep1">Separator 1 (Proj-Scene):</label>
+                    <select id="rename-sep1">
+                        <option value="-">-</option>
+                        <option value="_">_</option>
+                        <option value="+">+</option>
+                        <option value=";">;</option>
+                        <option value=":">:</option>
+                        <option value="=">=</option>
+                        <option value="">(None)</option>
+                    </select>
+                </div>
+
+                <div class="input-group">
+                    <label for="rename-sep2">Separator 2 (Scene-Take):</label>
+                    <select id="rename-sep2">
+                        <option value="T">T</option>
+                        <option value="-">-</option>
+                        <option value="_">_</option>
+                        <option value="+">+</option>
+                        <option value=";">;</option>
+                        <option value=":">:</option>
+                        <option value="=">=</option>
+                    </select>
+                </div>
+
+                <div class="preview-box">
+                    <label>Preview:</label>
+                    <div id="rename-preview" class="preview-text">Select a file to see preview</div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="cancel-rename-btn" class="btn secondary">Cancel</button>
+                <button id="confirm-rename-btn" class="btn primary">Rename</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Export Modal -->
+    <div id="export-modal" class="modal">
+        <div class="modal-content small-modal">
+            <div class="modal-header">
+                <h3>Export Mix</h3>
+                <button class="close-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="input-group">
+                    <label for="export-format">Format:</label>
+                    <select id="export-format">
+                        <option value="wav">WAV</option>
+                        <option value="mp3">MP3</option>
+                    </select>
+                </div>
+
+                <!-- WAV Options -->
+                <div id="wav-options" class="format-options">
+                    <div class="input-group">
+                        <label for="export-bitdepth">Bit Depth:</label>
+                        <select id="export-bitdepth">
+                            <option value="16">16-bit PCM</option>
+                            <option value="24" selected>24-bit PCM</option>
+                            <option value="32">32-bit Float</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- MP3 Options -->
+                <div id="mp3-options" class="format-options" style="display: none;">
+                    <div class="input-group">
+                        <label for="export-mp3-bitrate">Bitrate:</label>
+                        <select id="export-mp3-bitrate">
+                            <option value="320">320 kbps</option>
+                            <option value="256">256 kbps</option>
+                            <option value="192" selected>192 kbps</option>
+                            <option value="128">128 kbps</option>
+                            <option value="64">64 kbps</option>
+                        </select>
+                    </div>
+                </div>
+
+                <p class="info-text">Exporting stereo mix based on current fader, pan, mute, and solo settings.</p>
+            </div>
+            <div class="modal-footer">
+                <button id="cancel-export-btn" class="btn secondary">Cancel</button>
+                <button id="confirm-export-btn" class="btn primary">Export</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="lame.min.js"></script>
+    <script type="module" src="app.js"></script>
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.getRegistrations().then(function (registrations) {
+                for (let registration of registrations) {
+                    registration.unregister();
+                }
+            });
+        }
+    </script>
+</body>
+
+</html>

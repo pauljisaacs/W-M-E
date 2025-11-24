@@ -1,0 +1,320 @@
+export class AudioProcessor {
+    constructor() {
+    }
+
+    /**
+     * Normalizes the audio data in the WAV file to the target dBFS.
+     * @param {ArrayBuffer} arrayBuffer - The raw WAV file data.
+     * @param {number} targetDb - The target peak level in dBFS (e.g., -1.0).
+     * @returns {Promise<ArrayBuffer>} - The normalized WAV file data.
+     */
+    async normalize(arrayBuffer, targetDb) {
+        const view = new DataView(arrayBuffer);
+
+        // 1. Parse WAV Header to find format and data chunk
+        const info = this.parseWavFormat(view);
+        if (!info) {
+            throw new Error('Invalid WAV file or format not supported.');
+        }
+
+        const { channels, sampleRate, bitDepth, dataOffset, dataSize, audioFormat } = info;
+
+        console.log(`Normalizing: ${bitDepth}-bit, ${channels}ch, ${sampleRate}Hz. Target: ${targetDb}dB`);
+
+        // 2. Analyze Peak (Pass 1)
+        const maxPeak = this.findPeak(view, dataOffset, dataSize, bitDepth, audioFormat);
+
+        // Convert peak to dBFS
+        // Max possible values:
+        // 16-bit: 32768
+        // 24-bit: 8388608
+        // 32-bit Int: 2147483648
+        // 32-bit Float: 1.0
+
+        let maxPossibleVal;
+        if (audioFormat === 3) { // Float
+            maxPossibleVal = 1.0;
+        } else {
+            if (bitDepth === 16) maxPossibleVal = 32768;
+            else if (bitDepth === 24) maxPossibleVal = 8388608;
+            else if (bitDepth === 32) maxPossibleVal = 2147483648;
+            else throw new Error(`Unsupported bit depth: ${bitDepth}`);
+        }
+
+        const currentPeakDb = 20 * Math.log10(maxPeak / maxPossibleVal);
+
+        console.log(`Current Peak: ${maxPeak} (${currentPeakDb.toFixed(2)} dBFS)`);
+
+        // 3. Calculate Gain
+        // If current peak is -Infinity (silent), gain is 0 (or 1, but effectively no change)
+        if (maxPeak === 0) {
+            console.warn('File is silent, skipping normalization.');
+            return arrayBuffer;
+        }
+
+        const gainDb = targetDb - currentPeakDb;
+        const gainLinear = Math.pow(10, gainDb / 20);
+
+        console.log(`Applying Gain: ${gainDb.toFixed(2)} dB (x${gainLinear.toFixed(4)})`);
+
+        // 4. Apply Gain (Pass 2)
+        // We clone the buffer to avoid modifying the original if something goes wrong, 
+        // or we can modify in place if we are sure. The caller usually passes a buffer from a file read.
+        // Let's modify in place for efficiency, assuming the caller manages the buffer.
+
+        this.applyGain(view, dataOffset, dataSize, bitDepth, audioFormat, gainLinear);
+
+        return arrayBuffer;
+    }
+
+    parseWavFormat(view) {
+        // Simple parser to find fmt and data chunks
+        if (view.getUint32(0, false) !== 0x52494646) return null; // RIFF
+        if (view.getUint32(8, false) !== 0x57415645) return null; // WAVE
+
+        let offset = 12;
+        let info = {};
+
+        while (offset < view.byteLength) {
+            const chunkId = this.getChunkId(view, offset);
+            const chunkSize = view.getUint32(offset + 4, true);
+
+            if (chunkId === 'fmt ') {
+                info.audioFormat = view.getUint16(offset + 8, true); // 1=PCM, 3=Float
+                info.channels = view.getUint16(offset + 10, true);
+                info.sampleRate = view.getUint32(offset + 12, true);
+                info.bitDepth = view.getUint16(offset + 22, true);
+            } else if (chunkId === 'data') {
+                info.dataOffset = offset + 8;
+                info.dataSize = chunkSize;
+                // We found data, we can stop if we have fmt info
+                if (info.audioFormat) break;
+            }
+
+            offset += 8 + chunkSize;
+            if (offset % 2 !== 0) offset++;
+        }
+
+        if (info.dataOffset && info.bitDepth) return info;
+        return null;
+    }
+
+    getChunkId(view, offset) {
+        let id = '';
+        for (let i = 0; i < 4; i++) {
+            id += String.fromCharCode(view.getUint8(offset + i));
+        }
+        return id;
+    }
+
+    findPeak(view, offset, size, bitDepth, audioFormat) {
+        let max = 0;
+        let pos = offset;
+        const end = offset + size;
+
+        while (pos < end) {
+            let val = 0;
+            if (audioFormat === 3 && bitDepth === 32) { // Float
+                val = Math.abs(view.getFloat32(pos, true));
+                pos += 4;
+            } else if (bitDepth === 16) {
+                val = Math.abs(view.getInt16(pos, true));
+                pos += 2;
+            } else if (bitDepth === 24) {
+                val = Math.abs(this.getInt24(view, pos));
+                pos += 3;
+            } else if (bitDepth === 32) { // Int32
+                val = Math.abs(view.getInt32(pos, true));
+                pos += 4;
+            } else {
+                pos += bitDepth / 8; // Skip unsupported
+            }
+
+            if (val > max) max = val;
+        }
+        return max;
+    }
+
+    applyGain(view, offset, size, bitDepth, audioFormat, gain) {
+        let pos = offset;
+        const end = offset + size;
+
+        while (pos < end) {
+            if (audioFormat === 3 && bitDepth === 32) { // Float
+                let val = view.getFloat32(pos, true);
+                val *= gain;
+                // Float usually doesn't clip in the file format, but standard is -1.0 to 1.0
+                // We can clamp if desired, but floats can go above 0dB. 
+                // However, for normalization to 0dB or below, we shouldn't exceed 1.0 unless target > 0dB.
+                view.setFloat32(pos, val, true);
+                pos += 4;
+            } else if (bitDepth === 16) {
+                let val = view.getInt16(pos, true);
+                val = Math.round(val * gain);
+                // Clamp
+                if (val > 32767) val = 32767;
+                if (val < -32768) val = -32768;
+                view.setInt16(pos, val, true);
+                pos += 2;
+            } else if (bitDepth === 24) {
+                let val = this.getInt24(view, pos);
+                val = Math.round(val * gain);
+                // Clamp
+                if (val > 8388607) val = 8388607;
+                if (val < -8388608) val = -8388608;
+                this.setInt24(view, pos, val);
+                pos += 3;
+            } else if (bitDepth === 32) { // Int32
+                let val = view.getInt32(pos, true);
+                val = Math.round(val * gain);
+                // Clamp
+                if (val > 2147483647) val = 2147483647;
+                if (val < -2147483648) val = -2147483648;
+                view.setInt32(pos, val, true);
+                pos += 4;
+            } else {
+                pos += bitDepth / 8;
+            }
+        }
+    }
+
+    getInt24(view, offset) {
+        const b0 = view.getUint8(offset);
+        const b1 = view.getUint8(offset + 1);
+        const b2 = view.getUint8(offset + 2);
+        let val = (b2 << 16) | (b1 << 8) | b0;
+        if (val & 0x800000) val |= 0xFF000000; // Sign extend
+        return val;
+    }
+
+    setInt24(view, offset, val) {
+        if (val < 0) val += 0x1000000; // Convert to unsigned representation
+        view.setUint8(offset, val & 0xFF);
+        view.setUint8(offset + 1, (val >> 8) & 0xFF);
+        view.setUint8(offset + 2, (val >> 16) & 0xFF);
+    }
+
+    createWavFile(audioBuffer, bitDepth, originalBuffer) {
+        const numChannels = audioBuffer.numberOfChannels;
+        const sampleRate = audioBuffer.sampleRate;
+        const length = audioBuffer.length;
+
+        let bytesPerSample = bitDepth / 8;
+        if (bitDepth === 32) bytesPerSample = 4; // Float is 4 bytes
+
+        const blockAlign = numChannels * bytesPerSample;
+        const byteRate = sampleRate * blockAlign;
+        const dataSize = length * blockAlign;
+
+        // Prepare chunks
+        const chunks = [];
+
+        // 1. fmt chunk
+        const fmtChunk = new Uint8Array(16);
+        const fmtView = new DataView(fmtChunk.buffer);
+        fmtView.setUint16(0, bitDepth === 32 ? 3 : 1, true); // Format (1=PCM, 3=Float)
+        fmtView.setUint16(2, numChannels, true);
+        fmtView.setUint32(4, sampleRate, true);
+        fmtView.setUint32(8, byteRate, true);
+        fmtView.setUint16(12, blockAlign, true);
+        fmtView.setUint16(14, bitDepth, true);
+
+        chunks.push({ id: 'fmt ', data: fmtChunk });
+
+        // 2. data chunk
+        const dataChunk = new Uint8Array(dataSize);
+        const dataView = new DataView(dataChunk.buffer);
+
+        // Interleave and convert samples
+        const channelData = [];
+        for (let i = 0; i < numChannels; i++) {
+            channelData.push(audioBuffer.getChannelData(i));
+        }
+
+        let offset = 0;
+        for (let i = 0; i < length; i++) {
+            for (let ch = 0; ch < numChannels; ch++) {
+                let sample = channelData[ch][i];
+
+                // Clip
+                sample = Math.max(-1, Math.min(1, sample));
+
+                if (bitDepth === 16) {
+                    sample = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+                    dataView.setInt16(offset, sample, true);
+                    offset += 2;
+                } else if (bitDepth === 24) {
+                    sample = sample < 0 ? sample * 0x800000 : sample * 0x7FFFFF;
+                    const val = Math.round(sample);
+                    dataView.setUint8(offset, val & 0xFF);
+                    dataView.setUint8(offset + 1, (val >> 8) & 0xFF);
+                    dataView.setUint8(offset + 2, (val >> 16) & 0xFF);
+                    offset += 3;
+                } else if (bitDepth === 32) {
+                    dataView.setFloat32(offset, sample, true);
+                    offset += 4;
+                }
+            }
+        }
+        chunks.push({ id: 'data', data: dataChunk });
+
+        // 3. Copy metadata chunks from original buffer
+        if (originalBuffer) {
+            this.copyMetadataChunks(originalBuffer, chunks);
+        }
+
+        // Construct final file
+        const totalSize = chunks.reduce((acc, chunk) => acc + 8 + chunk.data.byteLength, 4);
+        const fileBuffer = new Uint8Array(totalSize + 8);
+        const fileView = new DataView(fileBuffer.buffer);
+
+        fileView.setUint8(0, 0x52); // R
+        fileView.setUint8(1, 0x49); // I
+        fileView.setUint8(2, 0x46); // F
+        fileView.setUint8(3, 0x46); // F
+        fileView.setUint32(4, totalSize, true);
+        fileView.setUint8(8, 0x57); // W
+        fileView.setUint8(9, 0x41); // A
+        fileView.setUint8(10, 0x56); // V
+        fileView.setUint8(11, 0x45); // E
+
+        let fileOffset = 12;
+        for (const chunk of chunks) {
+            // Chunk ID
+            for (let i = 0; i < 4; i++) {
+                fileView.setUint8(fileOffset + i, chunk.id.charCodeAt(i));
+            }
+            // Chunk Size
+            fileView.setUint32(fileOffset + 4, chunk.data.byteLength, true);
+            // Chunk Data
+            fileBuffer.set(chunk.data, fileOffset + 8);
+
+            fileOffset += 8 + chunk.data.byteLength;
+        }
+
+        return fileBuffer.buffer;
+    }
+
+    copyMetadataChunks(originalBuffer, chunks) {
+        const view = new DataView(originalBuffer);
+        let offset = 12;
+        while (offset < view.byteLength - 8) {
+            const chunkId = String.fromCharCode(
+                view.getUint8(offset),
+                view.getUint8(offset + 1),
+                view.getUint8(offset + 2),
+                view.getUint8(offset + 3)
+            );
+            const chunkSize = view.getUint32(offset + 4, true);
+
+            if (chunkId === 'bext' || chunkId === 'iXML') {
+                const chunkData = new Uint8Array(originalBuffer.slice(offset + 8, offset + 8 + chunkSize));
+                chunks.push({ id: chunkId, data: chunkData });
+            }
+
+            offset += 8 + chunkSize;
+            // Pad byte
+            if (chunkSize % 2 !== 0) offset++;
+        }
+    }
+}
