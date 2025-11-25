@@ -631,3 +631,61 @@ select {
     padding-left: 10px;
     border-left: 2px solid var(--border-color);
 }
+
+/* Automation Controls */
+.automation-controls {
+    display: flex;
+    gap: 4px;
+    justify-content: center;
+    margin: 4px 0;
+}
+
+.arm-btn, .clear-auto-btn {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    font-size: 11px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.arm-btn:hover {
+    background: var(--bg-tertiary);
+    border-color: var(--accent-primary);
+}
+
+.arm-btn.active {
+    background: #e74c3c;
+    border-color: #c0392b;
+    color: white;
+    box-shadow: 0 0 10px rgba(231, 76, 60, 0.6);
+}
+
+.clear-auto-btn {
+    opacity: 0.5;
+    font-size: 16px;
+    line-height: 18px;
+}
+
+.clear-auto-btn:hover {
+    opacity: 1;
+    color: #e74c3c;
+    border-color: #e74c3c;
+}
+
+.clear-auto-btn:disabled {
+    opacity: 0.2;
+    cursor: not-allowed;
+}
+
+/* Fader with automation indicator */
+.volume-fader.has-automation {
+    background: linear-gradient(to top, 
+        rgba(52, 152, 219, 0.3), 
+        rgba(41, 128, 185, 0.3)
+    );
+}

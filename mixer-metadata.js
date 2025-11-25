@@ -10,8 +10,8 @@
  */
 
 export class MixerMetadata {
-    static VERSION = "1.0";
-    static NAMESPACE = "http://wav-metadata-editor/mixer/1.0";
+    static VERSION = "2.0";
+    static NAMESPACE = "http://wav-metadata-editor/mixer/2.0";
 
     /**
      * Serialize mixer channels to XML string
@@ -24,10 +24,21 @@ export class MixerMetadata {
         channels.forEach((ch, index) => {
             xml += `  <CHANNEL index="${index}">\n`;
             xml += `    <VOLUME>${ch.volume.toFixed(4)}</VOLUME>\n`;
-            xml += `    <PAN>${(ch.panNode ? ch.panNode.pan.value : 0).toFixed(4)}</PAN>\n`;
+            xml += `    <PAN>${ch.pan.toFixed(4)}</PAN>\n`;
             xml += `    <MUTE>${ch.isMuted}</MUTE>\n`;
             xml += `    <SOLO>${ch.isSoloed}</SOLO>\n`;
-            // Future: Add AUTOMATION and EQ elements here
+
+            // Automation
+            if (ch.automation && ch.automation.volume && ch.automation.volume.length > 0) {
+                xml += `    <AUTOMATION>\n`;
+                xml += `      <VOLUME_AUTOMATION>\n`;
+                ch.automation.volume.forEach(pt => {
+                    xml += `        <POINT time="${pt.time.toFixed(3)}" value="${pt.value.toFixed(4)}"/>\n`;
+                });
+                xml += `      </VOLUME_AUTOMATION>\n`;
+                xml += `    </AUTOMATION>\n`;
+            }
+
             xml += `  </CHANNEL>\n`;
         });
 
@@ -65,13 +76,28 @@ export class MixerMetadata {
                 const mute = chEl.querySelector('MUTE')?.textContent === 'true';
                 const solo = chEl.querySelector('SOLO')?.textContent === 'true';
 
+                // Parse Automation
+                const automation = { volume: [], pan: [] };
+                const autoEl = chEl.querySelector('AUTOMATION');
+                if (autoEl) {
+                    const volAuto = autoEl.querySelector('VOLUME_AUTOMATION');
+                    if (volAuto) {
+                        volAuto.querySelectorAll('POINT').forEach(pt => {
+                            automation.volume.push({
+                                time: parseFloat(pt.getAttribute('time')),
+                                value: parseFloat(pt.getAttribute('value'))
+                            });
+                        });
+                    }
+                }
+
                 // Validate and clamp values
                 channels[index] = {
                     volume: Math.max(0, Math.min(1, volume)),
                     pan: Math.max(-1, Math.min(1, pan)),
                     isMuted: mute,
-                    isSoloed: solo
-                    // Future: Parse AUTOMATION and EQ here
+                    isSoloed: solo,
+                    automation: automation
                 };
             });
 

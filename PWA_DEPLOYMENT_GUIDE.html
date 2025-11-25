@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="UTF-8">
+  <title>PWA Deployment & Usage Guide</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 2cm;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+      line-height: 1.6;
+      color: #333;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+
+    h1 {
+      color: #2c3e50;
+      border-bottom: 3px solid #3498db;
+      padding-bottom: 10px;
+      margin-top: 30px;
+      font-size: 2em;
+    }
+
+    h2 {
+      color: #34495e;
+      border-bottom: 2px solid #95a5a6;
+      padding-bottom: 8px;
+      margin-top: 25px;
+      font-size: 1.5em;
+    }
+
+    h3 {
+      color: #555;
+      margin-top: 20px;
+      font-size: 1.2em;
+    }
+
+    h4 {
+      color: #666;
+      margin-top: 15px;
+    }
+
+    code {
+      background: #f4f4f4;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-family: 'Monaco', 'Courier New', monospace;
+      font-size: 0.9em;
+      color: #c7254e;
+    }
+
+    pre {
+      background: #2c3e50;
+      color: #ecf0f1;
+      padding: 15px;
+      border-radius: 5px;
+      overflow-x: auto;
+      margin: 15px 0;
+    }
+
+    pre code {
+      background: transparent;
+      color: #ecf0f1;
+      padding: 0;
+    }
+
+    ul,
+    ol {
+      margin: 10px 0;
+      padding-left: 30px;
+    }
+
+    li {
+      margin: 5px 0;
+    }
+
+    hr {
+      border: none;
+      border-top: 2px solid #ecf0f1;
+      margin: 30px 0;
+    }
+
+    .checkmark {
+      color: #27ae60;
+      font-weight: bold;
+    }
+
+    .cross {
+      color: #e74c3c;
+      font-weight: bold;
+    }
+
+    @media print {
+      body {
+        max-width: 100%;
+      }
+
+      h1,
+      h2,
+      h3 {
+        page-break-after: avoid;
+      }
+
+      pre {
+        page-break-inside: avoid;
+      }
+    }
+  </style>
+</head>
+
+<body>
+
+  <h1>PWA Deployment & Usage Guide</h1>
+
+  <h2>What is a PWA?</h2>
+
+  <p>A <strong>Progressive Web App (PWA)</strong> is a website that works like a native desktop or mobile app. Think of
+    it as the best of both worlds:</p>
+
+  <ul>
+    <li><strong>Like a website</strong>: Built with HTML, CSS, and JavaScript</li>
+    <li><strong>Like a native app</strong>: Installs to your computer, works offline, has its own icon</li>
+  </ul>
+
+  <p><strong>Key Benefits:</strong></p>
+  <ul>
+    <li><span class="checkmark">✅</span> No app store required</li>
+    <li><span class="checkmark">✅</span> Works on any device with a browser</li>
+    <li><span class="checkmark">✅</span> Automatically updates when you push changes</li>
+    <li><span class="checkmark">✅</span> Can work completely offline after first visit</li>
+    <li><span class="checkmark">✅</span> Users can install it like a regular desktop app</li>
+  </ul>
+
+  <hr>
+
+  <h2>For Developers: How to Deploy Your PWA</h2>
+
+  <h3>Prerequisites</h3>
+  <ul>
+    <li>A GitHub account (free)</li>
+    <li>Your PWA project files ready</li>
+    <li>Git installed on your computer</li>
+  </ul>
+
+  <h3>Step 1: Prepare Your PWA Files</h3>
+
+  <p>Make sure your project includes these essential PWA files:</p>
+
+  <p><strong>1. <code>manifest.json</code></strong> - Defines app name, icons, and appearance</p>
+  <pre><code>{
+  "name": "Your App Name",
+  "short_name": "App",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}</code></pre>
+
+  <p><strong>2. <code>sw.js</code></strong> (Service Worker) - Enables offline functionality</p>
+  <ul>
+    <li>Lists all files to cache</li>
+    <li>Handles offline requests</li>
+  </ul>
+
+  <p><strong>3. Icons</strong> - <code>favicon.ico</code>, <code>icon-192.png</code>, <code>icon-512.png</code></p>
+
+  <p><strong>4. Link in <code>index.html</code></strong>:</p>
+  <pre><code>&lt;link rel="manifest" href="manifest.json"&gt;
+&lt;link rel="icon" type="image/x-icon" href="favicon.ico"&gt;</code></pre>
+
+  <h3>Step 2: Initialize Git Repository</h3>
+
+  <p>Open terminal in your project folder:</p>
+
+  <pre><code># Initialize Git
+git init
+
+# Add all files
+git add .
+
+# Create first commit
+git commit -m "Initial commit: PWA ready for deployment"</code></pre>
+
+  <h3>Step 3: Create GitHub Repository</h3>
+
+  <ol>
+    <li>Go to <a href="https://github.com">github.com</a> and sign in</li>
+    <li>Click the <strong>+</strong> icon → <strong>New repository</strong></li>
+    <li>Name your repository (e.g., <code>my-pwa-app</code>)</li>
+    <li>Select <strong>Public</strong> (required for free GitHub Pages)</li>
+    <li><strong>Do NOT</strong> check any boxes (README, .gitignore, license)</li>
+    <li>Click <strong>Create repository</strong></li>
+  </ol>
+
+  <h3>Step 4: Push Code to GitHub</h3>
+
+  <p>Copy the repository URL from GitHub (looks like: <code>https://github.com/username/my-pwa-app.git</code>)</p>
+
+  <pre><code># Connect to GitHub
+git remote add origin https://github.com/username/my-pwa-app.git
+
+# Set branch name
+git branch -M main
+
+# Push code
+git push -u origin main</code></pre>
+
+  <h3>Step 5: Enable GitHub Pages</h3>
+
+  <ol>
+    <li>Go to your repository on GitHub</li>
+    <li>Click <strong>Settings</strong> → <strong>Pages</strong> (in left sidebar)</li>
+    <li>Under <strong>Source</strong>, select:
+      <ul>
+        <li><strong>Deploy from a branch</strong></li>
+        <li>Branch: <strong>main</strong></li>
+        <li>Folder: <strong>/ (root)</strong></li>
+      </ul>
+    </li>
+    <li>Click <strong>Save</strong></li>
+    <li>Wait 1-2 minutes for deployment</li>
+  </ol>
+
+  <p>Your app will be live at: <code>https://username.github.io/my-pwa-app/</code></p>
+
+  <h3>Step 6: Update Your App (Future Changes)</h3>
+
+  <p>Whenever you make changes:</p>
+
+  <pre><code>git add .
+git commit -m "Description of changes"
+git push</code></pre>
+
+  <p>GitHub Pages automatically updates within 1-2 minutes!</p>
+
+  <hr>
+
+  <h2>For Users: How to Install & Use the PWA</h2>
+
+  <h3>Installation (One-Time Setup)</h3>
+
+  <h4>On Desktop (Chrome, Edge, Brave)</h4>
+
+  <ol>
+    <li><strong>Visit the app URL</strong> your developer shared (e.g.,
+      <code>https://username.github.io/app-name/</code>)</li>
+    <li><strong>Look for the install icon</strong> in the address bar (⊕ or download icon)</li>
+    <li><strong>Click Install</strong> → Confirm</li>
+    <li>The app opens in its own window!</li>
+  </ol>
+
+  <p><strong>Alternative method:</strong></p>
+  <ul>
+    <li>Click the <strong>three dots (⋮)</strong> menu</li>
+    <li>Hover over <strong>"Save and share"</strong></li>
+    <li>Click <strong>"Install [App Name]..."</strong></li>
+  </ul>
+
+  <h4>On Mac</h4>
+
+  <p>After installation:</p>
+  <ul>
+    <li>Find the app in <strong>Applications</strong> folder</li>
+    <li>Add to <strong>Desktop</strong>: Drag from Applications to Desktop</li>
+    <li>Add to <strong>Dock</strong>: Right-click dock icon → Options → Keep in Dock</li>
+    <li>Search in <strong>Spotlight</strong>: Cmd+Space, type app name</li>
+  </ul>
+
+  <h4>On Windows</h4>
+
+  <p>After installation:</p>
+  <ul>
+    <li>Find in <strong>Start Menu</strong></li>
+    <li>Pin to <strong>Desktop</strong>: Right-click → Pin to Desktop</li>
+    <li>Pin to <strong>Taskbar</strong>: Right-click → Pin to Taskbar</li>
+  </ul>
+
+  <h4>On Mobile (iOS/Android)</h4>
+
+  <p><strong>Safari (iPhone/iPad):</strong></p>
+  <ol>
+    <li>Tap the <strong>Share</strong> button</li>
+    <li>Scroll down and tap <strong>"Add to Home Screen"</strong></li>
+    <li>Tap <strong>Add</strong></li>
+  </ol>
+
+  <p><strong>Chrome (Android):</strong></p>
+  <ol>
+    <li>Tap the <strong>three dots (⋮)</strong> menu</li>
+    <li>Tap <strong>"Install app"</strong> or <strong>"Add to Home screen"</strong></li>
+  </ol>
+
+  <h3>Using the App Offline</h3>
+
+  <h4>First Time (Requires Internet)</h4>
+  <ol>
+    <li>Visit the app URL</li>
+    <li>Install it as described above</li>
+    <li>Use the app normally - it downloads all files in the background</li>
+  </ol>
+
+  <h4>After First Visit (100% Offline!)</h4>
+  <ol>
+    <li><strong>Launch the app</strong> from Applications/Desktop/Start Menu</li>
+    <li><strong>No internet needed</strong> - everything works offline:
+      <ul>
+        <li>Open files from your computer</li>
+        <li>Edit and save data</li>
+        <li>Use all features</li>
+      </ul>
+    </li>
+    <li><strong>Chrome must be installed</strong> (but no browser windows need to be open)</li>
+  </ol>
+
+  <p><strong>Note:</strong> The app runs on Chrome's engine in the background, but you don't need any browser tabs open.
+  </p>
+
+  <h3>Uninstalling the App</h3>
+
+  <p><strong>On Desktop:</strong></p>
+  <ul>
+    <li>Click the <strong>three dots (⋮)</strong> in the app window</li>
+    <li>Select <strong>"Uninstall [App Name]..."</strong></li>
+  </ul>
+
+  <p><strong>On Mobile:</strong></p>
+  <ul>
+    <li>Remove like any other app (long-press → Delete)</li>
+  </ul>
+
+  <hr>
+
+  <h2>Troubleshooting</h2>
+
+  <h3>"Install button doesn't appear"</h3>
+  <ul>
+    <li>Make sure you're using Chrome, Edge, or Brave</li>
+    <li>Check that the site uses HTTPS (GitHub Pages does this automatically)</li>
+    <li>Try refreshing the page</li>
+  </ul>
+
+  <h3>"App doesn't work offline"</h3>
+  <ul>
+    <li>Visit the app at least once with internet</li>
+    <li>Wait a few seconds for files to cache</li>
+    <li>Check that the service worker is registered (Developer Tools → Application → Service Workers)</li>
+  </ul>
+
+  <h3>"Updates don't appear"</h3>
+  <ul>
+    <li>Close and reopen the app</li>
+    <li>Clear cache: Settings → Privacy → Clear browsing data</li>
+    <li>Reinstall the app</li>
+  </ul>
+
+  <hr>
+
+  <h2>Summary</h2>
+
+  <h3>Developer Checklist</h3>
+  <ul>
+    <li><span class="checkmark">✅</span> Create PWA files (manifest.json, sw.js, icons)</li>
+    <li><span class="checkmark">✅</span> Initialize Git repository</li>
+    <li><span class="checkmark">✅</span> Push to GitHub</li>
+    <li><span class="checkmark">✅</span> Enable GitHub Pages</li>
+    <li><span class="checkmark">✅</span> Share the URL with users</li>
+  </ul>
+
+  <h3>User Checklist</h3>
+  <ul>
+    <li><span class="checkmark">✅</span> Visit the app URL (with internet)</li>
+    <li><span class="checkmark">✅</span> Click "Install" button</li>
+    <li><span class="checkmark">✅</span> Use from Desktop/Applications folder</li>
+    <li><span class="checkmark">✅</span> Works offline after first visit!</li>
+  </ul>
+
+  <hr>
+
+  <h2>Example: WAV Metadata Editor</h2>
+
+  <p><strong>Live URL:</strong> <a href="https://pauljisaacs.github.io/W-M-E/">https://pauljisaacs.github.io/W-M-E/</a>
+  </p>
+
+  <p><strong>What it does:</strong></p>
+  <ul>
+    <li>Edit WAV file metadata</li>
+    <li>Visualize audio waveforms</li>
+    <li>Mix multi-channel audio</li>
+    <li>Export to MP3</li>
+  </ul>
+
+  <p><strong>Offline capabilities:</strong></p>
+  <ul>
+    <li>Load audio files from your computer</li>
+    <li>Edit metadata</li>
+    <li>Use all features without internet</li>
+    <li>Save changes locally</li>
+  </ul>
+
+  <p><strong>Perfect for:</strong> Audio engineers working in the field without reliable internet access!</p>
+
+  <hr>
+
+  <p style="text-align: center; color: #999; margin-top: 40px;">
+    <em>To save as PDF: Press Cmd+P (Mac) or Ctrl+P (Windows) and select "Save as PDF"</em>
+  </p>
+
+</body>
+
+</html>

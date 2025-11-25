@@ -1,32 +1,89 @@
+import { AutomationRecorder, AutomationPlayer } from './automation.js';
+
 export class Mixer {
-    constructor() {
-        this.container = document.getElementById('mixer-container');
-        this.channels = []; // Array of { gainNode, panNode, mute, solo, ... }
-        this.audioCtx = null;
-    }
-
-    init(audioCtx) {
+    constructor(audioCtx, onTrackNameChange, onStateChange) {
         this.audioCtx = audioCtx;
+        this.onTrackNameChange = onTrackNameChange;
+        this.onStateChange = onStateChange;
+        this.channels = [];
+        this.container = null;
+        this.masterGain = null;
+
+        // Automation state
+        this.isRecording = false;
+        this.currentTime = 0;
+        this.automationRecorders = [];
+        this.automationPlayers = [];
     }
 
-    buildUI(trackCount, trackNames = [], onTrackNameChange = null, onStateChange = null) {
+    async init(containerId) {
+        this.container = document.getElementById(containerId);
+        if (!this.container) throw new Error('Mixer container not found');
+
+        // Create master gain
+        this.masterGain = this.audioCtx.createGain();
+        this.masterGain.connect(this.audioCtx.destination);
+
+        // Event delegation
+        this.container.addEventListener('click', (e) => {
+            const btn = e.target;
+            const idx = parseInt(btn.dataset.idx);
+
+            if (isNaN(idx)) return;
+
+            if (btn.classList.contains('mute-btn')) {
+                this.toggleMute(idx, btn);
+            } else if (btn.classList.contains('solo-btn')) {
+                this.toggleSolo(idx, btn);
+            } else if (btn.classList.contains('arm-btn')) {
+                this.toggleArm(idx);
+            } else if (btn.classList.contains('clear-auto-btn')) {
+                this.clearAutomation(idx);
+            }
+        });
+
+        this.container.addEventListener('input', (e) => {
+            const input = e.target;
+            const idx = parseInt(input.dataset.idx);
+
+            if (isNaN(idx)) return;
+
+            if (input.classList.contains('volume-fader')) {
+                const val = parseFloat(input.value);
+                // If recording and armed, record point
+                if (this.isRecording && this.automationRecorders[idx].isRecording) {
+                    this.automationRecorders[idx].recordPoint(this.currentTime, val);
+                }
+                this.setVolume(idx, val);
+            } else if (input.classList.contains('pan-knob')) {
+                this.setPan(idx, parseFloat(input.value));
+            }
+        });
+    }
+
+    buildUI(trackCount) {
         this.container.innerHTML = '';
         this.channels = [];
-        this.onStateChange = onStateChange; // Store callback
+        this.automationRecorders = [];
+        this.automationPlayers = [];
 
+        // Create channels
         for (let i = 0; i < trackCount; i++) {
-            // ... (rest of loop is same)
-            const name = trackNames[i] || `Ch ${i + 1}`;
-            const defaultPan = i % 2 === 0 ? -1 : 1; // Left for odd (0, 2...), Right for even (1, 3...)
+            // Initialize automation
+            this.automationRecorders[i] = new AutomationRecorder(i, 'volume');
+            this.automationPlayers[i] = new AutomationPlayer([]);
 
             const strip = document.createElement('div');
             strip.className = 'channel-strip';
-
             strip.innerHTML = `
-                <div class="channel-name" title="${name}" contenteditable="true" data-idx="${i}">${name}</div>
-                <div class="channel-controls">
+                <div class="channel-header">
+                    <div class="channel-name" contenteditable="true">Ch ${i + 1}</div>
                     <button class="mute-btn" data-idx="${i}">M</button>
                     <button class="solo-btn" data-idx="${i}">S</button>
+                </div>
+                <div class="automation-controls">
+                    <button class="arm-btn" data-idx="${i}" title="Arm for automation recording">A</button>
+                    <button class="clear-auto-btn" data-idx="${i}" title="Clear automation">×</button>
                 </div>
                 <div class="fader-container">
                     <div class="meter-scale">
@@ -38,7 +95,7 @@ export class Mixer {
                     <canvas class="vu-meter" width="10" height="100"></canvas>
                     <input type="range" orient="vertical" min="0" max="1.2" step="0.01" value="1" data-idx="${i}" class="volume-fader">
                 </div>
-                <input type="range" min="-1" max="1" step="0.1" value="${defaultPan}" data-idx="${i}" class="pan-knob" title="Pan">
+                <input type="range" min="-1" max="1" step="0.1" value="${i % 2 === 0 ? -1 : 1}" data-idx="${i}" class="pan-knob" title="Pan">
             `;
 
             this.container.appendChild(strip);
@@ -46,8 +103,8 @@ export class Mixer {
             // Attach name edit listener
             const nameDiv = strip.querySelector('.channel-name');
             nameDiv.addEventListener('blur', (e) => {
-                if (onTrackNameChange) {
-                    onTrackNameChange(i, e.target.textContent);
+                if (this.onTrackNameChange) {
+                    this.onTrackNameChange(i, e.target.textContent);
                 }
             });
             nameDiv.addEventListener('keydown', (e) => {
@@ -57,7 +114,7 @@ export class Mixer {
                 }
             });
 
-            // Create Audio Nodes only if audioCtx is available
+            // Create Audio Nodes
             let gainNode = null;
             let panNode = null;
             let analyserNode = null;
@@ -65,33 +122,159 @@ export class Mixer {
             if (this.audioCtx) {
                 gainNode = this.audioCtx.createGain();
                 panNode = this.audioCtx.createStereoPanner();
-                panNode.pan.value = defaultPan; // Set default pan
+                panNode.pan.value = i % 2 === 0 ? -1 : 1;
                 analyserNode = this.audioCtx.createAnalyser();
-                analyserNode.fftSize = 256; // Small FFT for responsiveness
-                analyserNode.smoothingTimeConstant = 0.5; // Smooth decay
+                analyserNode.fftSize = 256;
+                analyserNode.smoothingTimeConstant = 0.5;
 
                 // Chain: Input -> Gain -> Analyser -> Pan -> Output (Merger)
                 gainNode.connect(analyserNode);
                 analyserNode.connect(panNode);
             }
 
+            // Store channel refs
             this.channels.push({
                 index: i,
+                element: strip,
                 gainNode: gainNode,
                 panNode: panNode,
                 analyserNode: analyserNode,
-                canvas: strip.querySelector('.vu-meter'),
-                meterLevel: 0,
+                volume: 1,
                 isMuted: false,
                 isSoloed: false,
-                volume: 1.0
+                canvas: strip.querySelector('.vu-meter'),
+                meterLevel: 0,
+                automation: { volume: [], pan: [] }
             });
         }
 
-        this.attachListeners();
+
     }
 
-    // ... (updateMeters, attachListeners, setVolume, setPan are same)
+    toggleArm(idx) {
+        const recorder = this.automationRecorders[idx];
+        const btn = this.container.querySelector(`.arm-btn[data-idx="${idx}"]`);
+
+        // We use a custom property on the recorder to track "Armed" state
+        // The recorder.isRecording property tracks actual recording (during playback)
+        if (recorder.isArmed) {
+            // Disarm
+            recorder.isArmed = false;
+            btn.classList.remove('active');
+
+            // If currently recording, stop this track
+            if (this.isRecording) {
+                const points = recorder.stop();
+                if (points.length > 0) {
+                    this.channels[idx].automation.volume = points;
+                    this.automationPlayers[idx].points = points;
+                    this.updateAutomationUI(idx);
+                }
+            }
+        } else {
+            // Arm
+            recorder.isArmed = true;
+            btn.classList.add('active');
+
+            // If currently recording, start this track
+            if (this.isRecording) {
+                recorder.start(this.currentTime);
+                recorder.recordPoint(this.currentTime, this.channels[idx].volume);
+            }
+        }
+    }
+
+    clearAutomation(idx) {
+        if (confirm(`Clear automation for Channel ${idx + 1}?`)) {
+            this.channels[idx].automation.volume = [];
+            this.automationPlayers[idx].clear();
+            this.updateAutomationUI(idx);
+        }
+    }
+
+    updateAutomationUI(idx) {
+        const fader = this.container.querySelector(`.volume-fader[data-idx="${idx}"]`);
+        const hasAuto = this.channels[idx].automation.volume.length > 0;
+        if (hasAuto) {
+            fader.classList.add('has-automation');
+        } else {
+            fader.classList.remove('has-automation');
+        }
+
+        const clearBtn = this.container.querySelector(`.clear-auto-btn[data-idx="${idx}"]`);
+        if (clearBtn) clearBtn.disabled = !hasAuto;
+    }
+
+    startRecording(startTime) {
+        this.isRecording = true;
+        this.currentTime = startTime;
+
+        this.automationRecorders.forEach((recorder, idx) => {
+            if (recorder.isArmed) {
+                recorder.start(startTime);
+                recorder.recordPoint(startTime, this.channels[idx].volume);
+            }
+        });
+    }
+
+    stopRecording() {
+        this.isRecording = false;
+
+        this.automationRecorders.forEach((recorder, idx) => {
+            if (recorder.isArmed) {
+                const points = recorder.stop();
+                if (points.length > 0) {
+                    this.channels[idx].automation.volume = points;
+                    this.automationPlayers[idx].points = points;
+                    this.updateAutomationUI(idx);
+                }
+            }
+        });
+    }
+
+    updateAutomation(currentTime) {
+        this.currentTime = currentTime;
+
+        this.automationPlayers.forEach((player, idx) => {
+            const recorder = this.automationRecorders[idx];
+
+            // Only play back if NOT recording on this channel
+            // (If armed and recording, user is controlling fader)
+            if (!recorder.isArmed || !this.isRecording) {
+                const val = player.getValue(currentTime);
+                if (val !== null) {
+                    this.setVolume(idx, val, true);
+                }
+            }
+        });
+    }
+
+    setVolume(idx, val, fromAutomation = false) {
+        const ch = this.channels[idx];
+        ch.volume = val;
+
+        if (ch.gainNode && this.audioCtx) {
+            // Smooth transition if from automation to avoid clicks
+            const time = fromAutomation ? 0.02 : 0.005;
+            ch.gainNode.gain.setTargetAtTime(ch.isMuted ? 0 : val, this.audioCtx.currentTime, time);
+        }
+
+        // Update UI if from automation
+        if (fromAutomation) {
+            const fader = this.container.querySelector(`.volume-fader[data-idx="${idx}"]`);
+            // Only update if value changed significantly to avoid DOM thrashing
+            if (fader && Math.abs(fader.value - val) > 0.001) {
+                fader.value = val;
+            }
+        }
+    }
+
+    setPan(idx, val) {
+        const ch = this.channels[idx];
+        if (ch.panNode) {
+            ch.panNode.pan.value = val;
+        }
+    }
 
     toggleMute(index, btn) {
         const ch = this.channels[index];
@@ -104,7 +287,7 @@ export class Mixer {
         }
 
         this.updateGains();
-        if (this.onStateChange) this.onStateChange(); // Notify change
+        if (this.onStateChange) this.onStateChange();
     }
 
     toggleSolo(index, btn) {
@@ -118,188 +301,8 @@ export class Mixer {
         }
 
         this.updateGains();
-        if (this.onStateChange) this.onStateChange(); // Notify change
+        if (this.onStateChange) this.onStateChange();
     }
-
-    updateMeters() {
-        if (!this.channels.length) return;
-
-        // Coefficients for 60fps (approx 16.7ms per frame)
-        // Attack 1ms: Instant (1.0)
-        // Decay 200ms: 1 - exp(-16.7 / 200) ≈ 0.08
-        const attackCoef = 1.0;
-        const decayCoef = 0.08;
-
-        this.channels.forEach(ch => {
-            const canvas = ch.canvas;
-            if (!canvas) return;
-
-            const ctx = canvas.getContext('2d');
-            const width = canvas.width;
-            const height = canvas.height;
-
-            // Get audio data
-            const dataArray = new Float32Array(ch.analyserNode.fftSize);
-            ch.analyserNode.getFloatTimeDomainData(dataArray);
-
-            // Calculate RMS (Root Mean Square)
-            let sum = 0;
-            for (let i = 0; i < dataArray.length; i++) {
-                sum += dataArray[i] * dataArray[i];
-            }
-            const rms = Math.sqrt(sum / dataArray.length);
-
-            // Convert to dB
-            // Avoid log(0) = -Infinity
-            const db = 20 * Math.log10(Math.max(rms, 0.00001));
-
-            // Map -60dB to 0dB to 0-1 range
-            let targetPercent = (db + 60) / 60;
-            targetPercent = Math.max(0, Math.min(1, targetPercent));
-
-            // Apply Ballistics
-            if (targetPercent > ch.meterLevel) {
-                // Attack
-                ch.meterLevel += (targetPercent - ch.meterLevel) * attackCoef;
-            } else {
-                // Decay
-                ch.meterLevel += (targetPercent - ch.meterLevel) * decayCoef;
-            }
-
-            // Clamp
-            ch.meterLevel = Math.max(0, Math.min(1, ch.meterLevel));
-
-            // Draw Meter
-            ctx.clearRect(0, 0, width, height);
-
-            // Create Gradient
-            const gradient = ctx.createLinearGradient(0, height, 0, 0);
-            gradient.addColorStop(0, '#00ff00');    // -60dB Green
-            gradient.addColorStop(0.66, '#00ff00'); // -20dB Green
-            gradient.addColorStop(0.66, '#ffff00'); // -20dB Yellow
-            gradient.addColorStop(0.80, '#ffff00'); // -12dB Yellow
-            gradient.addColorStop(0.80, '#ff9900'); // -12dB Orange
-            gradient.addColorStop(0.98, '#ff9900'); // -1dB Orange
-            gradient.addColorStop(0.98, '#ff0000'); // -1dB Red
-            gradient.addColorStop(1, '#ff0000');    // 0dB Red
-
-            ctx.fillStyle = gradient;
-
-            const barHeight = ch.meterLevel * height;
-            ctx.fillRect(0, height - barHeight, width, barHeight);
-        });
-    }
-
-    attachListeners() {
-        this.container.querySelectorAll('.volume-fader').forEach(el => {
-            el.addEventListener('input', (e) => {
-                const idx = parseInt(e.target.dataset.idx);
-                const val = parseFloat(e.target.value);
-                this.setVolume(idx, val);
-            });
-        });
-
-        this.container.querySelectorAll('.pan-knob').forEach(el => {
-            el.addEventListener('input', (e) => {
-                const idx = parseInt(e.target.dataset.idx);
-                const val = parseFloat(e.target.value);
-                this.setPan(idx, val);
-            });
-        });
-
-        this.container.querySelectorAll('.mute-btn').forEach(el => {
-            el.addEventListener('click', (e) => {
-                const idx = parseInt(e.target.dataset.idx);
-                this.toggleMute(idx, e.target);
-            });
-        });
-
-        this.container.querySelectorAll('.solo-btn').forEach(el => {
-            el.addEventListener('click', (e) => {
-                const idx = parseInt(e.target.dataset.idx);
-                this.toggleSolo(idx, e.target);
-            });
-        });
-    }
-
-    setVolume(idx, val) {
-        const ch = this.channels[idx];
-        ch.volume = val;
-        if (!ch.isMuted && ch.gainNode) {
-            ch.gainNode.gain.value = val;
-        }
-    }
-
-    /**
-     * Get current mixer state
-     * @returns {Array} Array of channel states
-     */
-    getMixerState() {
-        return this.channels.map(ch => ({
-            volume: ch.volume,
-            pan: ch.panNode ? ch.panNode.pan.value : 0,
-            isMuted: ch.isMuted,
-            isSoloed: ch.isSoloed
-        }));
-    }
-
-    /**
-     * Set mixer state from saved data
-     * @param {Array} state - Array of channel states
-     */
-    setMixerState(state) {
-        state.forEach((chState, index) => {
-            if (index >= this.channels.length) return; // Skip if more channels in state than mixer
-
-            const ch = this.channels[index];
-
-            // Set volume
-            ch.volume = chState.volume;
-            const fader = this.container.querySelector(`[data-idx="${index}"].volume-fader`);
-            if (fader) fader.value = chState.volume;
-
-            // Set pan
-            if (ch.panNode) {
-                ch.panNode.pan.value = chState.pan;
-            }
-            const panKnob = this.container.querySelector(`[data-idx="${index}"].pan-knob`);
-            if (panKnob) panKnob.value = chState.pan;
-
-            // Set mute
-            ch.isMuted = chState.isMuted;
-            const muteBtn = this.container.querySelector(`[data-idx="${index}"].mute-btn`);
-            if (muteBtn) {
-                if (chState.isMuted) {
-                    muteBtn.classList.add('active');
-                } else {
-                    muteBtn.classList.remove('active');
-                }
-            }
-
-            // Set solo
-            ch.isSoloed = chState.isSoloed;
-            const soloBtn = this.container.querySelector(`[data-idx="${index}"].solo-btn`);
-            if (soloBtn) {
-                if (chState.isSoloed) {
-                    soloBtn.classList.add('active');
-                } else {
-                    soloBtn.classList.remove('active');
-                }
-            }
-        });
-
-        // Update gains based on new mute/solo state
-        this.updateGains();
-    }
-
-    setPan(idx, val) {
-        const ch = this.channels[idx];
-        if (ch.panNode) {
-            ch.panNode.pan.value = val;
-        }
-    }
-
-
 
     updateGains() {
         const anySolo = this.channels.some(ch => ch.isSoloed);
@@ -313,11 +316,127 @@ export class Mixer {
                 targetGain = 0;
             }
 
-            // Smooth transition (only if gainNode exists)
             if (ch.gainNode && this.audioCtx) {
                 ch.gainNode.gain.setTargetAtTime(targetGain, this.audioCtx.currentTime, 0.02);
             }
         });
+    }
+
+    updateMeters() {
+        if (!this.channels.length) return;
+
+        const attackCoef = 1.0;
+        const decayCoef = 0.08;
+
+        this.channels.forEach(ch => {
+            const canvas = ch.canvas;
+            if (!canvas || !ch.analyserNode) return;
+
+            const ctx = canvas.getContext('2d');
+            const width = canvas.width;
+            const height = canvas.height;
+
+            const dataArray = new Float32Array(ch.analyserNode.fftSize);
+            ch.analyserNode.getFloatTimeDomainData(dataArray);
+
+            let sum = 0;
+            for (let i = 0; i < dataArray.length; i++) {
+                sum += dataArray[i] * dataArray[i];
+            }
+            const rms = Math.sqrt(sum / dataArray.length);
+            const db = 20 * Math.log10(Math.max(rms, 0.00001));
+
+            let targetPercent = (db + 60) / 60;
+            targetPercent = Math.max(0, Math.min(1, targetPercent));
+
+            if (targetPercent > ch.meterLevel) {
+                ch.meterLevel += (targetPercent - ch.meterLevel) * attackCoef;
+            } else {
+                ch.meterLevel += (targetPercent - ch.meterLevel) * decayCoef;
+            }
+
+            ch.meterLevel = Math.max(0, Math.min(1, ch.meterLevel));
+
+            ctx.clearRect(0, 0, width, height);
+
+            const gradient = ctx.createLinearGradient(0, height, 0, 0);
+            gradient.addColorStop(0, '#00ff00');
+            gradient.addColorStop(0.66, '#00ff00');
+            gradient.addColorStop(0.66, '#ffff00');
+            gradient.addColorStop(0.80, '#ffff00');
+            gradient.addColorStop(0.80, '#ff9900');
+            gradient.addColorStop(0.98, '#ff9900');
+            gradient.addColorStop(0.98, '#ff0000');
+            gradient.addColorStop(1, '#ff0000');
+
+            ctx.fillStyle = gradient;
+            const barHeight = ch.meterLevel * height;
+            ctx.fillRect(0, height - barHeight, width, barHeight);
+        });
+    }
+
+    getMixerState() {
+        return this.channels.map(ch => ({
+            volume: ch.volume,
+            pan: ch.panNode ? ch.panNode.pan.value : 0,
+            isMuted: ch.isMuted,
+            isSoloed: ch.isSoloed,
+            automation: ch.automation // Save automation data
+        }));
+    }
+
+    setMixerState(state) {
+        state.forEach((chState, index) => {
+            if (index >= this.channels.length) return;
+
+            const ch = this.channels[index];
+
+            // Set volume
+            ch.volume = chState.volume;
+            const fader = this.container.querySelector(`.volume-fader[data-idx="${index}"]`);
+            if (fader) fader.value = chState.volume;
+
+            // Set pan
+            if (ch.panNode) {
+                ch.panNode.pan.value = chState.pan;
+            }
+            const panKnob = this.container.querySelector(`.pan-knob[data-idx="${index}"]`);
+            if (panKnob) panKnob.value = chState.pan;
+
+            // Set mute
+            ch.isMuted = chState.isMuted;
+            const muteBtn = this.container.querySelector(`.mute-btn[data-idx="${index}"]`);
+            if (muteBtn) {
+                if (chState.isMuted) {
+                    muteBtn.classList.add('active');
+                } else {
+                    muteBtn.classList.remove('active');
+                }
+            }
+
+            // Set solo
+            ch.isSoloed = chState.isSoloed;
+            const soloBtn = this.container.querySelector(`.solo-btn[data-idx="${index}"]`);
+            if (soloBtn) {
+                if (chState.isSoloed) {
+                    soloBtn.classList.add('active');
+                } else {
+                    soloBtn.classList.remove('active');
+                }
+            }
+
+            // Set automation
+            if (chState.automation) {
+                ch.automation = chState.automation;
+                if (chState.automation.volume) {
+                    this.automationPlayers[index].points = chState.automation.volume;
+                }
+                this.updateAutomationUI(index);
+            }
+        });
+
+        this.updateGains();
+        if (this.onStateChange) this.onStateChange();
     }
 
     getChannelNodes() {

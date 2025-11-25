@@ -1,17 +1,32 @@
 import { MetadataHandler } from './metadata-handler.js?v=2';
 import { AudioEngine } from './audio-engine.js?v=3';
-import { Mixer } from './mixer.js?v=2';
+import { Mixer } from './mixer.js?v=4';
 import { FileIO } from './file-io.js';
 import { AudioProcessor } from './audio-processor.js';
 import { MixerMetadata } from './mixer-metadata.js';
+
+
+
+
 
 class App {
     constructor() {
         this.metadataHandler = new MetadataHandler();
         this.audioEngine = new AudioEngine();
         this.audioProcessor = new AudioProcessor();
-        this.mixer = new Mixer();
-        this.mixer.init(this.audioEngine.audioCtx);
+        this.mixer = new Mixer(this.audioEngine.audioCtx,
+            (index, name) => {
+                console.log(`Track ${index} renamed to ${name}`);
+            },
+            () => {
+                // On state change (mute/solo), re-render waveform
+                const canvas = document.getElementById('waveform-canvas');
+                if (this.audioEngine.buffer) {
+                    this.audioEngine.renderWaveform(canvas, this.audioEngine.buffer, this.mixer.channels);
+                }
+            }
+        );
+        this.mixer.init('mixer-container');
         this.fileIO = new FileIO();
 
         this.files = []; // Array of { fileHandle, metadata, fileObj }
@@ -380,31 +395,38 @@ class App {
             const items = [...e.dataTransfer.items];
             const fileList = [];
 
-            // Handle FileSystemAccessAPI items if available (for folders)
-            if (items[0] && 'getAsFileSystemHandle' in items[0]) {
-                for (const item of items) {
-                    const handle = await item.getAsFileSystemHandle();
-                    if (handle.kind === 'directory') {
-                        await this.fileIO.scanDirectory(handle, fileList);
-                    } else if (handle.kind === 'file' && this.fileIO.isAudioFile(handle.name)) {
-                        fileList.push(handle);
-                    }
-                }
-            } else {
-                // Fallback for standard files
-                for (const item of items) {
-                    const entry = item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
-                    if (entry && entry.isDirectory) {
-                        // Webkit directory scanning (simplified fallback)
-                        // For now just warn or skip
-                        console.warn('Directory drop supported via File System Access API only');
-                    } else if (item.kind === 'file') {
-                        const file = item.getAsFile();
-                        if (this.fileIO.isAudioFile(file.name)) {
-                            // Wrap in a mock handle structure
-                            fileList.push({ kind: 'file', name: file.name, getFile: async () => file });
+            // Process each item - get both File and Handle synchronously first
+            // (DataTransferItems become invalid after async operations)
+            const itemData = items.map(item => ({
+                file: item.getAsFile(),
+                handlePromise: 'getAsFileSystemHandle' in item ? item.getAsFileSystemHandle() : null
+            }));
+
+            for (let i = 0; i < itemData.length; i++) {
+                try {
+                    const { file, handlePromise } = itemData[i];
+
+                    // Try FileSystemHandle first (it properly detects directories)
+                    if (handlePromise) {
+                        const handle = await handlePromise;
+
+                        if (handle) {
+                            if (handle.kind === 'directory') {
+                                await this.fileIO.scanDirectory(handle, fileList);
+                                continue;
+                            } else if (handle.kind === 'file' && this.fileIO.isAudioFile(handle.name)) {
+                                fileList.push(handle);
+                                continue;
+                            }
                         }
                     }
+
+                    // Fallback to File object
+                    if (file && this.fileIO.isAudioFile(file.name)) {
+                        fileList.push({ kind: 'file', name: file.name, getFile: async () => file });
+                    }
+                } catch (err) {
+                    console.error('Error processing dropped item:', err);
                 }
             }
 
@@ -1112,6 +1134,7 @@ class App {
 
         if (this.audioEngine.isPlaying) {
             this.audioEngine.stop();
+            this.mixer.stopRecording(); // Stop automation recording
             document.getElementById('play-btn').textContent = '▶';
         } else {
             // If no file loaded, load selected
@@ -1128,6 +1151,7 @@ class App {
                 }
 
                 this.audioEngine.play(startTime);
+                this.mixer.startRecording(startTime); // Start automation recording
                 document.getElementById('play-btn').textContent = '⏸';
             }
         }
@@ -1138,6 +1162,7 @@ class App {
         this.isStopped = true; // Block animation loop
 
         this.audioEngine.stop();
+        this.mixer.stopRecording(); // Stop automation recording
         this.audioEngine.seek(0);
         document.getElementById('play-btn').textContent = '▶';
 
@@ -1194,6 +1219,10 @@ class App {
     animate() {
         if (this.audioEngine.isPlaying && !this.isStopped) {
             const time = this.audioEngine.getCurrentTime();
+
+            // Update automation
+            this.mixer.updateAutomation(time);
+
             const duration = this.audioEngine.buffer ? this.audioEngine.buffer.duration : 1;
             const percent = time / duration;
 
@@ -1640,6 +1669,15 @@ class App {
 
             // Apply to mixer
             this.mixer.setMixerState(mixerData.channels);
+
+            // Store settings to reapply after audio loads (which rebuilds the mixer)
+            this.pendingMixerSettings = mixerData.channels;
+            setTimeout(() => {
+                if (this.pendingMixerSettings) {
+                    this.mixer.setMixerState(this.pendingMixerSettings);
+                    this.pendingMixerSettings = null;
+                }
+            }, 500); // Wait for audio to load and mixer to rebuild
 
             alert(`Mixer settings loaded from ${item.metadata.filename}\nVersion: ${mixerData.version}`);
         } catch (err) {
