@@ -283,6 +283,24 @@
             </div>
             <div class="modal-body">
                 <div class="input-group">
+                    <label>Mix Mode:</label>
+                    <div class="radio-group">
+                        <label>
+                            <input type="radio" name="mix-mode" value="bypass">
+                            Bypass Mix <span class="radio-hint">(Unity gain, default pans)</span>
+                        </label>
+                        <label>
+                            <input type="radio" name="mix-mode" value="current" checked>
+                            Use Current Mix <span class="radio-hint">(Static mixer settings)</span>
+                        </label>
+                        <label>
+                            <input type="radio" name="mix-mode" value="automation">
+                            Use Automation <span class="radio-hint">(Automated fader movements)</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="input-group">
                     <label for="export-format">Format:</label>
                     <select id="export-format">
                         <option value="wav">WAV</option>
@@ -316,7 +334,7 @@
                     </div>
                 </div>
 
-                <p class="info-text">Exporting stereo mix based on current fader, pan, mute, and solo settings.</p>
+
             </div>
             <div class="modal-footer">
                 <button id="cancel-export-btn" class="btn secondary">Cancel</button>

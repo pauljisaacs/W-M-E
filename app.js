@@ -1443,6 +1443,28 @@ class App {
         const count = this.selectedIndices.size;
         const modalHeader = document.querySelector('#export-modal .modal-header h3');
         modalHeader.textContent = count === 1 ? 'Export Mix' : `Export ${count} Files`;
+
+        // Restore last selected mix mode
+        const lastMixMode = localStorage.getItem('exportMixMode') || 'current';
+        const radioBtn = document.querySelector(`input[name="mix-mode"][value="${lastMixMode}"]`);
+        if (radioBtn) radioBtn.checked = true;
+
+        // Check if automation exists when automation is selected
+        document.querySelectorAll('input[name="mix-mode"]').forEach(radio => {
+            radio.addEventListener('change', () => {
+                if (radio.value === 'automation') {
+                    const hasAutomation = this.mixer.channels.some(ch =>
+                        ch.automation && ch.automation.volume && ch.automation.volume.length > 0
+                    );
+
+                    if (!hasAutomation) {
+                        alert('No automation data found. Falling back to "Use Current Mix".');
+                        document.querySelector('input[name="mix-mode"][value="current"]').checked = true;
+                    }
+                }
+            });
+        });
+
         document.getElementById('export-modal').classList.add('active');
     }
 
@@ -1452,9 +1474,13 @@ class App {
 
     async handleExport() {
         const format = document.getElementById('export-format').value;
+        const mixMode = document.querySelector('input[name="mix-mode"]:checked').value;
         const selectedFiles = Array.from(this.selectedIndices).map(i => this.files[i]);
 
         if (selectedFiles.length === 0) return;
+
+        // Save mix mode preference
+        localStorage.setItem('exportMixMode', mixMode);
 
         this.closeExportModal();
 
@@ -1499,8 +1525,8 @@ class App {
                         isRegionExport = true;
                     }
 
-                    // Render stereo mix
-                    const renderedBuffer = await this.audioEngine.renderStereoMix(audioBuffer, this.mixer.channels);
+                    // Render stereo mix with selected mode
+                    const renderedBuffer = await this.audioEngine.renderStereoMix(audioBuffer, this.mixer.channels, mixMode);
 
                     let blob = null;
                     let extension = '';

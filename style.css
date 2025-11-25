@@ -548,14 +548,23 @@ input[type="range"][orient="vertical"] {
 
 /* Small Modal for Normalize */
 .small-modal {
-    max-width: 400px;
+    max-width: 600px;
 }
 
 .input-group {
     margin: 20px 0;
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 10px;
+}
+
+.input-group label:first-child {
+    min-width: 100px;
+    padding-top: 2px;
+}
+
+.input-group select {
+    min-width: 180px;
 }
 
 .input-group label {
@@ -622,14 +631,38 @@ select {
     max-width: 550px;
 }
 
+.radio-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
 .radio-group label {
-    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    padding: 6px;
+    border-radius: 4px;
+    transition: background 0.2s;
+}
+
+.radio-group label:hover {
+    background: var(--bg-tertiary);
+}
+
+.radio-group input[type="radio"] {
+    cursor: pointer;
+}
+
+.radio-hint {
+    font-size: 0.85em;
+    opacity: 0.7;
+    font-style: italic;
 }
 
 .format-options {
     margin-top: 10px;
-    padding-left: 10px;
-    border-left: 2px solid var(--border-color);
 }
 
 /* Automation Controls */
@@ -640,7 +673,8 @@ select {
     margin: 4px 0;
 }
 
-.arm-btn, .clear-auto-btn {
+.arm-btn,
+.clear-auto-btn {
     width: 22px;
     height: 22px;
     border-radius: 50%;
@@ -684,8 +718,7 @@ select {
 
 /* Fader with automation indicator */
 .volume-fader.has-automation {
-    background: linear-gradient(to top, 
-        rgba(52, 152, 219, 0.3), 
-        rgba(41, 128, 185, 0.3)
-    );
+    background: linear-gradient(to top,
+            rgba(52, 152, 219, 0.3),
+            rgba(41, 128, 185, 0.3));
 }

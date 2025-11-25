@@ -309,20 +309,58 @@ export class AudioEngine {
         }
     }
 
-    async renderStereoMix(sourceBuffer, mixerChannels) {
+    async renderStereoMix(sourceBuffer, mixerChannels, mode = 'current') {
         if (!sourceBuffer) throw new Error("No buffer to render");
 
         const offlineCtx = new OfflineAudioContext(2, sourceBuffer.length, sourceBuffer.sampleRate);
 
-        // Create source
+        // Mode: bypass - use default settings
+        if (mode === 'bypass') {
+            const source = offlineCtx.createBufferSource();
+            source.buffer = sourceBuffer;
+            const splitter = offlineCtx.createChannelSplitter(sourceBuffer.numberOfChannels);
+            source.connect(splitter);
+
+            // Unity gain, alternating pan (odd left, even right)
+            for (let i = 0; i < sourceBuffer.numberOfChannels; i++) {
+                const gainNode = offlineCtx.createGain();
+                gainNode.gain.value = 1.0; // Unity gain
+
+                const panNode = offlineCtx.createStereoPanner();
+                panNode.pan.value = (i % 2 === 0) ? -1 : 1; // Odd left, even right
+
+                splitter.connect(gainNode, i);
+                gainNode.connect(panNode);
+                panNode.connect(offlineCtx.destination);
+            }
+
+            source.start(0);
+            return await offlineCtx.startRendering();
+        }
+
+        // Mode: automation - process frame by frame with automation curves
+        if (mode === 'automation') {
+            // Check if any automation exists
+            const hasAutomation = mixerChannels.some(ch =>
+                ch.automation && ch.automation.volume && ch.automation.volume.length > 0
+            );
+
+            if (!hasAutomation) {
+                // Fall back to 'current' mode
+                console.warn('No automation found, falling back to current mix');
+                mode = 'current';
+            } else {
+                // Process with automation
+                return await this.renderWithAutomation(sourceBuffer, mixerChannels, offlineCtx);
+            }
+        }
+
+        // Mode: current (default) - use static mixer settings
         const source = offlineCtx.createBufferSource();
         source.buffer = sourceBuffer;
-
-        // Splitter
         const splitter = offlineCtx.createChannelSplitter(sourceBuffer.numberOfChannels);
         source.connect(splitter);
 
-        // Mixer Logic
         // Check Solo state
         const isAnySolo = mixerChannels.some(ch => ch.isSoloed);
 
@@ -342,12 +380,55 @@ export class AudioEngine {
             gainNode.gain.value = gainValue;
 
             const panNode = offlineCtx.createStereoPanner();
-            // Get pan value from existing node or default
-            // Note: We access the AudioParam value directly
             const currentPan = ch.panNode ? ch.panNode.pan.value : 0;
             panNode.pan.value = currentPan;
 
             // Connect: Splitter -> Gain -> Pan -> Destination
+            splitter.connect(gainNode, ch.index);
+            gainNode.connect(panNode);
+            panNode.connect(offlineCtx.destination);
+        });
+
+        source.start(0);
+        return await offlineCtx.startRendering();
+    }
+
+    async renderWithAutomation(sourceBuffer, mixerChannels, offlineCtx) {
+        // This is a simplified version - for proper automation rendering,
+        // we'd need to manually process samples or use AudioParam automation
+        const source = offlineCtx.createBufferSource();
+        source.buffer = sourceBuffer;
+        const splitter = offlineCtx.createChannelSplitter(sourceBuffer.numberOfChannels);
+        source.connect(splitter);
+
+        const duration = sourceBuffer.duration;
+
+        mixerChannels.forEach(ch => {
+            if (ch.index >= sourceBuffer.numberOfChannels) return;
+
+            const gainNode = offlineCtx.createGain();
+            const panNode = offlineCtx.createStereoPanner();
+
+            // Apply automation points to AudioParam
+            if (ch.automation && ch.automation.volume && ch.automation.volume.length > 0) {
+                // Set initial value
+                const firstPoint = ch.automation.volume[0];
+                gainNode.gain.setValueAtTime(firstPoint.value, 0);
+
+                // Add automation points
+                ch.automation.volume.forEach(point => {
+                    if (point.time <= duration) {
+                        gainNode.gain.linearRampToValueAtTime(point.value, point.time);
+                    }
+                });
+            } else {
+                gainNode.gain.value = ch.volume;
+            }
+
+            // Pan (currently no automation, use current value)
+            const currentPan = ch.panNode ? ch.panNode.pan.value : 0;
+            panNode.pan.value = currentPan;
+
             splitter.connect(gainNode, ch.index);
             gainNode.connect(panNode);
             panNode.connect(offlineCtx.destination);
