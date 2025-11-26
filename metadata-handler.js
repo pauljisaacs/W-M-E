@@ -16,8 +16,11 @@ export class MetadataHandler {
 
         console.log(`Reading metadata from ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)...`);
 
-        // Read from beginning until we find data chunk
-        while (!foundDataChunk && offset < file.size && offset < maxMetadataSize) {
+        // For small files (< 50MB), read the entire file to ensure we get all metadata
+        // For large files, read until we find the data chunk
+        const isSmallFile = file.size <= maxMetadataSize;
+
+        while (offset < file.size && offset < maxMetadataSize) {
             const blob = file.slice(offset, Math.min(offset + chunkSize, file.size));
             const chunk = await blob.arrayBuffer();
 
@@ -31,6 +34,12 @@ export class MetadataHandler {
             foundDataChunk = this.hasDataChunk(headerBuffer);
 
             offset += chunkSize;
+
+            // For large files, stop after finding data chunk
+            // For small files, keep reading to get all metadata
+            if (foundDataChunk && !isSmallFile) {
+                break;
+            }
         }
 
         console.log(`Read ${(headerBuffer.length / 1024).toFixed(2)} KB from beginning`);
@@ -168,27 +177,40 @@ export class MetadataHandler {
     }
 
     isWav(view) {
-        return view.getUint32(0, false) === 0x52494646 && // RIFF
+        const chunkId = view.getUint32(0, false);
+        return (chunkId === 0x52494646 || chunkId === 0x52463634) && // RIFF or RF64
             view.getUint32(8, false) === 0x57415645;   // WAVE
     }
 
     parseWav(view, filename, actualFileSize = null) {
+        const chunkIdHeader = view.getUint32(0, false);
+        const isRF64 = chunkIdHeader === 0x52463634; // RF64
+
         const metadata = {
             filename: filename,
-            format: 'WAV',
+            format: isRF64 ? 'RF64 (WAV)' : 'WAV',
             fileSize: actualFileSize || view.byteLength,
             chunks: {}
         };
 
-        let offset = 12; // Skip RIFF header
+        let rf64DataSize = 0n;
+        let offset = 12; // Skip RIFF/RF64 header
+
         while (offset < view.byteLength) {
             const chunkId = this.getChunkId(view, offset);
-            const chunkSize = view.getUint32(offset + 4, true);
+            let chunkSize = view.getUint32(offset + 4, true);
 
             // Store chunk info for later writing
             metadata.chunks[chunkId] = { offset, size: chunkSize };
 
-            if (chunkId === 'fmt ') {
+            if (chunkId === 'ds64') {
+                // Parse ds64 chunk (RF64 64-bit sizes)
+                // RIFF Size (8), Data Size (8), Sample Count (8), Table Length (4)
+                const ds64View = new DataView(view.buffer, view.byteOffset + offset + 8, chunkSize);
+                // We primarily care about the Data Size (bytes 8-15)
+                rf64DataSize = ds64View.getBigUint64(8, true);
+                console.log(`Found ds64 chunk. Data Size: ${rf64DataSize}`);
+            } else if (chunkId === 'fmt ') {
                 metadata.channels = view.getUint16(offset + 10, true);
                 metadata.sampleRate = view.getUint32(offset + 12, true);
                 metadata.bitDepth = view.getUint16(offset + 22, true);
@@ -198,11 +220,19 @@ export class MetadataHandler {
                 this.parseIXML(view, offset + 8, chunkSize, metadata);
             } else if (chunkId === 'data') {
                 metadata.audioDataOffset = offset + 8;
-                metadata.audioDataSize = chunkSize;
+
+                // If RF64 and size is -1 (0xFFFFFFFF), use the size from ds64
+                if (chunkSize === 0xFFFFFFFF && isRF64) {
+                    metadata.audioDataSize = Number(rf64DataSize); // Convert to Number (safe up to 9PB)
+                    console.log(`Using RF64 data size: ${metadata.audioDataSize}`);
+                } else {
+                    metadata.audioDataSize = chunkSize;
+                }
+
                 // Calculate duration if fmt was parsed
                 if (metadata.sampleRate && metadata.channels && metadata.bitDepth) {
                     const bytesPerSample = metadata.bitDepth / 8;
-                    const totalSamples = chunkSize / (metadata.channels * bytesPerSample);
+                    const totalSamples = metadata.audioDataSize / (metadata.channels * bytesPerSample);
                     metadata.durationSec = totalSamples / metadata.sampleRate;
                     metadata.duration = this.formatDuration(metadata.durationSec);
                 }
@@ -249,6 +279,33 @@ export class MetadataHandler {
         const timeRef = Number((BigInt(timeRefHigh) << 32n) | BigInt(timeRefLow));
 
         metadata.timeReference = timeRef;
+
+        console.log('[parseBext] Description:', metadata.description);
+        console.log('[parseBext] Current metadata before extraction:', { scene: metadata.scene, take: metadata.take, notes: metadata.notes, tape: metadata.tape });
+
+        // Extract Sound Devices tags from Description field
+        // Only set if not already populated (e.g., from iXML which takes priority)
+        if (metadata.description) {
+            const extractTag = (tag) => {
+                const regex = new RegExp(`${tag}=([^\\r\\n]*)`);
+                const match = metadata.description.match(regex);
+                return match ? match[1].trim() : undefined;
+            };
+
+            const extractedScene = extractTag('sSCENE');
+            const extractedTake = extractTag('sTAKE');
+            const extractedTape = extractTag('sTAPE');
+            const extractedNotes = extractTag('sNOTE');
+
+            console.log('[parseBext] Extracted from Description:', { scene: extractedScene, take: extractedTake, tape: extractedTape, notes: extractedNotes });
+
+            if (!metadata.scene) metadata.scene = extractedScene;
+            if (!metadata.take) metadata.take = extractedTake;
+            if (!metadata.tape) metadata.tape = extractedTape;
+            if (!metadata.notes) metadata.notes = extractedNotes;
+        }
+
+        console.log('[parseBext] Final metadata after extraction:', { scene: metadata.scene, take: metadata.take, notes: metadata.notes, tape: metadata.tape });
     }
 
     parseIXML(view, offset, size, metadata) {
@@ -265,6 +322,8 @@ export class MetadataHandler {
         metadata.tape = this.getXmlVal(xmlDoc, "TAPE");
         metadata.project = this.getXmlVal(xmlDoc, "PROJECT");
         metadata.notes = this.getXmlVal(xmlDoc, "NOTE");
+
+        console.log('[parseIXML] Parsed values:', { scene: metadata.scene, take: metadata.take, tape: metadata.tape, notes: metadata.notes, project: metadata.project });
 
         // Parse FPS/Speed - the SPEED field often contains multiple values
         // Format: "24000/1001 24000/1001 NDF 24000/1001 48000 24 ..."
@@ -389,7 +448,37 @@ export class MetadataHandler {
     }
 
     async saveWav(file, metadata) {
-        const originalBuffer = await file.arrayBuffer();
+        // For files > 2GB, we need to read in chunks to avoid memory allocation errors
+        const isLargeFile = file.size > 2 * 1024 * 1024 * 1024;
+
+        let originalBuffer;
+        if (isLargeFile) {
+            console.log(`Large file detected (${(file.size / 1024 / 1024 / 1024).toFixed(2)} GB), reading in chunks...`);
+            // Read file in chunks and combine
+            const chunkSize = 100 * 1024 * 1024; // 100MB chunks
+            const chunks = [];
+
+            for (let offset = 0; offset < file.size; offset += chunkSize) {
+                const blob = file.slice(offset, Math.min(offset + chunkSize, file.size));
+                const chunk = await blob.arrayBuffer();
+                chunks.push(new Uint8Array(chunk));
+            }
+
+            // Combine chunks
+            const totalLength = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+            const combined = new Uint8Array(totalLength);
+            let position = 0;
+
+            for (const chunk of chunks) {
+                combined.set(chunk, position);
+                position += chunk.byteLength;
+            }
+
+            originalBuffer = combined.buffer;
+        } else {
+            originalBuffer = await file.arrayBuffer();
+        }
+
         const view = new DataView(originalBuffer);
 
         // We need to reconstruct the file.

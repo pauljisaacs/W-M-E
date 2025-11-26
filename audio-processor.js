@@ -69,24 +69,37 @@ export class AudioProcessor {
 
     parseWavFormat(view) {
         // Simple parser to find fmt and data chunks
-        if (view.getUint32(0, false) !== 0x52494646) return null; // RIFF
+        const chunkIdHeader = view.getUint32(0, false);
+        const isRF64 = chunkIdHeader === 0x52463634; // RF64
+
+        if (chunkIdHeader !== 0x52494646 && !isRF64) return null; // RIFF or RF64
         if (view.getUint32(8, false) !== 0x57415645) return null; // WAVE
 
         let offset = 12;
         let info = {};
+        let rf64DataSize = 0n;
 
         while (offset < view.byteLength) {
             const chunkId = this.getChunkId(view, offset);
-            const chunkSize = view.getUint32(offset + 4, true);
+            let chunkSize = view.getUint32(offset + 4, true);
 
-            if (chunkId === 'fmt ') {
+            if (chunkId === 'ds64') {
+                const ds64View = new DataView(view.buffer, view.byteOffset + offset + 8, chunkSize);
+                rf64DataSize = ds64View.getBigUint64(8, true);
+            } else if (chunkId === 'fmt ') {
                 info.audioFormat = view.getUint16(offset + 8, true); // 1=PCM, 3=Float
                 info.channels = view.getUint16(offset + 10, true);
                 info.sampleRate = view.getUint32(offset + 12, true);
                 info.bitDepth = view.getUint16(offset + 22, true);
             } else if (chunkId === 'data') {
                 info.dataOffset = offset + 8;
-                info.dataSize = chunkSize;
+
+                if (chunkSize === 0xFFFFFFFF && isRF64) {
+                    info.dataSize = Number(rf64DataSize);
+                } else {
+                    info.dataSize = chunkSize;
+                }
+
                 // We found data, we can stop if we have fmt info
                 if (info.audioFormat) break;
             }

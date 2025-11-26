@@ -610,6 +610,8 @@ class App {
     }
 
     addTableRow(index, metadata) {
+        console.log(`[addTableRow] index=${index}, metadata:`, { scene: metadata.scene, take: metadata.take, notes: metadata.notes, tape: metadata.tape, project: metadata.project });
+
         const tbody = document.getElementById('file-list-body');
         const tr = document.createElement('tr');
         tr.dataset.index = index;
@@ -621,17 +623,17 @@ class App {
             if (key === 'fps') {
                 const select = document.createElement('select');
                 select.className = 'fps-select';
-                const options = ['23.98', '24', '25', '29.97', '29.97nd', '29.97df', '30'];
+                select.dataset.fileIndex = index;
 
-                options.forEach(opt => {
+                const fpsOptions = ['23.98', '24', '25', '29.97', '29.97df', '30', '48', '50', '59.94', '60'];
+                fpsOptions.forEach(fps => {
                     const option = document.createElement('option');
-                    option.value = opt;
-                    option.textContent = opt;
-                    if (opt === val) option.selected = true;
+                    option.value = fps;
+                    option.textContent = fps;
+                    if (fps === val) option.selected = true;
                     select.appendChild(option);
                 });
 
-                select.dataset.fileIndex = index;
                 select.addEventListener('change', (e) => {
                     const idx = parseInt(e.target.dataset.fileIndex);
                     if (!this.pendingEdits) this.pendingEdits = {};
@@ -644,7 +646,7 @@ class App {
                 return td;
             }
 
-            // Special handling for TC Start - validated input
+            // Special handling for TC Start - input field
             if (key === 'tcStart') {
                 const input = document.createElement('input');
                 input.type = 'text';
@@ -728,6 +730,7 @@ class App {
         tr.addEventListener('click', (e) => this.selectFile(index, e));
         tbody.appendChild(tr);
     }
+
 
     validateTimecode(tc) {
         // Validate HH:MM:SS:FF format
@@ -967,8 +970,35 @@ class App {
 
         // Load Audio for the clicked file (if selected and not already loaded)
         if (this.selectedIndices.has(index) && this.currentlyLoadedFileIndex !== index) {
-            await this.loadAudioForFile(index);
-            this.currentlyLoadedFileIndex = index;
+            const item = this.files[index];
+            const fileSizeGB = item.file.size / (1024 * 1024 * 1024);
+
+            // Skip audio loading for files > 2GB (browser memory limit)
+            if (item.file.size > 2 * 1024 * 1024 * 1024) {
+                console.warn(`File ${item.metadata.filename} is ${fileSizeGB.toFixed(2)} GB - skipping audio loading (Metadata Only mode)`);
+
+                // Update UI to show metadata-only mode
+                const mixerFilename = document.getElementById('mixer-filename');
+                if (mixerFilename) {
+                    mixerFilename.innerHTML = `${item.metadata.filename} <span style="color: #ffcf44; font-size: 0.8em;">(Metadata Only - File too large: ${fileSizeGB.toFixed(2)} GB)</span>`;
+                }
+
+                // Clear waveform with informative message
+                const canvas = document.getElementById('waveform-canvas');
+                const ctx = canvas.getContext('2d');
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = '#ffcf44';
+                ctx.font = '16px Inter';
+                ctx.fillText(`Playback unavailable - File too large (${fileSizeGB.toFixed(2)} GB)`, 20, 30);
+                ctx.fillStyle = '#888';
+                ctx.font = '14px Inter';
+                ctx.fillText('You can still edit and save metadata for this file', 20, 55);
+
+                this.currentlyLoadedFileIndex = index;
+            } else {
+                await this.loadAudioForFile(index);
+                this.currentlyLoadedFileIndex = index;
+            }
         }
     }
 
@@ -1342,12 +1372,23 @@ class App {
                 lastModified: item.file.lastModified
             });
 
-            // Provide helpful error message for large files
-            if (item.file.size > 1024 * 1024 * 1024) { // > 1GB
-                alert(`Failed to load audio for playback.\n\nFile: ${item.metadata.filename}\nSize: ${fileSizeMB} MB\n\nThis file is too large for Chrome to load into memory for playback.\n\nTry using Safari or Firefox, which handle large audio files better.\n\nError: ${err.message}`);
-            } else {
-                alert(`Failed to load audio: ${err.message}\nFile: ${item.metadata.filename}\nSize: ${fileSizeMB} MB`);
+            // Handle large file errors gracefully
+            // Don't show alert, just update UI to indicate metadata-only mode
+            const mixerFilename = document.getElementById('mixer-filename');
+            if (mixerFilename) {
+                mixerFilename.innerHTML = `${item.metadata.filename} <span style="color: #ffcf44; font-size: 0.8em;">(Metadata Only - File too large for playback)</span>`;
             }
+
+            // Clear waveform
+            const canvas = document.getElementById('waveform-canvas');
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#2a2a2a';
+            ctx.font = '14px Inter';
+            ctx.fillText('Playback unavailable for this file (too large)', 20, 30);
+
+            // Disable transport controls
+            // (Optional: you might want to disable play button)
         } finally {
             // Hide loading overlay
             loadingOverlay.style.display = 'none';

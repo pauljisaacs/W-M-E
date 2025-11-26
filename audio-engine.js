@@ -17,15 +17,26 @@ export class AudioEngine {
 
     async loadAudio(arrayBuffer) {
         try {
-            // Try native decoding first (fastest)
-            // Note: decodeAudioData detaches the arrayBuffer, so we must clone it if we might need to fallback
-            const bufferClone = arrayBuffer.slice(0);
+            // Check for RF64 header OR very large file (> 2GB) to skip native decoding
+            // Native decoding requires cloning (double memory) and often crashes on large buffers
+            const view = new DataView(arrayBuffer);
+            const isRF64 = view.getUint32(0, false) === 0x52463634; // RF64 signature
+            const isLargeFile = arrayBuffer.byteLength > 2 * 1024 * 1024 * 1024; // > 2GB
 
-            try {
-                this.buffer = await this.audioCtx.decodeAudioData(arrayBuffer);
-            } catch (nativeErr) {
-                console.warn('Native decoding failed, trying manual WAV decoding...', nativeErr);
-                this.buffer = this.decodeWavManually(bufferClone);
+            if (isRF64 || isLargeFile) {
+                console.log(`Large file detected (RF64: ${isRF64}, Size: ${arrayBuffer.byteLength}), skipping native decode...`);
+                this.buffer = this.decodeWavManually(arrayBuffer);
+            } else {
+                // Try native decoding first (fastest)
+                // Note: decodeAudioData detaches the arrayBuffer, so we must clone it if we might need to fallback
+                const bufferClone = arrayBuffer.slice(0);
+
+                try {
+                    this.buffer = await this.audioCtx.decodeAudioData(arrayBuffer);
+                } catch (nativeErr) {
+                    console.warn('Native decoding failed, trying manual WAV decoding...', nativeErr);
+                    this.buffer = this.decodeWavManually(bufferClone);
+                }
             }
 
             return this.buffer;
@@ -38,8 +49,11 @@ export class AudioEngine {
     decodeWavManually(arrayBuffer) {
         const view = new DataView(arrayBuffer);
 
-        // Check RIFF header
-        if (view.getUint32(0, false) !== 0x52494646 || view.getUint32(8, false) !== 0x57415645) {
+        // Check RIFF/RF64 header
+        const chunkIdHeader = view.getUint32(0, false);
+        const isRF64 = chunkIdHeader === 0x52463634;
+
+        if ((chunkIdHeader !== 0x52494646 && !isRF64) || view.getUint32(8, false) !== 0x57415645) {
             throw new Error('Not a valid WAV file');
         }
 
@@ -47,12 +61,17 @@ export class AudioEngine {
         let fmt = null;
         let dataOffset = -1;
         let dataSize = 0;
+        let rf64DataSize = 0n;
 
         while (offset < view.byteLength) {
             const chunkId = this.getChunkId(view, offset);
-            const chunkSize = view.getUint32(offset + 4, true);
+            let chunkSize = view.getUint32(offset + 4, true);
 
-            if (chunkId === 'fmt ') {
+            if (chunkId === 'ds64') {
+                // Parse ds64 chunk (RF64 64-bit sizes)
+                const ds64View = new DataView(view.buffer, view.byteOffset + offset + 8, chunkSize);
+                rf64DataSize = ds64View.getBigUint64(8, true);
+            } else if (chunkId === 'fmt ') {
                 fmt = {
                     audioFormat: view.getUint16(offset + 8, true),
                     channels: view.getUint16(offset + 10, true),
@@ -63,7 +82,12 @@ export class AudioEngine {
                 };
             } else if (chunkId === 'data') {
                 dataOffset = offset + 8;
-                dataSize = chunkSize;
+
+                if (chunkSize === 0xFFFFFFFF && isRF64) {
+                    dataSize = Number(rf64DataSize);
+                } else {
+                    dataSize = chunkSize;
+                }
                 // Don't break, might be other chunks? Usually data is last or near end.
                 // But we found it.
             }
