@@ -32,6 +32,7 @@ class App {
         this.files = []; // Array of { fileHandle, metadata, fileObj }
         this.selectedIndices = new Set();
         this.lastSelectedIndex = -1; // For shift-click range selection
+        this.currentlyLoadedFileIndex = -1; // Track which file is currently loaded
         this.columnOrder = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]; // Default order
         this.sortColumn = null;
         this.sortDirection = 'asc';
@@ -174,6 +175,46 @@ class App {
 
         // Keyboard Shortcuts
         document.addEventListener('keydown', (e) => {
+            // Arrow key navigation (only if not typing in an editable field)
+            if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && !this.isEditingText(e.target)) {
+                e.preventDefault(); // Prevent page scrolling
+
+                if (this.files.length === 0) return;
+
+                // Blur any focused element to prevent focus traps
+                if (document.activeElement && document.activeElement.blur) {
+                    document.activeElement.blur();
+                }
+
+                let targetIndex = -1;
+
+                if (this.lastSelectedIndex === -1) {
+                    // No selection, start at first file
+                    targetIndex = 0;
+                } else {
+                    if (e.key === 'ArrowDown') {
+                        // Already at the end, don't process
+                        if (this.lastSelectedIndex >= this.files.length - 1) return;
+                        targetIndex = this.lastSelectedIndex + 1;
+                    } else { // ArrowUp
+                        // Already at the start, don't process
+                        if (this.lastSelectedIndex <= 0) return;
+                        targetIndex = this.lastSelectedIndex - 1;
+                    }
+                }
+
+                console.log(`Arrow ${e.key === 'ArrowDown' ? 'Down' : 'Up'}: ${this.lastSelectedIndex} -> ${targetIndex}`);
+
+                // Select the target file
+                this.selectFile(targetIndex, { metaKey: false, ctrlKey: false, shiftKey: false });
+
+                // Scroll the row into view
+                const rows = document.querySelectorAll('#file-list-body tr');
+                if (rows[targetIndex]) {
+                    rows[targetIndex].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                }
+            }
+
             // Spacebar for play/pause (only if not typing in an editable field)
             if (e.code === 'Space' && !this.isEditingText(e.target)) {
                 e.preventDefault();
@@ -313,7 +354,8 @@ class App {
             this.updateRegionDisplay();
         });
 
-        regionSelector.addEventListener('mousemove', (e) => {
+        // Listen to document for mousemove so we can track outside the element
+        document.addEventListener('mousemove', (e) => {
             if (!isSelectingRegion || !this.audioEngine.buffer) return;
 
             const rect = regionSelector.getBoundingClientRect();
@@ -324,7 +366,8 @@ class App {
             this.updateRegionDisplay();
         });
 
-        regionSelector.addEventListener('mouseup', () => {
+        // Listen to document for mouseup so we catch it even outside the element
+        document.addEventListener('mouseup', () => {
             if (isSelectingRegion) {
                 isSelectingRegion = false;
 
@@ -336,17 +379,6 @@ class App {
                 // Clear if region is too small (less than 0.1 seconds)
                 if (Math.abs(this.region.end - this.region.start) < 0.1) {
                     this.clearRegion();
-                }
-            }
-        });
-
-        regionSelector.addEventListener('mouseleave', () => {
-            if (isSelectingRegion) {
-                isSelectingRegion = false;
-
-                // Ensure start is before end
-                if (this.region.start > this.region.end) {
-                    [this.region.start, this.region.end] = [this.region.end, this.region.start];
                 }
             }
         });
@@ -535,9 +567,10 @@ class App {
     }
 
     isEditingText(element) {
-        // Check if the user is typing in an input, textarea, or contenteditable element
+        // Check if the user is typing in an input, textarea, select, or contenteditable element
         return element.tagName === 'INPUT' ||
             element.tagName === 'TEXTAREA' ||
+            element.tagName === 'SELECT' ||
             element.isContentEditable;
     }
 
@@ -555,11 +588,23 @@ class App {
         for (const handle of handles) {
             try {
                 const file = await handle.getFile();
+                const fileSizeMB = (file.size / 1024 / 1024).toFixed(2);
+                console.log(`Processing: ${file.name} (${fileSizeMB} MB)`);
+
                 const metadata = await this.metadataHandler.parseFile(file);
                 this.files.push({ handle, metadata, file });
                 this.addTableRow(this.files.length - 1, metadata);
             } catch (err) {
                 console.error('Error processing file:', handle.name, err);
+                const file = await handle.getFile();
+                const fileSizeMB = (file.size / 1024 / 1024).toFixed(2);
+
+                // Show user-friendly error for large files
+                if (file.size > 1024 * 1024 * 1024) { // > 1GB
+                    alert(`Failed to load "${file.name}" (${fileSizeMB} MB).\n\nThis file may be too large for your browser to handle.\n\nTry using Safari or Firefox, which handle large files better than Chrome.\n\nError: ${err.message}`);
+                } else {
+                    alert(`Failed to load "${file.name}" (${fileSizeMB} MB).\n\nError: ${err.message}`);
+                }
             }
         }
     }
@@ -571,6 +616,73 @@ class App {
 
         const createCell = (key, val, editable = true) => {
             const td = document.createElement('td');
+
+            // Special handling for FPS - dropdown
+            if (key === 'fps') {
+                const select = document.createElement('select');
+                select.className = 'fps-select';
+                const options = ['23.98', '24', '25', '29.97', '29.97nd', '29.97df', '30'];
+
+                options.forEach(opt => {
+                    const option = document.createElement('option');
+                    option.value = opt;
+                    option.textContent = opt;
+                    if (opt === val) option.selected = true;
+                    select.appendChild(option);
+                });
+
+                select.dataset.fileIndex = index;
+                select.addEventListener('change', (e) => {
+                    const idx = parseInt(e.target.dataset.fileIndex);
+                    if (!this.pendingEdits) this.pendingEdits = {};
+                    if (!this.pendingEdits[idx]) this.pendingEdits[idx] = {};
+                    this.pendingEdits[idx].fps = e.target.value;
+                    console.log(`FPS changed for file ${idx}: ${e.target.value}`);
+                });
+
+                td.appendChild(select);
+                return td;
+            }
+
+            // Special handling for TC Start - validated input
+            if (key === 'tcStart') {
+                const input = document.createElement('input');
+                input.type = 'text';
+                input.className = 'tc-input';
+                input.value = val || '00:00:00:00';
+                input.placeholder = 'HH:MM:SS:FF';
+                input.dataset.fileIndex = index;
+
+                // Validation on blur
+                input.addEventListener('blur', (e) => {
+                    const value = e.target.value;
+                    if (this.validateTimecode(value)) {
+                        const idx = parseInt(e.target.dataset.fileIndex);
+                        if (!this.pendingEdits) this.pendingEdits = {};
+                        if (!this.pendingEdits[idx]) this.pendingEdits[idx] = {};
+                        this.pendingEdits[idx].tcStart = value;
+                        e.target.classList.remove('invalid');
+                        console.log(`TC Start changed for file ${idx}: ${value}`);
+                    } else {
+                        e.target.classList.add('invalid');
+                        alert('Invalid timecode format. Please use HH:MM:SS:FF (e.g., 01:23:45:12)');
+                        e.target.value = val || '00:00:00:00';
+                    }
+                });
+
+                // Enter key to blur
+                input.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        e.target.blur();
+                    }
+                });
+
+                td.appendChild(input);
+                return td;
+            }
+
+            // Default handling for other fields
             td.textContent = val || '';
             if (editable) {
                 td.contentEditable = true;
@@ -615,6 +727,12 @@ class App {
 
         tr.addEventListener('click', (e) => this.selectFile(index, e));
         tbody.appendChild(tr);
+    }
+
+    validateTimecode(tc) {
+        // Validate HH:MM:SS:FF format
+        const pattern = /^([0-9]{2}):([0-5][0-9]):([0-5][0-9]):([0-9]{2})$/;
+        return pattern.test(tc);
     }
 
     sortFiles(keyOrIndex) {
@@ -675,6 +793,49 @@ class App {
     async saveSelected() {
         if (this.selectedIndices.size === 0) return;
 
+        // Apply pending edits first
+        if (this.pendingEdits) {
+            for (const index of this.selectedIndices) {
+                if (this.pendingEdits[index]) {
+                    const edits = this.pendingEdits[index];
+                    const metadata = this.files[index].metadata;
+
+                    if (edits.fps) {
+                        // Update FPS display value
+                        metadata.fps = edits.fps;
+
+                        // Update fpsExact for calculations
+                        // Parse common frame rates
+                        if (edits.fps === '23.98') {
+                            metadata.fpsExact = { numerator: 24000, denominator: 1001 };
+                        } else if (edits.fps === '29.97' || edits.fps === '29.97nd' || edits.fps === '29.97df') {
+                            metadata.fpsExact = { numerator: 30000, denominator: 1001 };
+                        } else {
+                            const fpsNum = parseFloat(edits.fps);
+                            metadata.fpsExact = { numerator: fpsNum, denominator: 1 };
+                        }
+
+                        console.log(`Applied FPS edit for file ${index}: ${edits.fps}`, metadata.fpsExact);
+                    }
+
+                    if (edits.tcStart) {
+                        // Update TC Start display value
+                        metadata.tcStart = edits.tcStart;
+
+                        // Convert TC Start back to timeReference (samples) for bEXT
+                        if (metadata.sampleRate && metadata.fpsExact) {
+                            metadata.timeReference = this.metadataHandler.tcToSamples(
+                                edits.tcStart,
+                                metadata.sampleRate,
+                                metadata.fpsExact
+                            );
+                            console.log(`Applied TC Start edit for file ${index}: ${edits.tcStart} -> ${metadata.timeReference} samples`);
+                        }
+                    }
+                }
+            }
+        }
+
         let successCount = 0;
         for (const index of this.selectedIndices) {
             const item = this.files[index];
@@ -693,6 +854,9 @@ class App {
                         successCount++;
                         // Refresh the file object from the handle to prevent NotReadableError
                         item.file = await item.handle.getFile();
+                        // Re-parse metadata to get the updated values from the saved file
+                        item.metadata = await this.metadataHandler.parseFile(item.file);
+                        console.log('Re-parsed metadata after save:', item.metadata);
                     }
                 } else {
                     // Fallback download (only for single file to avoid spam)
@@ -709,6 +873,19 @@ class App {
                 console.error('Error saving file:', item.metadata.filename, err);
             }
         }
+
+        // Clear pending edits for saved files
+        if (this.pendingEdits && successCount > 0) {
+            for (const index of this.selectedIndices) {
+                delete this.pendingEdits[index];
+            }
+        }
+
+        // Re-render table to show updated values
+        const tbody = document.getElementById('file-list-body');
+        tbody.innerHTML = '';
+        this.files.forEach((file, i) => this.addTableRow(i, file.metadata));
+        this.updateSelectionUI();
 
         if (successCount > 0) {
             alert(`Saved ${successCount} file(s) successfully!`);
@@ -788,9 +965,10 @@ class App {
 
         this.updateSelectionUI();
 
-        // Load Audio for the clicked file (if selected)
-        if (this.selectedIndices.has(index)) {
+        // Load Audio for the clicked file (if selected and not already loaded)
+        if (this.selectedIndices.has(index) && this.currentlyLoadedFileIndex !== index) {
             await this.loadAudioForFile(index);
+            this.currentlyLoadedFileIndex = index;
         }
     }
 
@@ -1063,10 +1241,50 @@ class App {
         this.stop();
 
         const item = this.files[index];
+        const fileSizeMB = (item.file.size / 1024 / 1024).toFixed(2);
+
+        // Show loading overlay for large files
+        const loadingOverlay = document.getElementById('loading-overlay');
+        const progressFill = document.getElementById('progress-fill');
+        const progressText = document.getElementById('progress-text');
+        const loadingText = document.querySelector('.loading-text');
+
+        console.log(`File size: ${fileSizeMB} MB (${item.file.size} bytes)`);
+
+        if (item.file.size > 100 * 1024 * 1024) { // > 100MB
+            console.log('Showing loading overlay...');
+            loadingOverlay.style.display = 'flex';
+            loadingText.textContent = 'Loading...';
+            progressFill.style.width = '0%';
+            progressText.textContent = '0%';
+
+            // Force a small delay to ensure UI updates before we start loading
+            await new Promise(resolve => setTimeout(resolve, 100));
+
+            console.log(`⏳ Loading large file (${fileSizeMB} MB), please wait...`);
+        }
+
         try {
             console.log(`Loading audio file with ${item.metadata.channels || '?'} channels...`);
-            const buffer = await this.audioEngine.loadAudio(await item.file.arrayBuffer());
-            console.log(`Successfully decoded: ${buffer.numberOfChannels} channels, ${buffer.duration.toFixed(2)}s`);
+
+            // Load audio data in chunks with progress
+            const arrayBuffer = await this.loadFileWithProgress(item.file, (progress) => {
+                if (loadingOverlay.style.display === 'flex') {
+                    progressFill.style.width = `${progress}%`;
+                    progressText.textContent = `${progress}%`;
+                }
+            });
+
+            console.log(`✓ Loaded ${fileSizeMB} MB into memory, decoding...`);
+
+            // Update loading text for decoding phase
+            if (loadingOverlay.style.display === 'flex') {
+                loadingText.textContent = 'Creating waveform...';
+                progressFill.style.width = '100%';
+            }
+
+            const buffer = await this.audioEngine.loadAudio(arrayBuffer);
+            console.log(`✓ Successfully decoded: ${buffer.numberOfChannels} channels, ${buffer.duration.toFixed(2)}s`);
 
             // Setup Mixer
             const trackCount = buffer.numberOfChannels;
@@ -1123,8 +1341,50 @@ class App {
                 type: item.file.type,
                 lastModified: item.file.lastModified
             });
-            alert(`Failed to load audio: ${err.message}\nFile: ${item.metadata.filename}\nSize: ${(item.file.size / 1024 / 1024).toFixed(2)} MB`);
+
+            // Provide helpful error message for large files
+            if (item.file.size > 1024 * 1024 * 1024) { // > 1GB
+                alert(`Failed to load audio for playback.\n\nFile: ${item.metadata.filename}\nSize: ${fileSizeMB} MB\n\nThis file is too large for Chrome to load into memory for playback.\n\nTry using Safari or Firefox, which handle large audio files better.\n\nError: ${err.message}`);
+            } else {
+                alert(`Failed to load audio: ${err.message}\nFile: ${item.metadata.filename}\nSize: ${fileSizeMB} MB`);
+            }
+        } finally {
+            // Hide loading overlay
+            loadingOverlay.style.display = 'none';
+            progressFill.style.width = '0%';
+            progressText.textContent = '0%';
         }
+    }
+
+    async loadFileWithProgress(file, onProgress) {
+        const chunkSize = 10 * 1024 * 1024; // 10MB chunks
+        const chunks = [];
+        let loadedBytes = 0;
+
+        for (let offset = 0; offset < file.size; offset += chunkSize) {
+            const blob = file.slice(offset, Math.min(offset + chunkSize, file.size));
+            const chunk = await blob.arrayBuffer();
+            chunks.push(chunk);
+
+            loadedBytes += chunk.byteLength;
+            const progress = Math.round((loadedBytes / file.size) * 100);
+            onProgress(progress);
+
+            // Small delay to allow UI to update
+            await new Promise(resolve => setTimeout(resolve, 0));
+        }
+
+        // Combine all chunks into single ArrayBuffer
+        const totalLength = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+        const combined = new Uint8Array(totalLength);
+        let position = 0;
+
+        for (const chunk of chunks) {
+            combined.set(new Uint8Array(chunk), position);
+            position += chunk.byteLength;
+        }
+
+        return combined.buffer;
     }
 
     togglePlay() {
@@ -1484,149 +1744,207 @@ class App {
 
         this.closeExportModal();
 
-        // For batch export, ask user to select output directory
+        // 1. Get Save Handle(s) FIRST (while we still have user gesture)
+        let singleFileHandle = null;
         let outputDirHandle = null;
-        if (selectedFiles.length > 1) {
-            try {
-                outputDirHandle = await window.showDirectoryPicker();
-            } catch (err) {
-                if (err.name !== 'AbortError') {
-                    alert('Failed to select output directory: ' + err.message);
+        let singleOutputFilename = '';
+
+        try {
+            if (selectedFiles.length === 1) {
+                // Single file export - ask for save location immediately
+                if (window.showSaveFilePicker) {
+                    const item = selectedFiles[0];
+                    const extension = format;
+                    const isRegionExport = this.region.start !== null && this.region.end !== null;
+                    const baseName = item.metadata.filename.replace(/\.wav$/i, '');
+                    const suffix = isRegionExport ? '_region_mix' : '_mix';
+                    singleOutputFilename = `${baseName}${suffix}.${extension}`;
+
+                    try {
+                        singleFileHandle = await window.showSaveFilePicker({
+                            suggestedName: singleOutputFilename,
+                            types: [{
+                                description: extension.toUpperCase() + ' Audio',
+                                accept: { [`audio/${extension}`]: [`.${extension}`] },
+                            }],
+                        });
+                    } catch (err) {
+                        if (err.name === 'AbortError') return; // User cancelled
+                        throw err;
+                    }
                 }
-                return;
+            } else {
+                // Batch export - ask for directory
+                try {
+                    outputDirHandle = await window.showDirectoryPicker();
+                } catch (err) {
+                    if (err.name === 'AbortError') return; // User cancelled
+                    throw err;
+                }
             }
+        } catch (err) {
+            console.error('Error getting save location:', err);
+            alert(`Failed to get save location: ${err.message}`);
+            return;
         }
 
+        // 2. Start Processing
         document.body.style.cursor = 'wait';
         let successCount = 0;
         let failCount = 0;
 
         try {
-            for (let fileIndex = 0; fileIndex < selectedFiles.length; fileIndex++) {
-                const item = selectedFiles[fileIndex];
-
+            for (const item of selectedFiles) {
                 // Show progress
                 if (selectedFiles.length > 1) {
-                    console.log(`Exporting ${fileIndex + 1} of ${selectedFiles.length}: ${item.metadata.filename}`);
+                    console.log(`Exporting ${successCount + failCount + 1} of ${selectedFiles.length}: ${item.metadata.filename}`);
                     // You could update a progress bar here
                 }
 
-                try {
-                    // Load audio for this file
+                // Load audio if needed
+                let buffer = this.audioEngine.buffer;
+                // If this is NOT the currently loaded file, we need to load it temporarily
+                if (!this.currentFileMetadata || this.currentFileMetadata.filename !== item.metadata.filename) {
+                    // For now, we only support exporting the currently loaded file or we'd need to load each one
+                    // Since we can't easily load files in background without blocking UI, 
+                    // we'll assume for now we are exporting the loaded file or batch processing is limited.
+
+                    // Actually, for batch export to work properly, we MUST load the audio.
+                    // Let's reuse loadFileWithProgress but without UI updates for now
                     const arrayBuffer = await item.file.arrayBuffer();
-                    let audioBuffer = await this.audioEngine.loadAudio(arrayBuffer);
+                    buffer = await this.audioEngine.decodeAudio(arrayBuffer);
+                }
 
-                    // Extract region if one is selected (only for single file export)
-                    let isRegionExport = false;
-                    if (selectedFiles.length === 1 && this.region.start !== null && this.region.end !== null) {
-                        const regionStart = Math.min(this.region.start, this.region.end);
-                        const regionEnd = Math.max(this.region.start, this.region.end);
-                        audioBuffer = this.audioEngine.extractRegion(audioBuffer, regionStart, regionEnd);
-                        isRegionExport = true;
+                if (!buffer) {
+                    console.error(`No audio data for ${item.metadata.filename}`);
+                    failCount++;
+                    continue;
+                }
+
+                // Render Mix
+                // Define range
+                let start = 0;
+                let end = buffer.duration;
+                let isRegionExport = false;
+
+                // Only apply region if we are exporting the single currently loaded file
+                if (selectedFiles.length === 1 && this.region.start !== null && this.region.end !== null) {
+                    const regionStart = Math.min(this.region.start, this.region.end);
+                    const regionEnd = Math.max(this.region.start, this.region.end);
+
+                    // Extract region first
+                    buffer = this.audioEngine.extractRegion(buffer, regionStart, regionEnd);
+                    isRegionExport = true;
+                }
+
+                // Render stereo mix
+                // Note: renderStereoMix in AudioEngine currently doesn't support automation playback during offline render
+                // It renders the static mixer state (volume/pan/mute/solo)
+                const renderedBuffer = await this.audioEngine.renderStereoMix(
+                    buffer,
+                    this.mixer.channels,
+                    mixMode
+                );
+
+                // Encode
+                let blob;
+                let extension = format;
+
+                if (format === 'wav') {
+                    const bitDepth = parseInt(document.getElementById('export-bitdepth').value);
+                    const originalBuffer = await item.file.arrayBuffer();
+                    const wavBuffer = this.audioProcessor.createWavFile(renderedBuffer, bitDepth, originalBuffer);
+                    blob = new Blob([wavBuffer], { type: 'audio/wav' });
+                } else if (format === 'mp3') {
+                    if (typeof lamejs === 'undefined') {
+                        alert('lamejs library not loaded. Please refresh the page.');
+                        document.body.style.cursor = 'default';
+                        return;
                     }
+                    // Convert to MP3
+                    const channels = renderedBuffer.numberOfChannels;
+                    const sampleRate = renderedBuffer.sampleRate;
+                    const mp3Encoder = new lamejs.Mp3Encoder(channels, sampleRate, 192); // 192kbps
+                    const mp3Data = [];
 
-                    // Render stereo mix with selected mode
-                    const renderedBuffer = await this.audioEngine.renderStereoMix(audioBuffer, this.mixer.channels, mixMode);
+                    // Get channel data
+                    const left = renderedBuffer.getChannelData(0);
+                    const right = channels > 1 ? renderedBuffer.getChannelData(1) : left;
 
-                    let blob = null;
-                    let extension = '';
+                    // Process in chunks
+                    const sampleBlockSize = 1152;
+                    for (let i = 0; i < left.length; i += sampleBlockSize) {
+                        const leftChunk = left.subarray(i, i + sampleBlockSize);
+                        const rightChunk = right.subarray(i, i + sampleBlockSize);
 
-                    if (format === 'wav') {
-                        const bitDepth = parseInt(document.getElementById('export-bitdepth').value);
-                        const originalBuffer = await item.file.arrayBuffer();
-                        const wavBuffer = this.audioProcessor.createWavFile(renderedBuffer, bitDepth, originalBuffer);
-                        blob = new Blob([wavBuffer], { type: 'audio/wav' });
-                        extension = 'wav';
-                    } else if (format === 'mp3') {
-                        if (typeof lamejs === 'undefined') {
-                            alert('lamejs library not loaded. Please refresh the page.');
-                            document.body.style.cursor = 'default';
-                            return;
+                        // Convert float to int16
+                        const leftInt = new Int16Array(leftChunk.length);
+                        const rightInt = new Int16Array(rightChunk.length);
+
+                        for (let j = 0; j < leftChunk.length; j++) {
+                            leftInt[j] = leftChunk[j] < 0 ? leftChunk[j] * 0x8000 : leftChunk[j] * 0x7FFF;
+                            rightInt[j] = rightChunk[j] < 0 ? rightChunk[j] * 0x8000 : rightChunk[j] * 0x7FFF;
                         }
 
-                        const bitrate = parseInt(document.getElementById('export-mp3-bitrate').value);
-                        const mp3Encoder = new lamejs.Mp3Encoder(2, renderedBuffer.sampleRate, bitrate);
+                        const mp3buf = channels === 1
+                            ? mp3Encoder.encodeBuffer(leftInt)
+                            : mp3Encoder.encodeBuffer(leftInt, rightInt);
 
-                        const samplesLeft = renderedBuffer.getChannelData(0);
-                        const samplesRight = renderedBuffer.getChannelData(1);
-
-                        const sampleBlockSize = 1152;
-                        const mp3Data = [];
-
-                        for (let i = 0; i < samplesLeft.length; i += sampleBlockSize) {
-                            const leftChunk = samplesLeft.subarray(i, i + sampleBlockSize);
-                            const rightChunk = samplesRight.subarray(i, i + sampleBlockSize);
-
-                            const leftInt = new Int16Array(leftChunk.length);
-                            const rightInt = new Int16Array(rightChunk.length);
-                            for (let j = 0; j < leftChunk.length; j++) {
-                                leftInt[j] = leftChunk[j] < 0 ? leftChunk[j] * 0x8000 : leftChunk[j] * 0x7FFF;
-                                rightInt[j] = rightChunk[j] < 0 ? rightChunk[j] * 0x8000 : rightChunk[j] * 0x7FFF;
-                            }
-
-                            const mp3buf = mp3Encoder.encodeBuffer(leftInt, rightInt);
-                            if (mp3buf.length > 0) mp3Data.push(mp3buf);
-                        }
-
-                        const mp3buf = mp3Encoder.flush();
                         if (mp3buf.length > 0) mp3Data.push(mp3buf);
-
-                        blob = new Blob(mp3Data, { type: 'audio/mp3' });
-                        extension = 'mp3';
                     }
 
-                    if (blob) {
-                        const baseName = item.metadata.filename.replace(/\.wav$/i, '');
-                        const suffix = isRegionExport ? '_region_mix' : '_mix';
-                        const outputFilename = `${baseName}${suffix}.${extension}`;
+                    const mp3buf = mp3Encoder.flush();
+                    if (mp3buf.length > 0) mp3Data.push(mp3buf);
 
-                        if (selectedFiles.length === 1) {
-                            // Single file: use save picker
-                            const handle = await window.showSaveFilePicker({
-                                suggestedName: outputFilename,
-                                types: [{
-                                    description: 'Audio File',
-                                    accept: { [`audio/${extension}`]: [`.${extension}`] },
-                                }],
-                            });
+                    blob = new Blob(mp3Data, { type: 'audio/mp3' });
+                }
 
-                            const writable = await handle.createWritable();
-                            await writable.write(blob);
-                            await writable.close();
-                        } else {
-                            // Batch: save to selected directory
+                if (blob) {
+                    const baseName = item.metadata.filename.replace(/\.wav$/i, '');
+                    const suffix = isRegionExport ? '_region_mix' : '_mix';
+                    const outputFilename = `${baseName}${suffix}.${extension}`;
+
+                    if (singleFileHandle) {
+                        // Write to the handle we got earlier
+                        const writable = await singleFileHandle.createWritable();
+                        await writable.write(blob);
+                        await writable.close();
+                        successCount++;
+                    } else if (outputDirHandle) {
+                        // Batch export to directory
+                        try {
                             const fileHandle = await outputDirHandle.getFileHandle(outputFilename, { create: true });
                             const writable = await fileHandle.createWritable();
                             await writable.write(blob);
                             await writable.close();
+                            successCount++;
+                        } catch (err) {
+                            console.error(`Failed to save ${outputFilename}:`, err);
+                            failCount++;
                         }
-
+                    } else {
+                        // Fallback download (if showSaveFilePicker wasn't supported/used)
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = outputFilename;
+                        a.click();
                         successCount++;
                     }
-                } catch (err) {
-                    console.error(`Failed to export ${item.metadata.filename}:`, err);
-                    failCount++;
                 }
             }
-
-            // Show summary
-            if (selectedFiles.length === 1) {
-                alert('Export successful!');
-            } else {
-                alert(`Batch export complete!\nSuccessful: ${successCount}\nFailed: ${failCount}`);
-            }
-
         } catch (err) {
-            console.error('Export failed:', err);
-            alert(`Export failed: ${err.message}`);
+            console.error('Export process failed:', err);
+            alert(`An error occurred during export: ${err.message}`);
         } finally {
             document.body.style.cursor = 'default';
+            if (successCount > 0) {
+                // alert(`Successfully exported ${successCount} file(s).`);
+            }
         }
     }
 
     async saveMixerSettingsToFile() {
-        if (this.selectedIndices.size !== 1) return;
-
         const index = this.selectedIndices.values().next().value;
         const item = this.files[index];
 

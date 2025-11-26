@@ -4,21 +4,167 @@ export class MetadataHandler {
     }
 
     async parseFile(file) {
-        const arrayBuffer = await file.arrayBuffer();
-        const dataView = new DataView(arrayBuffer);
+        // For large files, metadata can be at the beginning AND at the end (after data chunk)
+        // Strategy: Read beginning until we hit 'data' chunk, then read the end of the file
+        // Parse them separately to avoid creating invalid WAV structure
 
-        if (this.isWav(dataView)) {
-            return this.parseWav(dataView, file.name);
-        } else {
-            // Placeholder for MP3/AAC or fallback
+        let offset = 0;
+        const chunkSize = 512 * 1024; // 512KB chunks
+        let headerBuffer = new Uint8Array(0);
+        let foundDataChunk = false;
+        const maxMetadataSize = 50 * 1024 * 1024; // 50MB safety limit
+
+        console.log(`Reading metadata from ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)...`);
+
+        // Read from beginning until we find data chunk
+        while (!foundDataChunk && offset < file.size && offset < maxMetadataSize) {
+            const blob = file.slice(offset, Math.min(offset + chunkSize, file.size));
+            const chunk = await blob.arrayBuffer();
+
+            // Append chunk to header buffer
+            const newBuffer = new Uint8Array(headerBuffer.length + chunk.byteLength);
+            newBuffer.set(headerBuffer);
+            newBuffer.set(new Uint8Array(chunk), headerBuffer.length);
+            headerBuffer = newBuffer;
+
+            // Check if we've found the 'data' chunk
+            foundDataChunk = this.hasDataChunk(headerBuffer);
+
+            offset += chunkSize;
+        }
+
+        console.log(`Read ${(headerBuffer.length / 1024).toFixed(2)} KB from beginning`);
+
+        // Parse the header to get basic info
+        const headerView = new DataView(headerBuffer.buffer);
+        if (!this.isWav(headerView)) {
             return {
                 filename: file.name,
                 format: file.type || 'unknown',
                 duration: 'Unknown',
                 trackCount: '?',
-                // ... other defaults
             };
         }
+
+        const metadata = this.parseWav(headerView, file.name, file.size);
+
+        // Check if we found bEXT and iXML in the header
+        const foundBext = metadata.timeReference !== undefined || metadata.description !== undefined;
+        const foundIxml = metadata.ixmlRaw !== undefined;
+
+        // Only read the END of the file if we didn't find bEXT/iXML at the beginning
+        // (Some recorders put them at the end, after the data chunk)
+        if (!foundBext || !foundIxml) {
+            const endReadSize = Math.min(10 * 1024 * 1024, file.size); // Read last 10MB
+            const endOffset = Math.max(0, file.size - endReadSize);
+
+            if (endOffset > offset) {
+                console.log(`Metadata chunks not found in header, reading last ${(endReadSize / 1024 / 1024).toFixed(2)} MB from end of file...`);
+                const endBlob = file.slice(endOffset, file.size);
+                const endBuffer = await endBlob.arrayBuffer();
+                const endView = new DataView(endBuffer);
+
+                // Parse chunks from the end buffer
+                this.parseTrailingChunks(endView, metadata, endOffset);
+            }
+        } else {
+            console.log(`Found metadata in header (bEXT: ${foundBext}, iXML: ${foundIxml})`);
+        }
+
+        console.log(`Final parsed metadata:`, metadata);
+
+        return metadata;
+    }
+
+    parseTrailingChunks(view, metadata, fileOffset) {
+        // Parse chunks from the end of the file (after data chunk)
+        // fileOffset is the absolute position in the file where 'view' starts
+
+        let offset = 0;
+
+        // If we know where the data chunk ends, start searching there
+        // This avoids interpreting audio data as chunk headers
+        if (metadata.audioDataOffset !== undefined && metadata.audioDataSize !== undefined) {
+            const dataEnd = metadata.audioDataOffset + metadata.audioDataSize;
+            // Pad to even byte
+            const nextChunkStart = dataEnd + (dataEnd % 2);
+
+            if (nextChunkStart >= fileOffset) {
+                offset = nextChunkStart - fileOffset;
+                console.log(`Jumping to offset ${offset} in trailing buffer (based on data chunk end)`);
+            } else {
+                console.warn('Data chunk ends before trailing buffer starts - scanning might be unreliable');
+            }
+        }
+
+        console.log(`Starting trailing chunk parse at offset ${offset} (buffer size: ${view.byteLength})`);
+
+        while (offset < view.byteLength - 8) {
+            try {
+                const chunkId = this.getChunkId(view, offset);
+                const chunkSize = view.getUint32(offset + 4, true);
+
+                console.log(`Found chunk candidate at ${offset}: ${chunkId} (${chunkSize} bytes)`);
+
+                // Validate chunk ID (must be ASCII alphanumeric/space)
+                if (!/^[a-zA-Z0-9 ]{4}$/.test(chunkId)) {
+                    console.log('Invalid chunk ID, skipping byte');
+                    offset++;
+                    continue;
+                }
+
+                if (chunkId === 'bext') {
+                    console.log(`Found bext chunk at end of file, size: ${chunkSize}`);
+                    this.parseBext(view, offset + 8, chunkSize, metadata);
+                } else if (chunkId === 'iXML') {
+                    console.log(`Found iXML chunk at end of file, size: ${chunkSize}`);
+                    this.parseIXML(view, offset + 8, chunkSize, metadata);
+                }
+
+                offset += 8 + chunkSize;
+                // Pad to even byte
+                if (chunkSize % 2 !== 0) offset++;
+            } catch (e) {
+                console.warn('Error parsing trailing chunk:', e);
+                // If we can't parse a chunk, move forward by 1 byte and try again
+                offset++;
+            }
+        }
+
+        // Recalculate timecode after parsing trailing chunks
+        if (metadata.timeReference !== undefined && metadata.sampleRate) {
+            const fpsExact = metadata.fpsExact || { numerator: 24, denominator: 1 };
+            metadata.tcStart = this.samplesToTC(metadata.timeReference, metadata.sampleRate, fpsExact);
+            console.log(`Recalculated TC Start: ${metadata.tcStart}`);
+        }
+    }
+
+    hasDataChunk(buffer) {
+        // Search for 'data' chunk signature in the buffer
+        const view = new DataView(buffer.buffer || buffer);
+        let offset = 12; // Skip RIFF header
+
+        try {
+            while (offset + 8 <= view.byteLength) {
+                const chunkId = this.getChunkId(view, offset);
+                const chunkSize = view.getUint32(offset + 4, true);
+
+                if (chunkId === 'data') {
+                    return true;
+                }
+
+                // Move to next chunk (8 bytes for header + chunk size)
+                offset += 8 + chunkSize;
+
+                // Align to even byte boundary
+                if (chunkSize % 2 !== 0) offset++;
+            }
+        } catch (e) {
+            // If we can't read properly, assume we haven't found it yet
+            return false;
+        }
+
+        return false;
     }
 
     isWav(view) {
@@ -26,11 +172,11 @@ export class MetadataHandler {
             view.getUint32(8, false) === 0x57415645;   // WAVE
     }
 
-    parseWav(view, filename) {
+    parseWav(view, filename, actualFileSize = null) {
         const metadata = {
             filename: filename,
             format: 'WAV',
-            fileSize: view.byteLength,
+            fileSize: actualFileSize || view.byteLength,
             chunks: {}
         };
 
@@ -124,18 +270,42 @@ export class MetadataHandler {
         // Format: "24000/1001 24000/1001 NDF 24000/1001 48000 24 ..."
         // We want the first value and convert fractions to decimal FOR DISPLAY
         // But store the exact fraction for precise calculations
-        const speedVal = this.getXmlVal(xmlDoc, "SPEED") || this.getXmlVal(xmlDoc, "FRAME_RATE");
+
+        // Check for nested elements first (Sound Devices style)
+        let speedVal = this.getXmlVal(xmlDoc, "SPEED MASTER_SPEED") ||
+            this.getXmlVal(xmlDoc, "SPEED CURRENT_SPEED") ||
+            this.getXmlVal(xmlDoc, "SPEED TIMECODE_RATE");
+
+        if (!speedVal) {
+            // Fallback to top-level SPEED or FRAME_RATE
+            speedVal = this.getXmlVal(xmlDoc, "SPEED") || this.getXmlVal(xmlDoc, "FRAME_RATE");
+        }
+
         if (speedVal) {
             const firstValue = speedVal.trim().split(/\s+/)[0]; // Get first token
             if (firstValue.includes('/')) {
                 // Store exact fraction for calculations
                 const [num, den] = firstValue.split('/').map(Number);
                 metadata.fpsExact = { numerator: num, denominator: den };
-                metadata.fps = (num / den).toFixed(2); // Display value
+
+                // Calculate display FPS
+                // Special handling for 23.976 vs 24
+                const fps = num / den;
+                if (Math.abs(fps - 23.976) < 0.01) {
+                    metadata.fps = "23.98";
+                } else if (Math.abs(fps - 29.97) < 0.01) {
+                    metadata.fps = "29.97";
+                } else {
+                    metadata.fps = fps.toFixed(2);
+                    // Remove trailing zeros if integer
+                    if (metadata.fps.endsWith('.00')) {
+                        metadata.fps = metadata.fps.substring(0, metadata.fps.length - 3);
+                    }
+                }
             } else {
                 const value = parseFloat(firstValue);
                 metadata.fpsExact = { numerator: value, denominator: 1 };
-                metadata.fps = value.toFixed(2);
+                metadata.fps = value.toString();
             }
         }
 
@@ -183,6 +353,32 @@ export class MetadataHandler {
         const f = totalFrames % framesPerSecond;
 
         return `${this.pad(h)}:${this.pad(m)}:${this.pad(s)}:${this.pad(f)}`;
+    }
+
+    tcToSamples(tcString, sampleRate, fpsExact) {
+        // Parse HH:MM:SS:FF format
+        const parts = tcString.split(':');
+        if (parts.length !== 4) return 0;
+
+        const h = parseInt(parts[0]) || 0;
+        const m = parseInt(parts[1]) || 0;
+        const s = parseInt(parts[2]) || 0;
+        const f = parseInt(parts[3]) || 0;
+
+        // Calculate total frames
+        const framesPerSecond = Math.round(fpsExact.numerator / fpsExact.denominator);
+        const framesPerMinute = framesPerSecond * 60;
+        const framesPerHour = framesPerMinute * 60;
+
+        const totalFrames = (h * framesPerHour) + (m * framesPerMinute) + (s * framesPerSecond) + f;
+
+        // Convert frames to seconds using exact FPS fraction
+        const totalSeconds = totalFrames * fpsExact.denominator / fpsExact.numerator;
+
+        // Convert seconds to samples
+        const samples = Math.round(totalSeconds * sampleRate);
+
+        return samples;
     }
 
     formatDuration(seconds) {
@@ -312,6 +508,27 @@ export class MetadataHandler {
         if (metadata.tape) updateTag('sTAPE', metadata.tape);
         if (metadata.notes !== undefined) updateTag('sNOTE', metadata.notes);
 
+        // Update sSPEED tag if FPS changed
+        if (metadata.fps) {
+            // Format FPS for Sound Devices (e.g., 023.976-ND, 025.000-ND)
+            let fpsStr = parseFloat(metadata.fps).toFixed(3).padStart(7, '0');
+
+            // Determine drop frame suffix
+            let suffix = '-ND'; // Default to Non-Drop
+            if (metadata.fps === '29.97df' || metadata.fps === '29.97' && metadata.fpsExact && metadata.fpsExact.denominator === 1001) {
+                // Check if it's explicitly drop frame or implied
+                if (metadata.fps === '29.97df') suffix = '-DF';
+            }
+
+            // Special handling for 23.98 -> 023.976
+            if (metadata.fps === '23.98') {
+                fpsStr = '023.976';
+            }
+
+            updateTag('sSPEED', `${fpsStr}${suffix}`);
+            console.log(`Updated sSPEED in bEXT: ${fpsStr}${suffix}`);
+        }
+
         // Also check for generic s= t= just in case (optional, but good for compatibility)
         // But since we saw sSCENE, we prioritize that.
 
@@ -358,6 +575,58 @@ export class MetadataHandler {
             this.updateXmlVal(xmlDoc, "TAKE", metadata.take);
             this.updateXmlVal(xmlDoc, "TAPE", metadata.tape);
             this.updateXmlVal(xmlDoc, "NOTE", metadata.notes);
+
+            // Update FPS/SPEED if changed
+            if (metadata.fpsExact) {
+                // SPEED tag contains nested elements, update MASTER_SPEED and CURRENT_SPEED
+                const masterSpeedEl = xmlDoc.querySelector("SPEED MASTER_SPEED");
+                const currentSpeedEl = xmlDoc.querySelector("SPEED CURRENT_SPEED");
+                const timecodeRateEl = xmlDoc.querySelector("SPEED TIMECODE_RATE");
+
+                if (masterSpeedEl || currentSpeedEl || timecodeRateEl) {
+                    const newFraction = `${metadata.fpsExact.numerator}/${metadata.fpsExact.denominator}`;
+
+                    if (masterSpeedEl) {
+                        masterSpeedEl.textContent = newFraction;
+                        console.log(`Updated MASTER_SPEED: ${newFraction}`);
+                    }
+                    if (currentSpeedEl) {
+                        currentSpeedEl.textContent = newFraction;
+                        console.log(`Updated CURRENT_SPEED: ${newFraction}`);
+                    }
+                    if (timecodeRateEl) {
+                        timecodeRateEl.textContent = newFraction;
+                        console.log(`Updated TIMECODE_RATE: ${newFraction}`);
+                    }
+                }
+            }
+
+            // Update timecode fields - check both nested SPEED elements and top-level elements
+            if (metadata.timeReference !== undefined) {
+                const timeRef = BigInt(metadata.timeReference);
+                const hi = Number(timeRef >> 32n);
+                const lo = Number(timeRef & 0xFFFFFFFFn);
+
+                // Try nested elements first (inside SPEED tag)
+                let tsHiElement = xmlDoc.querySelector("SPEED TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_HI");
+                let tsLoElement = xmlDoc.querySelector("SPEED TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_LO");
+
+                // If not found, try top-level elements
+                if (!tsHiElement) {
+                    tsHiElement = xmlDoc.querySelector("TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_HI");
+                }
+                if (!tsLoElement) {
+                    tsLoElement = xmlDoc.querySelector("TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_LO");
+                }
+
+                if (tsHiElement && tsLoElement) {
+                    tsHiElement.textContent = hi.toString();
+                    tsLoElement.textContent = lo.toString();
+                    console.log(`Updated iXML TIMESTAMP: HI=${hi}, LO=${lo} (total samples: ${metadata.timeReference})`);
+                } else {
+                    console.log('Warning: No TIMESTAMP_SAMPLES_SINCE_MIDNIGHT fields found in iXML');
+                }
+            }
 
             // Update track names if they exist
             if (metadata.trackNames && metadata.trackNames.length > 0) {

@@ -68,6 +68,32 @@ body {
 .btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+    transform: none !important;
+    box-shadow: none !important;
+}
+
+.btn.primary:hover {
+    background-color: #cda3fd;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+}
+
+.btn.primary:active {
+    background-color: #9e6bd6;
+    transform: translateY(0);
+    box-shadow: none;
+}
+
+.btn.secondary:hover {
+    background-color: #3d3d3d;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+}
+
+.btn.secondary:active {
+    background-color: #1a1a1a;
+    transform: translateY(0);
+    box-shadow: none;
 }
 
 /* Metadata List */
@@ -158,6 +184,36 @@ tr:hover {
 
 tr.selected {
     background-color: rgba(187, 134, 252, 0.1);
+}
+
+/* Editable FPS and TC Start fields */
+.fps-select,
+.tc-input {
+    width: 100%;
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.9rem;
+    font-family: inherit;
+}
+
+.fps-select:focus,
+.tc-input:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+    background-color: var(--bg-dark);
+}
+
+.tc-input.invalid {
+    border-color: #ff4444;
+    background-color: rgba(255, 68, 68, 0.1);
+}
+
+.tc-input::placeholder {
+    color: var(--text-muted);
+    opacity: 0.6;
 }
 
 /* File Operations Toolbar */
@@ -251,6 +307,58 @@ tr.selected {
     display: block;
 }
 
+.loading-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.85);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    backdrop-filter: blur(4px);
+}
+
+.loading-content {
+    text-align: center;
+    padding: 2rem;
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    min-width: 300px;
+}
+
+.loading-text {
+    font-size: 1.1rem;
+    color: var(--text-primary);
+    margin-bottom: 1rem;
+}
+
+.progress-bar {
+    width: 100%;
+    height: 24px;
+    background: var(--bg-dark);
+    border-radius: 12px;
+    overflow: hidden;
+    margin-bottom: 0.5rem;
+    border: 1px solid var(--border-color);
+}
+
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent-primary), var(--accent-secondary));
+    width: 0%;
+}
+
+.progress-text {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+
 .transport-controls {
     display: flex;
     align-items: center;
@@ -272,6 +380,12 @@ tr.selected {
 
 .btn-icon:hover {
     background-color: var(--bg-hover);
+    transform: scale(1.05);
+}
+
+.btn-icon:active {
+    transform: scale(0.95);
+    background-color: #3d3d3d;
 }
 
 #loop-btn {
@@ -303,6 +417,10 @@ tr.selected {
 
 .channel-strip {
     width: 80px;
+    min-width: 80px;
+    /* Ensure it never shrinks below this */
+    flex-shrink: 0;
+    /* Prevent flexbox shrinking */
     background-color: var(--bg-dark);
     padding: 0.5rem;
     border-radius: 4px;

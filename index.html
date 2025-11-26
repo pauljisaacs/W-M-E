@@ -79,6 +79,15 @@
                     <canvas id="waveform-canvas"></canvas>
                     <div id="region-overlay" class="region-overlay"></div>
                     <div id="playhead"></div>
+                    <div id="loading-overlay" class="loading-overlay" style="display: none;">
+                        <div class="loading-content">
+                            <div class="loading-text">Loading audio...</div>
+                            <div class="progress-bar">
+                                <div id="progress-fill" class="progress-fill"></div>
+                            </div>
+                            <div id="progress-text" class="progress-text">0%</div>
+                        </div>
+                    </div>
                 </div>
                 <div class="transport-controls">
                     <button id="play-btn" class="btn-icon">▶</button>
