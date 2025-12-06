@@ -56,7 +56,12 @@ export class Mixer {
                 }
                 this.setVolume(idx, val);
             } else if (input.classList.contains('pan-knob')) {
-                this.setPan(idx, parseFloat(input.value));
+                const val = parseFloat(input.value);
+                // If recording and armed, record pan point
+                if (this.isRecording && this.panAutomationRecorders[idx].isRecording) {
+                    this.panAutomationRecorders[idx].recordPoint(this.currentTime, val);
+                }
+                this.setPan(idx, val);
             }
         });
     }
@@ -66,12 +71,20 @@ export class Mixer {
         this.channels = [];
         this.automationRecorders = [];
         this.automationPlayers = [];
+        this.panAutomationRecorders = [];
+        this.panAutomationPlayers = [];
+        this.muteAutomationRecorders = [];
+        this.muteAutomationPlayers = [];
 
         // Create channels
         for (let i = 0; i < trackCount; i++) {
-            // Initialize automation
+            // Initialize automation for volume, pan, and mute
             this.automationRecorders[i] = new AutomationRecorder(i, 'volume');
             this.automationPlayers[i] = new AutomationPlayer([]);
+            this.panAutomationRecorders[i] = new AutomationRecorder(i, 'pan');
+            this.panAutomationPlayers[i] = new AutomationPlayer([]);
+            this.muteAutomationRecorders[i] = new AutomationRecorder(i, 'mute');
+            this.muteAutomationPlayers[i] = new AutomationPlayer([]);
 
             const strip = document.createElement('div');
             strip.className = 'channel-strip';
@@ -213,6 +226,11 @@ export class Mixer {
             if (recorder.isArmed) {
                 recorder.start(startTime);
                 recorder.recordPoint(startTime, this.channels[idx].volume);
+                // Also start pan and mute recording
+                this.panAutomationRecorders[idx].start(startTime);
+                this.panAutomationRecorders[idx].recordPoint(startTime, this.channels[idx].panNode ? this.channels[idx].panNode.pan.value : 0);
+                this.muteAutomationRecorders[idx].start(startTime);
+                this.muteAutomationRecorders[idx].recordPoint(startTime, this.channels[idx].isMuted ? 1 : 0);
             }
         });
     }
@@ -222,12 +240,27 @@ export class Mixer {
 
         this.automationRecorders.forEach((recorder, idx) => {
             if (recorder.isArmed) {
-                const points = recorder.stop();
-                if (points.length > 0) {
-                    this.channels[idx].automation.volume = points;
-                    this.automationPlayers[idx].points = points;
-                    this.updateAutomationUI(idx);
+                const volumePoints = recorder.stop();
+                if (volumePoints.length > 0) {
+                    this.channels[idx].automation.volume = volumePoints;
+                    this.automationPlayers[idx].points = volumePoints;
                 }
+
+                // Stop and save pan automation
+                const panPoints = this.panAutomationRecorders[idx].stop();
+                if (panPoints.length > 0) {
+                    this.channels[idx].automation.pan = panPoints;
+                    this.panAutomationPlayers[idx].points = panPoints;
+                }
+
+                // Stop and save mute automation
+                const mutePoints = this.muteAutomationRecorders[idx].stop();
+                if (mutePoints.length > 0) {
+                    this.channels[idx].automation.mute = mutePoints;
+                    this.muteAutomationPlayers[idx].points = mutePoints;
+                }
+
+                this.updateAutomationUI(idx);
             }
         });
     }
@@ -241,9 +274,32 @@ export class Mixer {
             // Only play back if NOT recording on this channel
             // (If armed and recording, user is controlling fader)
             if (!recorder.isArmed || !this.isRecording) {
-                const val = player.getValue(currentTime);
-                if (val !== null) {
-                    this.setVolume(idx, val, true);
+                const volumeVal = player.getValue(currentTime);
+                if (volumeVal !== null) {
+                    this.setVolume(idx, volumeVal, true);
+                }
+
+                // Play back pan automation
+                const panVal = this.panAutomationPlayers[idx].getValue(currentTime);
+                if (panVal !== null) {
+                    this.setPan(idx, panVal);
+                    // Update pan knob UI
+                    const panKnob = this.container.querySelector(`.pan-knob[data-idx="${idx}"]`);
+                    if (panKnob && Math.abs(panKnob.value - panVal) > 0.01) {
+                        panKnob.value = panVal;
+                    }
+                }
+
+                // Play back mute automation
+                const muteVal = this.muteAutomationPlayers[idx].getValue(currentTime);
+                if (muteVal !== null) {
+                    const shouldBeMuted = muteVal > 0.5;
+                    if (this.channels[idx].isMuted !== shouldBeMuted) {
+                        const muteBtn = this.container.querySelector(`.mute-btn[data-idx="${idx}"]`);
+                        if (muteBtn) {
+                            this.toggleMute(idx, muteBtn);
+                        }
+                    }
                 }
             }
         });
@@ -284,6 +340,11 @@ export class Mixer {
             btn.classList.add('active');
         } else {
             btn.classList.remove('active');
+        }
+
+        // If recording and armed, record mute state
+        if (this.isRecording && this.muteAutomationRecorders[index].isRecording) {
+            this.muteAutomationRecorders[index].recordPoint(this.currentTime, ch.isMuted ? 1 : 0);
         }
 
         this.updateGains();

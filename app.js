@@ -1495,6 +1495,7 @@ class App {
         const regionOverlay = document.getElementById('region-overlay');
         if (!this.audioEngine.buffer || this.region.start === null) {
             regionOverlay.classList.remove('active');
+            this.updateExportButtonText();
             return;
         }
 
@@ -1508,6 +1509,7 @@ class App {
         regionOverlay.style.left = `${left}%`;
         regionOverlay.style.width = `${width}%`;
         regionOverlay.classList.add('active');
+        this.updateExportButtonText();
     }
 
     clearRegion() {
@@ -1515,6 +1517,20 @@ class App {
         this.region.end = null;
         const regionOverlay = document.getElementById('region-overlay');
         regionOverlay.classList.remove('active');
+        this.updateExportButtonText();
+    }
+
+    updateExportButtonText() {
+        const exportBtn = document.getElementById('export-btn');
+        const confirmExportBtn = document.getElementById('confirm-export-btn');
+        const text = (this.region.start !== null && this.region.end !== null) ? 'Export Region' : 'Export';
+
+        if (exportBtn) {
+            exportBtn.textContent = text;
+        }
+        if (confirmExportBtn) {
+            confirmExportBtn.textContent = text;
+        }
     }
 
     animate() {

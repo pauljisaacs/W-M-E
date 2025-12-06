@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WAV Metadata & Player</title>
+    <title>Wave Agent X</title>
     <link rel="icon" type="image/x-icon" href="favicon.ico">
     <link rel="stylesheet" href="style.css">
     <link rel="manifest" href="manifest.json">
@@ -15,7 +15,7 @@
     <div class="app-container">
         <!-- Header & Import -->
         <header class="app-header">
-            <h1>WAV Metadata & Player</h1>
+            <h1>Wave Agent X</h1>
             <div class="header-controls">
                 <button id="import-btn" class="btn primary">Import Audio Files</button>
                 <div class="batch-actions">
@@ -62,7 +62,6 @@
             <button id="view-bext-btn" class="btn secondary" disabled>View bEXT</button>
             <button id="normalize-btn" class="btn secondary" disabled>Normalize</button>
             <button id="rename-btn" class="btn secondary" disabled>Rename</button>
-            <button id="export-btn" class="btn secondary" disabled>Export</button>
             <button id="save-mix-btn" class="btn secondary" disabled>Save Mix to File</button>
             <button id="load-mix-btn" class="btn secondary" disabled>Load Mix from File</button>
         </div>
@@ -110,7 +109,10 @@
                 <h2>Channel Mixer <span id="mixer-filename"
                         style="font-weight: normal; font-size: 0.8em; color: var(--text-secondary); margin-left: 10px;"></span>
                 </h2>
-                <button class="toggle-btn">▼</button>
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <button id="export-btn" class="btn secondary" disabled>Export</button>
+                    <button class="toggle-btn">▼</button>
+                </div>
             </div>
             <div class="section-content">
                 <div id="mixer-container" class="mixer-strips">

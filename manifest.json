@@ -1,6 +1,6 @@
 {
-  "name": "WAV Metadata & Player",
-  "short_name": "WAV Player",
+  "name": "Wave Agent X",
+  "short_name": "Wave Agent X",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#121212",

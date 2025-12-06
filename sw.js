@@ -1,4 +1,4 @@
-const CACHE_NAME = 'wav-player-v15';
+const CACHE_NAME = 'wave-agent-x-v1';
 const ASSETS = [
   './',
   './index.html',

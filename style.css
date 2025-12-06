@@ -4,11 +4,12 @@
     --bg-hover: #2c2c2c;
     --text-main: #e0e0e0;
     --text-muted: #a0a0a0;
-    --accent-primary: #bb86fc;
-    --accent-secondary: #03dac6;
+    --accent-primary: #ff9500;
+    --accent-secondary: #ff6b35;
     --border-color: #333;
-    --waveform-color: #03dac6;
-    --playhead-color: #cf6679;
+    --waveform-color: #ff9500;
+    --playhead-color: #ff6b35;
+    --text-secondary: #999;
 }
 
 * {
@@ -73,13 +74,13 @@ body {
 }
 
 .btn.primary:hover {
-    background-color: #cda3fd;
+    background-color: #ffaa33;
     transform: translateY(-1px);
     box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
 }
 
 .btn.primary:active {
-    background-color: #9e6bd6;
+    background-color: #e68600;
     transform: translateY(0);
     box-shadow: none;
 }
@@ -252,6 +253,18 @@ tr.selected {
     color: var(--text-muted);
     cursor: pointer;
 }
+
+/* Buttons in section headers need darker background to stand out */
+.section-header .btn.secondary {
+    background-color: #1a1a1a;
+    border: 1px solid #3d3d3d;
+}
+
+.section-header .btn.secondary:hover {
+    background-color: #2a2a2a;
+    border-color: #4d4d4d;
+}
+
 
 /* Player & Waveform */
 .player-section .section-content {
