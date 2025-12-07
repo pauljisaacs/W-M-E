@@ -8,7 +8,7 @@ export class AudioProcessor {
      * @param {number} targetDb - The target peak level in dBFS (e.g., -1.0).
      * @returns {Promise<ArrayBuffer>} - The normalized WAV file data.
      */
-    async normalize(arrayBuffer, targetDb) {
+    async normalize(arrayBuffer, targetDb, region = null) {
         const view = new DataView(arrayBuffer);
 
         // 1. Parse WAV Header to find format and data chunk
@@ -20,17 +20,42 @@ export class AudioProcessor {
         const { channels, sampleRate, bitDepth, dataOffset, dataSize, audioFormat } = info;
 
         console.log(`Normalizing: ${bitDepth}-bit, ${channels}ch, ${sampleRate}Hz. Target: ${targetDb}dB`);
+        if (region) {
+            console.log(`Region: ${region.start.toFixed(3)}s to ${region.end.toFixed(3)}s`);
+        } else {
+            console.log('Region: Entire File');
+        }
+
+        // Calculate byte range
+        let startByte = 0;
+        let endByte = dataSize;
+
+        if (region && region.start !== null && region.end !== null) {
+            const bytesPerSample = bitDepth / 8;
+            const blockAlign = channels * bytesPerSample;
+            const startFrame = Math.floor(Math.min(region.start, region.end) * sampleRate);
+            const endFrame = Math.floor(Math.max(region.start, region.end) * sampleRate);
+
+            startByte = startFrame * blockAlign;
+            endByte = endFrame * blockAlign;
+
+            // Clamp
+            if (startByte < 0) startByte = 0;
+            if (endByte > dataSize) endByte = dataSize;
+
+            // Align to block boundary (should already be aligned, but safety first)
+            startByte = Math.floor(startByte / blockAlign) * blockAlign;
+            endByte = Math.floor(endByte / blockAlign) * blockAlign;
+        }
+
+        const absStart = dataOffset + startByte;
+        const absEnd = dataOffset + endByte; // Note: findPeak/applyGain use offsets relative to file start
 
         // 2. Analyze Peak (Pass 1)
-        const maxPeak = this.findPeak(view, dataOffset, dataSize, bitDepth, audioFormat);
+        // Pass absolute file offsets directly
+        const maxPeak = this.findPeak(view, absStart, endByte - startByte, bitDepth, audioFormat);
 
         // Convert peak to dBFS
-        // Max possible values:
-        // 16-bit: 32768
-        // 24-bit: 8388608
-        // 32-bit Int: 2147483648
-        // 32-bit Float: 1.0
-
         let maxPossibleVal;
         if (audioFormat === 3) { // Float
             maxPossibleVal = 1.0;
@@ -41,14 +66,13 @@ export class AudioProcessor {
             else throw new Error(`Unsupported bit depth: ${bitDepth}`);
         }
 
-        const currentPeakDb = 20 * Math.log10(maxPeak / maxPossibleVal);
+        const currentPeakDb = (maxPeak === 0) ? -Infinity : 20 * Math.log10(maxPeak / maxPossibleVal);
 
-        console.log(`Current Peak: ${maxPeak} (${currentPeakDb.toFixed(2)} dBFS)`);
+        console.log(`Current Peak in Region: ${maxPeak} (${currentPeakDb.toFixed(2)} dBFS)`);
 
         // 3. Calculate Gain
-        // If current peak is -Infinity (silent), gain is 0 (or 1, but effectively no change)
         if (maxPeak === 0) {
-            console.warn('File is silent, skipping normalization.');
+            console.warn('Region is silent, skipping normalization.');
             return arrayBuffer;
         }
 
@@ -58,11 +82,7 @@ export class AudioProcessor {
         console.log(`Applying Gain: ${gainDb.toFixed(2)} dB (x${gainLinear.toFixed(4)})`);
 
         // 4. Apply Gain (Pass 2)
-        // We clone the buffer to avoid modifying the original if something goes wrong, 
-        // or we can modify in place if we are sure. The caller usually passes a buffer from a file read.
-        // Let's modify in place for efficiency, assuming the caller manages the buffer.
-
-        this.applyGain(view, dataOffset, dataSize, bitDepth, audioFormat, gainLinear);
+        this.applyGain(view, absStart, endByte - startByte, bitDepth, audioFormat, gainLinear);
 
         return arrayBuffer;
     }
@@ -87,10 +107,18 @@ export class AudioProcessor {
                 const ds64View = new DataView(view.buffer, view.byteOffset + offset + 8, chunkSize);
                 rf64DataSize = ds64View.getBigUint64(8, true);
             } else if (chunkId === 'fmt ') {
-                info.audioFormat = view.getUint16(offset + 8, true); // 1=PCM, 3=Float
+                info.audioFormat = view.getUint16(offset + 8, true); // 1=PCM, 3=Float, 65534=Extensible
                 info.channels = view.getUint16(offset + 10, true);
                 info.sampleRate = view.getUint32(offset + 12, true);
                 info.bitDepth = view.getUint16(offset + 22, true);
+
+                // Handle WAVE_FORMAT_EXTENSIBLE
+                if (info.audioFormat === 0xFFFE && chunkSize >= 40) {
+                    // SubFormat is at offset 24 relative to chunk data start (8 bytes header)
+                    // The first 2 bytes of the SubFormat GUID effectively match the basic audio format code
+                    const subFormat = view.getUint16(offset + 8 + 24, true);
+                    info.audioFormat = subFormat;
+                }
             } else if (chunkId === 'data') {
                 info.dataOffset = offset + 8;
 

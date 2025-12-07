@@ -60,6 +60,9 @@ export class FileIO {
     }
 
     isAudioFile(filename) {
+        // Ignore macOS hidden/metadata files
+        if (filename.startsWith('._')) return false;
+
         const ext = filename.split('.').pop().toLowerCase();
         return ['wav', 'mp3', 'aac'].includes(ext);
     }

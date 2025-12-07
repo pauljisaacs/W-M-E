@@ -16,6 +16,11 @@ export class AudioEngine {
     }
 
     async loadAudio(arrayBuffer) {
+        this.buffer = await this.decodeFile(arrayBuffer);
+        return this.buffer;
+    }
+
+    async decodeFile(arrayBuffer) {
         try {
             // Check for RF64 header OR very large file (> 2GB) to skip native decoding
             // Native decoding requires cloning (double memory) and often crashes on large buffers
@@ -25,21 +30,19 @@ export class AudioEngine {
 
             if (isRF64 || isLargeFile) {
                 console.log(`Large file detected (RF64: ${isRF64}, Size: ${arrayBuffer.byteLength}), skipping native decode...`);
-                this.buffer = this.decodeWavManually(arrayBuffer);
+                return this.decodeWavManually(arrayBuffer);
             } else {
                 // Try native decoding first (fastest)
                 // Note: decodeAudioData detaches the arrayBuffer, so we must clone it if we might need to fallback
                 const bufferClone = arrayBuffer.slice(0);
 
                 try {
-                    this.buffer = await this.audioCtx.decodeAudioData(arrayBuffer);
+                    return await this.audioCtx.decodeAudioData(arrayBuffer);
                 } catch (nativeErr) {
                     console.warn('Native decoding failed, trying manual WAV decoding...', nativeErr);
-                    this.buffer = this.decodeWavManually(bufferClone);
+                    return this.decodeWavManually(bufferClone);
                 }
             }
-
-            return this.buffer;
         } catch (err) {
             console.error('Error decoding audio:', err);
             throw err;

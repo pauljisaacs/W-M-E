@@ -33,7 +33,7 @@ class App {
         this.selectedIndices = new Set();
         this.lastSelectedIndex = -1; // For shift-click range selection
         this.currentlyLoadedFileIndex = -1; // Track which file is currently loaded
-        this.columnOrder = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]; // Default order
+        this.columnOrder = [3, 12, 11, 0, 1, 2, 4, 5, 6, 7, 8, 9, 10, 13]; // Default order: Filename, Project, Tape...
         this.sortColumn = null;
         this.sortDirection = 'asc';
         this.currentFileMetadata = null; // Store current file's metadata for timecode
@@ -585,28 +585,167 @@ class App {
     }
 
     async processFiles(handles) {
+        // Collect existing filenames to prevent duplicates
+        const existingFilenames = new Set();
+        for (const item of this.files) {
+            if (item.isGroup) {
+                item.siblings.forEach(s => existingFilenames.add(s.metadata.filename));
+            } else {
+                existingFilenames.add(item.metadata.filename);
+            }
+        }
+
+        // Collect new file items first
+        const newItems = [];
         for (const handle of handles) {
             try {
                 const file = await handle.getFile();
+
+                // Skip if already exists
+                if (existingFilenames.has(file.name)) {
+                    console.log(`Skipping duplicate file: ${file.name}`);
+                    continue;
+                }
+
                 const fileSizeMB = (file.size / 1024 / 1024).toFixed(2);
                 console.log(`Processing: ${file.name} (${fileSizeMB} MB)`);
 
                 const metadata = await this.metadataHandler.parseFile(file);
-                this.files.push({ handle, metadata, file });
-                this.addTableRow(this.files.length - 1, metadata);
+                newItems.push({ handle, metadata, file });
+                existingFilenames.add(file.name); // Add to set to prevent duplicates within the new batch too
             } catch (err) {
                 console.error('Error processing file:', handle.name, err);
                 const file = await handle.getFile();
-                const fileSizeMB = (file.size / 1024 / 1024).toFixed(2);
+                alert(`Failed to load "${file.name}". Error: ${err.message}`);
+            }
+        }
 
-                // Show user-friendly error for large files
-                if (file.size > 1024 * 1024 * 1024) { // > 1GB
-                    alert(`Failed to load "${file.name}" (${fileSizeMB} MB).\n\nThis file may be too large for your browser to handle.\n\nTry using Safari or Firefox, which handle large files better than Chrome.\n\nError: ${err.message}`);
+        // Combine with existing (ungrouped) files
+        // We need to flatten current groups to re-evaluate groupings
+        const allItems = [];
+        for (const item of this.files) {
+            if (item.isGroup) {
+                allItems.push(...item.siblings);
+            } else {
+                allItems.push(item);
+            }
+        }
+        allItems.push(...newItems);
+
+        // Group files
+        this.files = this.groupFiles(allItems);
+
+        // Re-render table completely
+        const tbody = document.getElementById('file-list-body');
+        tbody.innerHTML = '';
+        this.files.forEach((item, index) => {
+            this.addTableRow(index, item.metadata);
+        });
+
+        // Auto-select first if fresh start
+        if (allItems.length === newItems.length && this.files.length > 0) {
+            // Delay selection slightly to ensure DOM reflow (required for canvas sizing)
+            setTimeout(() => {
+                this.selectFile(0);
+            }, 50);
+        }
+    }
+
+    groupFiles(items) {
+        const buckets = new Map();
+
+        // 1. Bucket by Audio Data Size + timeReference
+        // Using audioDataSize is more robust than file.size because metadata chunks can vary in length
+        // between Mix (L/R) and ISO tracks, but the actual audio payload should be identical.
+        for (const item of items) {
+            const timeRef = item.metadata.timeReference !== undefined ? item.metadata.timeReference : 'unknown';
+
+            // Use audioDataSize if available, otherwise fallback to file size (for non-compliant files)
+            const sizeKey = item.metadata.audioDataSize || item.file.size;
+
+            const key = `${sizeKey}_${timeRef}`;
+            if (!buckets.has(key)) buckets.set(key, []);
+            buckets.get(key).push(item);
+        }
+
+        const result = [];
+
+        // 2. Process buckets
+        for (const [key, bucket] of buckets) {
+            if (bucket.length === 1) {
+                result.push(bucket[0]); // Single file
+                continue;
+            }
+
+            console.log(`[Grouping] Checking bucket '${key}' with ${bucket.length} items.`);
+
+            // Bucket has potential siblings
+            // Group by Base Name (regex match)
+            // Regex: BaseName + Underscore + (Number OR Single Letter) + .wav
+            const regex = /^(.*)_([0-9]+|[A-Z])\.wav$/i;
+            const groups = new Map(); // key: baseName, value: [items]
+            const singles = [];
+
+            for (const item of bucket) {
+                const match = item.metadata.filename.match(regex);
+                if (match) {
+                    const baseName = match[1];
+                    if (!groups.has(baseName)) groups.set(baseName, []);
+                    groups.get(baseName).push(item);
                 } else {
-                    alert(`Failed to load "${file.name}" (${fileSizeMB} MB).\n\nError: ${err.message}`);
+                    console.log(`[Grouping] File '${item.metadata.filename}' did not match sibling regex.`);
+                    singles.push(item);
+                }
+            }
+
+            // Add non-matching files
+            result.push(...singles);
+
+            // Process grouped siblings
+            for (const [baseName, siblings] of groups) {
+                if (siblings.length > 1) {
+                    console.log(`[Grouping] Found sibling group: ${baseName} (${siblings.length} files)`);
+
+                    // Sort siblings by filename (numeric suffix logic if possible)
+                    siblings.sort((a, b) => {
+                        return a.metadata.filename.localeCompare(b.metadata.filename, undefined, { numeric: true, sensitivity: 'base' });
+                    });
+
+                    // Create representative metadata
+                    const repMetadata = { ...siblings[0].metadata }; // Shallow copy
+                    repMetadata.filename = `${baseName}_X.wav`;
+                    repMetadata.channels = siblings.length; // Override channel count
+
+                    // Construct track names from suffixes or existing metadata
+                    const trackNames = siblings.map(s => {
+                        // Check for existing metadata first (iXML name)
+                        if (s.metadata.trackNames && s.metadata.trackNames.length > 0 && s.metadata.trackNames[0]) {
+                            return s.metadata.trackNames[0];
+                        }
+
+                        // Fallback to filename suffix (e.g. _1 -> Ch1)
+                        const m = s.metadata.filename.match(regex);
+                        return m ? `Ch${m[2]}` : 'Ch?';
+                    });
+                    repMetadata.trackNames = trackNames;
+
+                    // Create Group Item
+                    result.push({
+                        isGroup: true,
+                        siblings: siblings,
+                        metadata: repMetadata,
+                        // Keep reference to first file for compatibility
+                        handle: siblings[0].handle,
+                        file: siblings[0].file
+                    });
+                } else {
+                    // Only 1 matching file in this group? Treat as single
+                    result.push(siblings[0]);
                 }
             }
         }
+
+        return result;
     }
 
     addTableRow(index, metadata) {
@@ -817,8 +956,6 @@ class App {
                             const fpsNum = parseFloat(edits.fps);
                             metadata.fpsExact = { numerator: fpsNum, denominator: 1 };
                         }
-
-                        console.log(`Applied FPS edit for file ${index}: ${edits.fps}`, metadata.fpsExact);
                     }
 
                     if (edits.tcStart) {
@@ -832,7 +969,6 @@ class App {
                                 metadata.sampleRate,
                                 metadata.fpsExact
                             );
-                            console.log(`Applied TC Start edit for file ${index}: ${edits.tcStart} -> ${metadata.timeReference} samples`);
                         }
                     }
                 }
@@ -840,58 +976,92 @@ class App {
         }
 
         let successCount = 0;
+        let totalFilesToSave = 0;
+
         for (const index of this.selectedIndices) {
             const item = this.files[index];
-            try {
-                console.log('Saving file:', item.metadata.filename);
-                console.log('Has ixmlRaw?', !!item.metadata.ixmlRaw);
-                if (item.metadata.ixmlRaw) {
-                    console.log('ixmlRaw length:', item.metadata.ixmlRaw.length);
-                }
+            const isGroup = item.isGroup;
+            const targets = isGroup ? item.siblings : [item];
 
-                const newBlob = await this.metadataHandler.saveWav(item.file, item.metadata);
+            totalFilesToSave += targets.length;
 
-                if (item.handle.kind === 'file') {
-                    const success = await this.fileIO.saveFile(item.handle, newBlob);
-                    if (success) {
-                        successCount++;
-                        // Refresh the file object from the handle to prevent NotReadableError
-                        item.file = await item.handle.getFile();
-                        // Re-parse metadata to get the updated values from the saved file
-                        item.metadata = await this.metadataHandler.parseFile(item.file);
-                        console.log('Re-parsed metadata after save:', item.metadata);
+            for (let i = 0; i < targets.length; i++) {
+                const target = targets[i];
+
+                // Prepare metadata to save
+                // Start with target's original metadata to preserve low-level details
+                const metadataToSave = { ...target.metadata };
+
+                // Fields to sync from the representative item (the one being edited in UI)
+                const commonFields = ['scene', 'take', 'tape', 'project', 'notes', 'date', 'fps', 'fpsExact', 'tcStart', 'timeReference'];
+
+                commonFields.forEach(key => {
+                    if (item.metadata[key] !== undefined) {
+                        metadataToSave[key] = item.metadata[key];
+                    }
+                });
+
+                // Handle Track Names
+                if (isGroup) {
+                    // For groups, map specific track index to this sibling
+                    if (item.metadata.trackNames && item.metadata.trackNames[i]) {
+                        metadataToSave.trackNames = [item.metadata.trackNames[i]];
                     }
                 } else {
-                    // Fallback download (only for single file to avoid spam)
-                    if (this.selectedIndices.size === 1) {
-                        const url = URL.createObjectURL(newBlob);
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = item.metadata.filename;
-                        a.click();
-                        successCount++;
+                    // For single files, copy the full list (polyphonic)
+                    if (item.metadata.trackNames) {
+                        metadataToSave.trackNames = [...item.metadata.trackNames];
                     }
                 }
-            } catch (err) {
-                console.error('Error saving file:', item.metadata.filename, err);
+
+                try {
+                    console.log(`Saving file: ${target.metadata.filename} (Group: ${isGroup})`);
+
+                    const newBlob = await this.metadataHandler.saveWav(target.file, metadataToSave);
+
+                    if (target.handle.kind === 'file') {
+                        const success = await this.fileIO.saveFile(target.handle, newBlob);
+                        if (success) {
+                            successCount++;
+                            // Refresh the file object from the handle
+                            target.file = await target.handle.getFile();
+
+                            // Re-parse metadata to keep state fresh
+                            target.metadata = await this.metadataHandler.parseFile(target.file);
+                        }
+                    } else {
+                        // Fallback download
+                        // Only triggering download if it's a single file selection or small batch to avoid browser spam
+                        if (this.selectedIndices.size === 1 && targets.length === 1) {
+                            const url = URL.createObjectURL(newBlob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = target.metadata.filename;
+                            a.click();
+                            successCount++;
+                        }
+                    }
+                } catch (err) {
+                    console.error('Error saving file:', target.metadata.filename, err);
+                }
             }
         }
 
-        // Clear pending edits for saved files
-        if (this.pendingEdits && successCount > 0) {
+        // Clear pending edits
+        if (this.pendingEdits) {
             for (const index of this.selectedIndices) {
                 delete this.pendingEdits[index];
             }
         }
 
-        // Re-render table to show updated values
+        // Re-render table
         const tbody = document.getElementById('file-list-body');
         tbody.innerHTML = '';
         this.files.forEach((file, i) => this.addTableRow(i, file.metadata));
         this.updateSelectionUI();
 
         if (successCount > 0) {
-            alert(`Saved ${successCount} file(s) successfully!`);
+            alert(`Saved ${successCount} files successfully!`);
         } else {
             alert('Failed to save files.');
         }
@@ -907,6 +1077,20 @@ class App {
         const indices = Array.from(this.selectedIndices).sort((a, b) => b - a);
 
         indices.forEach(index => {
+            if (index === this.currentlyLoadedFileIndex) {
+                this.currentlyLoadedFileIndex = -1;
+                // Also clear the waveform/mixer UI since the file is gone
+                const canvas = document.getElementById('waveform-canvas');
+                if (canvas) {
+                    const ctx = canvas.getContext('2d');
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                }
+                const mixerContainer = document.getElementById('mixer-container');
+                if (mixerContainer) mixerContainer.innerHTML = '';
+            } else if (index < this.currentlyLoadedFileIndex) {
+                // Shift index if a file above it was removed
+                this.currentlyLoadedFileIndex--;
+            }
             this.files.splice(index, 1);
         });
 
@@ -1271,7 +1455,12 @@ class App {
         this.stop();
 
         const item = this.files[index];
-        const fileSizeMB = (item.file.size / 1024 / 1024).toFixed(2);
+        const isGroup = item.isGroup;
+        const targetFiles = isGroup ? item.siblings : [item];
+
+        // Calculate total size for progress
+        const totalSize = targetFiles.reduce((acc, f) => acc + f.file.size, 0);
+        const totalSizeMB = (totalSize / 1024 / 1024).toFixed(2);
 
         // Show loading overlay for large files
         const loadingOverlay = document.getElementById('loading-overlay');
@@ -1279,42 +1468,90 @@ class App {
         const progressText = document.getElementById('progress-text');
         const loadingText = document.querySelector('.loading-text');
 
-        console.log(`File size: ${fileSizeMB} MB (${item.file.size} bytes)`);
+        console.log(`Loading ${isGroup ? 'Group' : 'Single File'}: ${totalSizeMB} MB total`);
 
-        if (item.file.size > 100 * 1024 * 1024) { // > 100MB
-            console.log('Showing loading overlay...');
+        if (totalSize > 100 * 1024 * 1024) { // > 100MB
             loadingOverlay.style.display = 'flex';
-            loadingText.textContent = 'Loading...';
+            loadingText.textContent = isGroup ? `Loading ${targetFiles.length} files...` : 'Loading...';
             progressFill.style.width = '0%';
             progressText.textContent = '0%';
-
-            // Force a small delay to ensure UI updates before we start loading
-            await new Promise(resolve => setTimeout(resolve, 100));
-
-            console.log(`⏳ Loading large file (${fileSizeMB} MB), please wait...`);
+            await new Promise(resolve => setTimeout(resolve, 100)); // UI paint
         }
 
         try {
-            console.log(`Loading audio file with ${item.metadata.channels || '?'} channels...`);
+            const decodedBuffers = [];
+            let loadedBytesTotal = 0;
 
-            // Load audio data in chunks with progress
-            const arrayBuffer = await this.loadFileWithProgress(item.file, (progress) => {
+            // Load and Decode each file sequentially
+            for (let i = 0; i < targetFiles.length; i++) {
+                const f = targetFiles[i];
+                console.log(`Loading sibling ${i + 1}/${targetFiles.length}: ${f.file.name}`);
+
+                // Load bytes with global progress
+                const arrayBuffer = await this.loadFileWithProgress(f.file, (fileProgress) => {
+                    if (loadingOverlay.style.display === 'flex') {
+                        // Calculate contribution to total progress
+                        // This approximation assumes equal file sizes or tracks loaded bytes
+                        // Since loadFileWithProgress gives %, we need to know this file's chunk of total
+
+                        // Simple approach: Split progress bar into slots
+                        const slotSize = 100 / targetFiles.length;
+                        const base = i * slotSize;
+                        const total = base + (fileProgress * slotSize / 100);
+
+                        progressFill.style.width = `${total}%`;
+                        progressText.textContent = `${Math.round(total)}%`;
+                    }
+                });
+
+                // Update text for decoding
                 if (loadingOverlay.style.display === 'flex') {
-                    progressFill.style.width = `${progress}%`;
-                    progressText.textContent = `${progress}%`;
+                    loadingText.textContent = `Decoding file ${i + 1}/${targetFiles.length}...`;
                 }
-            });
 
-            console.log(`✓ Loaded ${fileSizeMB} MB into memory, decoding...`);
+                // Decode
+                const buffer = await this.audioEngine.decodeFile(arrayBuffer);
+                decodedBuffers.push(buffer);
+            }
 
-            // Update loading text for decoding phase
+            console.log(`✓ All ${decodedBuffers.length} files decoded.`);
+
+            // Combine buffers into one multi-channel buffer
+            let compositeBuffer;
+
+            if (decodedBuffers.length === 1) {
+                compositeBuffer = decodedBuffers[0];
+            } else {
+                // Determine dimensions
+                const totalChannels = decodedBuffers.reduce((acc, b) => acc + b.numberOfChannels, 0);
+                const length = Math.max(...decodedBuffers.map(b => b.length));
+                const sampleRate = decodedBuffers[0].sampleRate; // Assume matching sample rates
+
+                console.log(`Creating composite buffer: ${totalChannels} channels, ${length} frames, ${sampleRate} Hz`);
+                compositeBuffer = this.audioEngine.audioCtx.createBuffer(totalChannels, length, sampleRate);
+
+                // Copy channel data
+                let channelOffset = 0;
+                for (const buf of decodedBuffers) {
+                    for (let c = 0; c < buf.numberOfChannels; c++) {
+                        // Get data from source
+                        const data = buf.getChannelData(c);
+                        // Copy to destination
+                        compositeBuffer.copyToChannel(data, channelOffset);
+                        channelOffset++;
+                    }
+                }
+            }
+
+            // Set Engine Buffer
+            this.audioEngine.buffer = compositeBuffer;
+            const buffer = compositeBuffer; // Alias for below code
+
+            // Finish Loading UI
             if (loadingOverlay.style.display === 'flex') {
                 loadingText.textContent = 'Creating waveform...';
                 progressFill.style.width = '100%';
             }
-
-            const buffer = await this.audioEngine.loadAudio(arrayBuffer);
-            console.log(`✓ Successfully decoded: ${buffer.numberOfChannels} channels, ${buffer.duration.toFixed(2)}s`);
 
             // Setup Mixer
             const trackCount = buffer.numberOfChannels;
@@ -1324,21 +1561,34 @@ class App {
             canvas.width = canvas.parentElement.clientWidth;
             canvas.height = canvas.parentElement.clientHeight;
 
-            this.mixer.buildUI(trackCount, item.metadata.trackNames,
+            // Use item.metadata.trackNames which is now synthesized for groups or loaded for single
+            // Initialize Mixer
+            this.mixer = new Mixer(this.audioEngine.audioCtx,
                 (trackIndex, newName) => {
-                    // Update metadata
-                    if (!item.metadata.trackNames) item.metadata.trackNames = [];
-                    item.metadata.trackNames[trackIndex] = newName;
-                    console.log(`Updated track ${trackIndex} name to: ${newName}`);
+                    // Find the current item in the source of truth by filename
+                    // This is robust against sorting or index shifts
+                    const activeItem = this.files.find(f => f.metadata.filename === item.metadata.filename);
 
-                    // Enable save button
-                    document.getElementById('batch-save-btn').disabled = false;
+                    if (activeItem) {
+                        if (!activeItem.metadata.trackNames) activeItem.metadata.trackNames = [];
+                        activeItem.metadata.trackNames[trackIndex] = newName;
+                        console.log(`Track ${trackIndex} renamed to ${newName} for ${activeItem.metadata.filename}`);
+
+                        // Enable save button
+                        document.getElementById('batch-save-btn').disabled = false;
+                    } else {
+                        console.warn('Mixer callback error: Loaded file not found in current file list', item.metadata.filename);
+                    }
                 },
                 () => {
                     // Mixer state changed (mute/solo), re-render waveform
                     this.audioEngine.renderWaveform(canvas, buffer, this.mixer.channels);
                 }
             );
+
+            // Re-initialize mixer and build UI
+            await this.mixer.init('mixer-container');
+            this.mixer.buildUI(trackCount, item.metadata.trackNames);
 
             // Render Waveform (initial)
             this.audioEngine.renderWaveform(canvas, buffer, this.mixer.channels);
@@ -1363,20 +1613,11 @@ class App {
 
         } catch (err) {
             console.error('Error loading audio:', err);
-            console.error('File details:', {
-                filename: item.metadata.filename,
-                channels: item.metadata.channels,
-                sampleRate: item.metadata.sampleRate,
-                size: item.file.size,
-                type: item.file.type,
-                lastModified: item.file.lastModified
-            });
 
             // Handle large file errors gracefully
-            // Don't show alert, just update UI to indicate metadata-only mode
             const mixerFilename = document.getElementById('mixer-filename');
             if (mixerFilename) {
-                mixerFilename.innerHTML = `${item.metadata.filename} <span style="color: #ffcf44; font-size: 0.8em;">(Metadata Only - File too large for playback)</span>`;
+                mixerFilename.innerHTML = `${item.metadata.filename} <span style="color: #ffcf44; font-size: 0.8em;">(Error Loading Audio)</span>`;
             }
 
             // Clear waveform
@@ -1385,15 +1626,12 @@ class App {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             ctx.fillStyle = '#2a2a2a';
             ctx.font = '14px Inter';
-            ctx.fillText('Playback unavailable for this file (too large)', 20, 30);
+            ctx.fillText('Playback unavailable', 20, 30);
 
-            // Disable transport controls
-            // (Optional: you might want to disable play button)
+            alert(`Error loading audio for "${item.metadata.filename}": ${err.message}`);
         } finally {
             // Hide loading overlay
             loadingOverlay.style.display = 'none';
-            progressFill.style.width = '0%';
-            progressText.textContent = '0%';
         }
     }
 
@@ -1636,7 +1874,9 @@ class App {
 
                 // Normalize
                 // Note: normalize modifies buffer in place or returns new one
-                const normalizedBuffer = await this.audioProcessor.normalize(arrayBuffer, targetDb);
+                // Check if region is active (both start and end are not null)
+                const region = (this.region && this.region.start !== null && this.region.end !== null) ? this.region : null;
+                const normalizedBuffer = await this.audioProcessor.normalize(arrayBuffer, targetDb, region);
 
                 // Save back to file
                 // We use the file handle to write the raw WAV bytes directly

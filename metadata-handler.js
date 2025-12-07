@@ -719,15 +719,51 @@ export class MetadataHandler {
 
             // Update track names if they exist
             if (metadata.trackNames && metadata.trackNames.length > 0) {
-                const tracks = xmlDoc.querySelectorAll("TRACK");
-                tracks.forEach((track, i) => {
-                    if (i < metadata.trackNames.length) {
-                        const nameEl = track.querySelector("NAME");
-                        if (nameEl) {
+                let trackList = xmlDoc.querySelector("TRACK_LIST");
+
+                // Create TRACK_LIST if it doesn't exist
+                if (!trackList) {
+                    trackList = xmlDoc.createElement("TRACK_LIST");
+                    // Assuming TRACK_LIST is usually a child of the root BWFXML
+                    if (xmlDoc.documentElement) {
+                        xmlDoc.documentElement.appendChild(trackList);
+                    }
+                }
+
+                // Get existing tracks
+                const existingTracks = Array.from(trackList.querySelectorAll("TRACK"));
+
+                // Iterate up to the max of existing or new names
+                const maxCount = Math.max(existingTracks.length, metadata.trackNames.length);
+
+                for (let i = 0; i < maxCount; i++) {
+                    // Update or create track
+                    if (i < existingTracks.length) {
+                        // Existing track: Update NAME
+                        if (i < metadata.trackNames.length) {
+                            const track = existingTracks[i];
+                            let nameEl = track.querySelector("NAME");
+                            if (!nameEl) {
+                                nameEl = xmlDoc.createElement("NAME");
+                                track.appendChild(nameEl);
+                            }
                             nameEl.textContent = metadata.trackNames[i];
                         }
+                    } else if (i < metadata.trackNames.length) {
+                        // New track needed
+                        const newTrack = xmlDoc.createElement("TRACK");
+
+                        const channelIndex = xmlDoc.createElement("CHANNEL_INDEX");
+                        channelIndex.textContent = (i + 1).toString();
+                        newTrack.appendChild(channelIndex);
+
+                        const nameEl = xmlDoc.createElement("NAME");
+                        nameEl.textContent = metadata.trackNames[i];
+                        newTrack.appendChild(nameEl);
+
+                        trackList.appendChild(newTrack);
                     }
-                });
+                }
             }
 
             // Serialize back to string

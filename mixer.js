@@ -66,7 +66,7 @@ export class Mixer {
         });
     }
 
-    buildUI(trackCount) {
+    buildUI(trackCount, trackNames = []) {
         this.container.innerHTML = '';
         this.channels = [];
         this.automationRecorders = [];
@@ -86,11 +86,13 @@ export class Mixer {
             this.muteAutomationRecorders[i] = new AutomationRecorder(i, 'mute');
             this.muteAutomationPlayers[i] = new AutomationPlayer([]);
 
+            const trackName = (trackNames && trackNames[i]) ? trackNames[i] : `Ch ${i + 1}`;
+
             const strip = document.createElement('div');
             strip.className = 'channel-strip';
             strip.innerHTML = `
                 <div class="channel-header">
-                    <div class="channel-name" contenteditable="true">Ch ${i + 1}</div>
+                    <div class="channel-name" contenteditable="true">${trackName}</div>
                     <button class="mute-btn" data-idx="${i}">M</button>
                     <button class="solo-btn" data-idx="${i}">S</button>
                 </div>

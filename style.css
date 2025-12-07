@@ -42,6 +42,10 @@ body {
     align-items: center;
 }
 
+.app-header h1 {
+    color: var(--accent-primary);
+}
+
 .header-controls {
     display: flex;
     gap: 1rem;
@@ -113,12 +117,12 @@ body {
 table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 0.9rem;
+    font-size: 0.8rem;
 }
 
 th,
 td {
-    padding: 0.75rem;
+    padding: 0.4rem;
     text-align: left;
     border-bottom: 1px solid var(--border-color);
     white-space: nowrap;
@@ -142,7 +146,7 @@ th.drag-over {
 
 #table-header th {
     text-align: left;
-    padding: 0.75rem 1rem;
+    padding: 0.4rem 0.5rem;
     background-color: var(--bg-panel);
     /* Using var for consistency */
     position: sticky;
@@ -184,20 +188,128 @@ tr:hover {
 }
 
 tr.selected {
-    background-color: rgba(187, 134, 252, 0.1);
+    background-color: rgba(209, 101, 0, 0.585);
 }
 
 /* Editable FPS and TC Start fields */
 .fps-select,
 .tc-input {
-    width: 100%;
-    background-color: var(--bg-secondary);
+    background-color: var(--bg-dark);
     color: var(--text-primary);
     border: 1px solid var(--border-color);
     border-radius: 4px;
     padding: 0.25rem 0.5rem;
-    font-size: 0.9rem;
+    font-size: 0.75rem;
     font-family: inherit;
+    height: 24px;
+    line-height: 1.2;
+    box-sizing: border-box;
+}
+
+.fps-select {
+    width: 100%;
+}
+
+.tc-input {
+    width: 100%;
+}
+
+/* --- Fixed Column Widths & Ordering --- */
+
+/* Filename Column (1st) */
+th[data-column="3"],
+td:nth-child(1) {
+    width: 150px;
+    max-width: 300px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Project Column (2nd) */
+th[data-column="12"],
+td:nth-child(2) {
+    width: 100px;
+    max-width: 100px;
+}
+
+/* Tape Column (3rd) */
+th[data-column="11"],
+td:nth-child(3) {
+    width: 90px;
+    max-width: 100px;
+}
+
+/* Channels Column (4th) */
+th[data-column="0"],
+td:nth-child(4) {
+    width: 80px;
+    max-width: 80px;
+}
+
+/* Bit Depth Column (5th) */
+th[data-column="1"],
+td:nth-child(5) {
+    width: 75px;
+    max-width: 75px;
+}
+
+/* Sample Rate Column (6th) */
+th[data-column="2"],
+td:nth-child(6) {
+    width: 100px;
+    max-width: 100px;
+}
+
+/* Format Column (7th) */
+th[data-column="4"],
+td:nth-child(7) {
+    width: 70px;
+    max-width: 70px;
+}
+
+/* Scene Column (8th) */
+th[data-column="5"],
+td:nth-child(8) {
+    width: 80px;
+    max-width: 250px;
+}
+
+/* Take Column (9th - Scene is 8th) */
+th[data-column="6"],
+td:nth-child(9) {
+    width: 60px;
+    max-width: 60px;
+}
+
+/* Duration Column (10th) */
+th[data-column="7"],
+td:nth-child(10) {
+    width: 90px;
+    max-width: 90px;
+}
+
+/* TC Start column (11th) */
+th[data-column="8"],
+td:nth-child(11) {
+    width: 100px;
+    max-width: 100px;
+    padding: 0.25rem 0.25rem;
+}
+
+/* FPS column (12th) */
+th[data-column="9"],
+td:nth-child(12) {
+    width: 90px;
+    max-width: 90px;
+    padding: 0.1rem 0.1rem;
+}
+
+/* Date Column (14th - Notes is 13th) */
+th[data-column="13"],
+td:nth-child(14) {
+    width: 100px;
+    max-width: 100px;
 }
 
 .fps-select:focus,
@@ -295,6 +407,8 @@ tr.selected {
     z-index: 10;
 }
 
+
+
 .region-selector {
     height: 20px;
     background-color: #1a1a1a;
@@ -302,6 +416,19 @@ tr.selected {
     cursor: crosshair;
     position: relative;
     margin-bottom: -4px;
+    display: flex;
+    /* Added for centering text */
+    align-items: center;
+    justify-content: center;
+}
+
+.region-hint {
+    color: var(--text-muted);
+    font-size: 0.6rem;
+    pointer-events: none;
+    /* Let clicks pass through to the selector */
+    opacity: 0.7;
+    user-select: none;
 }
 
 .region-overlay {
