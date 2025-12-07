@@ -309,13 +309,25 @@ export class MetadataHandler {
     }
 
     parseIXML(view, offset, size, metadata) {
-        const xmlStr = this.readString(view, offset, size);
+        // Use TextDecoder for proper UTF-8 handling
+        const chunkData = new Uint8Array(view.buffer, view.byteOffset + offset, size);
+        const decoder = new TextDecoder('utf-8');
+        // Remove null terminators if any
+        const xmlStr = decoder.decode(chunkData).replace(/\0+$/, '');
 
         // Store the original iXML for preservation
         metadata.ixmlRaw = xmlStr;
 
+
+
         const parser = new DOMParser();
         const xmlDoc = parser.parseFromString(xmlStr, "text/xml");
+
+        // check for parse errors
+        const parseError = xmlDoc.querySelector('parsererror');
+        if (parseError) {
+            console.error('[parseIXML] XML Parsing Error:', parseError.textContent);
+        }
 
         metadata.scene = this.getXmlVal(xmlDoc, "SCENE");
         metadata.take = this.getXmlVal(xmlDoc, "TAKE");

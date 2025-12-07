@@ -349,7 +349,14 @@ export class AudioProcessor {
             const chunkSize = view.getUint32(offset + 4, true);
 
             if (chunkId === 'bext' || chunkId === 'iXML') {
+                console.log(`[Export Debug] Copying ${chunkId} chunk.`);
                 const chunkData = new Uint8Array(originalBuffer.slice(offset + 8, offset + 8 + chunkSize));
+
+                if (chunkId === 'iXML') {
+                    const decoder = new TextDecoder('utf-8');
+                    console.log('[Export Debug] iXML Start:', decoder.decode(chunkData.slice(0, 100)));
+                }
+
                 chunks.push({ id: chunkId, data: chunkData });
             }
 

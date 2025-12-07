@@ -1820,17 +1820,6 @@ class App {
             if (currentTimecode) {
                 currentTimecode.textContent = this.secondsToTimecode(time);
             }
-        } else if (this.isStopped) {
-            // Debugging: Check position when stopped
-            const ph = document.getElementById('playhead');
-            if (ph && !this._debugLogged) {
-                console.log('DEBUG: Animation stopped. Playhead Left is:', ph.style.left);
-                this._debugLogged = true; // Log once
-            } else {
-                this._debugLogged = false;
-            }
-        } else {
-            this._debugLogged = false;
         }
 
         // Update Mixer Meters
@@ -1867,28 +1856,41 @@ class App {
 
             for (const index of indices) {
                 const item = this.files[index];
-                console.log(`Normalizing ${item.metadata.filename}...`);
+                const targets = item.isGroup ? item.siblings : [item];
 
-                // Read file
-                const arrayBuffer = await item.file.arrayBuffer();
+                for (const target of targets) {
+                    console.log(`Normalizing ${target.metadata.filename}...`);
 
-                // Normalize
-                // Note: normalize modifies buffer in place or returns new one
-                // Check if region is active (both start and end are not null)
-                const region = (this.region && this.region.start !== null && this.region.end !== null) ? this.region : null;
-                const normalizedBuffer = await this.audioProcessor.normalize(arrayBuffer, targetDb, region);
+                    // Read file
+                    const arrayBuffer = await target.file.arrayBuffer();
 
-                // Save back to file
-                // We use the file handle to write the raw WAV bytes directly
-                const writable = await item.handle.createWritable();
-                await writable.write(normalizedBuffer);
-                await writable.close();
+                    // Normalize
+                    // Note: normalize modifies buffer in place or returns new one
+                    // Check if region is active (both start and end are not null)
+                    const region = (this.region && this.region.start !== null && this.region.end !== null) ? this.region : null;
+                    const normalizedBuffer = await this.audioProcessor.normalize(arrayBuffer, targetDb, region);
 
-                // Refresh file object
-                item.file = await item.handle.getFile();
+                    // Save back to file
+                    // We use the file handle to write the raw WAV bytes directly
+                    const writable = await target.handle.createWritable();
+                    await writable.write(normalizedBuffer);
+                    await writable.close();
+
+                    // Refresh file object on the target (Sibling or Single)
+                    // CRITICAL: This updates the reference so subsequent reads (like loadAudioForFile)
+                    // use the valid, new file blob.
+                    target.file = await target.handle.getFile();
+                }
+
+                // If Group, update the main item convenience ref too
+                if (item.isGroup && item.siblings.length > 0) {
+                    item.file = item.siblings[0].file;
+                }
 
                 // If this is the currently loaded file, reload audio engine
+                // Use setTimeout to allow handle to settle if needed, though await above should suffice
                 if (this.currentFileMetadata && this.currentFileMetadata.filename === item.metadata.filename) {
+                    // Force reload of the updated file blobs
                     await this.loadAudioForFile(index);
                 }
 
@@ -2095,19 +2097,13 @@ class App {
                 // Show progress
                 if (selectedFiles.length > 1) {
                     console.log(`Exporting ${successCount + failCount + 1} of ${selectedFiles.length}: ${item.metadata.filename}`);
-                    // You could update a progress bar here
                 }
 
                 // Load audio if needed
                 let buffer = this.audioEngine.buffer;
                 // If this is NOT the currently loaded file, we need to load it temporarily
                 if (!this.currentFileMetadata || this.currentFileMetadata.filename !== item.metadata.filename) {
-                    // For now, we only support exporting the currently loaded file or we'd need to load each one
-                    // Since we can't easily load files in background without blocking UI, 
-                    // we'll assume for now we are exporting the loaded file or batch processing is limited.
-
-                    // Actually, for batch export to work properly, we MUST load the audio.
-                    // Let's reuse loadFileWithProgress but without UI updates for now
+                    // For batch export to work properly, we MUST load the audio.
                     const arrayBuffer = await item.file.arrayBuffer();
                     buffer = await this.audioEngine.decodeAudio(arrayBuffer);
                 }
@@ -2119,7 +2115,6 @@ class App {
                 }
 
                 // Render Mix
-                // Define range
                 let start = 0;
                 let end = buffer.duration;
                 let isRegionExport = false;
@@ -2135,8 +2130,6 @@ class App {
                 }
 
                 // Render stereo mix
-                // Note: renderStereoMix in AudioEngine currently doesn't support automation playback during offline render
-                // It renders the static mixer state (volume/pan/mute/solo)
                 const renderedBuffer = await this.audioEngine.renderStereoMix(
                     buffer,
                     this.mixer.channels,
@@ -2220,7 +2213,7 @@ class App {
                             failCount++;
                         }
                     } else {
-                        // Fallback download (if showSaveFilePicker wasn't supported/used)
+                        // Fallback download
                         const url = URL.createObjectURL(blob);
                         const a = document.createElement('a');
                         a.href = url;
@@ -2235,9 +2228,6 @@ class App {
             alert(`An error occurred during export: ${err.message}`);
         } finally {
             document.body.style.cursor = 'default';
-            if (successCount > 0) {
-                // alert(`Successfully exported ${successCount} file(s).`);
-            }
         }
     }
 
@@ -2270,6 +2260,9 @@ class App {
 
             // Refresh file object
             item.file = await item.handle.getFile();
+
+            // Update in-memory metadata to include the new iXML (preserving mixer settings for future saves)
+            item.metadata.ixmlRaw = newIXML;
 
             alert(`Mixer settings saved to ${item.metadata.filename}`);
         } catch (err) {
@@ -2342,7 +2335,7 @@ class App {
             return '00:00:00:00';
         }
 
-        // Get FPS - use fpsExact if available, otherwise parse fps display value
+        // Get FPS
         let fps = 24; // default
         if (this.currentFileMetadata.fpsExact) {
             fps = this.currentFileMetadata.fpsExact.numerator / this.currentFileMetadata.fpsExact.denominator;
