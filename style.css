@@ -438,9 +438,28 @@ td:nth-child(14) {
     background-color: rgba(100, 200, 255, 0.2);
     border-left: 2px solid rgba(100, 200, 255, 0.8);
     border-right: 2px solid rgba(100, 200, 255, 0.8);
-    pointer-events: none;
+    pointer-events: auto;
     display: none;
     z-index: 5;
+    cursor: move;
+}
+
+.region-overlay::before,
+.region-overlay::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    height: 100%;
+    width: 8px;
+    cursor: ew-resize;
+}
+
+.region-overlay::before {
+    left: -4px;
+}
+
+.region-overlay::after {
+    right: -4px;
 }
 
 .region-overlay.active {

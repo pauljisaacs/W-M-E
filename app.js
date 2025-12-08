@@ -227,9 +227,10 @@ class App {
                 this.selectAll();
             }
 
-            if ((e.key === 'Backspace' || e.key === 'Delete') && this.selectedIndices.size > 0) {
-                // Optional: Allow delete key to remove
-                // this.removeSelected(); 
+            // Delete/Backspace to remove selected files (only if not typing in an editable field)
+            if ((e.key === 'Backspace' || e.key === 'Delete') && this.selectedIndices.size > 0 && !this.isEditingText(e.target)) {
+                e.preventDefault();
+                this.removeSelected();
             }
         });
 
@@ -331,6 +332,33 @@ class App {
         const regionOverlay = document.getElementById('region-overlay');
         let isSelectingRegion = false;
         let regionStartX = 0;
+        let isDraggingEdge = false;
+        let draggingEdge = null; // 'start' or 'end'
+
+        // Handle region edge dragging
+        regionOverlay.addEventListener('mousedown', (e) => {
+            if (!this.audioEngine.buffer) return;
+            e.stopPropagation(); // Prevent region selector from handling this
+
+            const rect = regionOverlay.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const edgeThreshold = 8; // pixels
+
+            // Check if clicking near left edge (start)
+            if (x < edgeThreshold) {
+                isDraggingEdge = true;
+                draggingEdge = 'start';
+            }
+            // Check if clicking near right edge (end)
+            else if (x > rect.width - edgeThreshold) {
+                isDraggingEdge = true;
+                draggingEdge = 'end';
+            }
+            // Middle click clears the region
+            else {
+                this.clearRegion();
+            }
+        });
 
         regionSelector.addEventListener('mousedown', (e) => {
             if (!this.audioEngine.buffer) return;
@@ -339,9 +367,8 @@ class App {
             const x = e.clientX - rect.left;
             const percent = x / rect.width;
 
-            // Check if clicking on existing region (to clear it)
+            // Check if clicking on existing region (handled by regionOverlay now)
             if (this.region.start !== null) {
-                this.clearRegion();
                 return;
             }
 
@@ -356,18 +383,39 @@ class App {
 
         // Listen to document for mousemove so we can track outside the element
         document.addEventListener('mousemove', (e) => {
-            if (!isSelectingRegion || !this.audioEngine.buffer) return;
+            if (!this.audioEngine.buffer) return;
 
             const rect = regionSelector.getBoundingClientRect();
             const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
             const percent = x / rect.width;
+            const time = percent * this.audioEngine.buffer.duration;
 
-            this.region.end = percent * this.audioEngine.buffer.duration;
-            this.updateRegionDisplay();
+            // Handle edge dragging
+            if (isDraggingEdge) {
+                if (draggingEdge === 'start') {
+                    this.region.start = Math.min(time, this.region.end - 0.01); // Keep 0.01s minimum
+                } else if (draggingEdge === 'end') {
+                    this.region.end = Math.max(time, this.region.start + 0.01); // Keep 0.01s minimum
+                }
+                this.updateRegionDisplay();
+                return;
+            }
+
+            // Handle region selection
+            if (isSelectingRegion) {
+                this.region.end = time;
+                this.updateRegionDisplay();
+            }
         });
 
         // Listen to document for mouseup so we catch it even outside the element
         document.addEventListener('mouseup', () => {
+            if (isDraggingEdge) {
+                isDraggingEdge = false;
+                draggingEdge = null;
+                return;
+            }
+
             if (isSelectingRegion) {
                 isSelectingRegion = false;
 
