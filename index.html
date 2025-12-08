@@ -358,7 +358,33 @@
         </div>
     </div>
 
+    <!-- Cue Marker Edit Modal -->
+    <div id="cue-marker-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Edit Cue Marker</h3>
+                <button class="close-modal" id="cue-close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="cue-label-input">Label (max 64 characters):</label>
+                    <input type="text" id="cue-label-input" maxlength="64" placeholder="Enter marker label">
+                </div>
+                <div class="form-group">
+                    <label for="cue-time-display">Time:</label>
+                    <input type="text" id="cue-time-display" readonly>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="cue-cancel-btn" class="btn secondary">Cancel</button>
+                <button id="cue-delete-btn" class="btn secondary" style="background: #c62828;">Delete</button>
+                <button id="cue-apply-btn" class="btn primary">Apply</button>
+            </div>
+        </div>
+    </div>
+
     <script src="lame.min.js"></script>
+    <script src="cue-marker.js"></script>
     <script type="module" src="app.js"></script>
     <script>
         // Register Service Worker for offline support

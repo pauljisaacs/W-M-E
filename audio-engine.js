@@ -277,7 +277,7 @@ export class AudioEngine {
         return this.pauseTime;
     }
 
-    renderWaveform(canvas, buffer, channelStates = []) {
+    renderWaveform(canvas, buffer, channelStates = [], cueMarkers = null, selectedCueMarkerId = null) {
         const ctx = canvas.getContext('2d');
         const width = canvas.width;
         const height = canvas.height;
@@ -334,6 +334,60 @@ export class AudioEngine {
                 ctx.fillRect(i, (1 + min) * amp, 1, Math.max(1, (max - min) * amp));
             }
         }
+
+        // Render cue markers
+        if (cueMarkers && buffer.duration) {
+            this.renderCueMarkers(ctx, canvas, buffer.duration, cueMarkers, selectedCueMarkerId);
+        }
+    }
+
+    /**
+     * Render cue markers on the waveform canvas
+     */
+    renderCueMarkers(ctx, canvas, duration, cueMarkers, selectedCueMarkerId) {
+        const markers = cueMarkers.getAllSorted();
+        const width = canvas.width;
+        const height = canvas.height;
+
+        markers.forEach(marker => {
+            const x = (marker.time / duration) * width;
+            const isSelected = marker.id === selectedCueMarkerId;
+
+            // Draw vertical line (dashed)
+            ctx.strokeStyle = isSelected ? '#ffcf44' : '#00d4ff';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([4, 4]); // 4px dash, 4px gap
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, height);
+            ctx.stroke();
+            ctx.setLineDash([]); // Reset to solid
+
+            // Draw draggable handle at top
+            ctx.fillStyle = isSelected ? '#ffcf44' : '#00d4ff';
+            ctx.fillRect(x - 4, 0, 8, 12);
+
+            // Draw label (if exists)
+            if (marker.label) {
+                ctx.fillStyle = '#ffffff';
+                ctx.font = '12px Inter, sans-serif';
+                ctx.textBaseline = 'top';
+                
+                // Draw text with background for readability
+                const textMetrics = ctx.measureText(marker.label);
+                const textWidth = textMetrics.width;
+                const textX = x + 6;
+                const textY = 2;
+                
+                // Background
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                ctx.fillRect(textX - 2, textY, textWidth + 4, 14);
+                
+                // Text
+                ctx.fillStyle = '#ffffff';
+                ctx.fillText(marker.label, textX, textY);
+            }
+        });
     }
 
     async renderStereoMix(sourceBuffer, mixerChannels, mode = 'current') {

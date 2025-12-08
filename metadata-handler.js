@@ -932,5 +932,299 @@ export class MetadataHandler {
         await writable.write(newBuffer);
         await writable.close();
     }
+
+    /**
+     * Parse cue chunk from WAV file
+     * @param {ArrayBuffer} arrayBuffer - WAV file buffer
+     * @returns {Array|null} - Array of cue points {id, samplePosition} or null if not found
+     */
+    parseCueChunk(arrayBuffer) {
+        const view = new DataView(arrayBuffer);
+        let offset = 12; // Skip RIFF header
+
+        while (offset < view.byteLength - 8) {
+            const chunkId = this.getChunkId(view, offset);
+            const chunkSize = view.getUint32(offset + 4, true);
+
+            if (chunkId === 'cue ') {
+                console.log('Found cue chunk at offset', offset);
+                const cuePoints = [];
+                const numCuePoints = view.getUint32(offset + 8, true);
+                
+                let cueOffset = offset + 12; // After chunk header + num cue points
+                
+                for (let i = 0; i < numCuePoints; i++) {
+                    const cueId = view.getUint32(cueOffset, true);
+                    const position = view.getUint32(cueOffset + 4, true); // Position in samples
+                    // Skip: fccChunk (4), chunkStart (4), blockStart (4), sampleOffset (4) = 16 bytes
+                    
+                    cuePoints.push({
+                        id: cueId,
+                        samplePosition: position
+                    });
+                    
+                    cueOffset += 24; // Each cue point is 24 bytes
+                }
+                
+                console.log(`Parsed ${cuePoints.length} cue points`);
+                return cuePoints;
+            }
+
+            offset += 8 + chunkSize;
+            if (chunkSize % 2 !== 0) offset++; // Pad byte
+        }
+
+        return null;
+    }
+
+    /**
+     * Create cue chunk binary data
+     * @param {Array} markers - Array of markers with {time} property
+     * @param {number} sampleRate - Sample rate in Hz
+     * @returns {Uint8Array} - Binary cue chunk data (including header)
+     */
+    createCueChunk(markers, sampleRate) {
+        if (!markers || markers.length === 0) {
+            return null;
+        }
+
+        const numCuePoints = markers.length;
+        const chunkDataSize = 4 + (numCuePoints * 24); // 4 bytes for count + 24 bytes per cue point
+        const totalSize = 8 + chunkDataSize; // 8 byte header + data
+        const paddedSize = totalSize + (chunkDataSize % 2); // Pad to even byte
+        
+        const buffer = new Uint8Array(paddedSize);
+        const view = new DataView(buffer.buffer);
+        
+        // Write chunk ID 'cue '
+        view.setUint8(0, 'c'.charCodeAt(0));
+        view.setUint8(1, 'u'.charCodeAt(0));
+        view.setUint8(2, 'e'.charCodeAt(0));
+        view.setUint8(3, ' '.charCodeAt(0));
+        
+        // Write chunk size
+        view.setUint32(4, chunkDataSize, true);
+        
+        // Write number of cue points
+        view.setUint32(8, numCuePoints, true);
+        
+        // Write each cue point
+        let offset = 12;
+        markers.forEach((marker, index) => {
+            const samplePosition = Math.round(marker.time * sampleRate);
+            
+            view.setUint32(offset, index + 1, true);        // Cue point ID
+            view.setUint32(offset + 4, samplePosition, true); // Position in samples
+            view.setUint8(offset + 8, 'd'.charCodeAt(0));   // fccChunk 'data'
+            view.setUint8(offset + 9, 'a'.charCodeAt(0));
+            view.setUint8(offset + 10, 't'.charCodeAt(0));
+            view.setUint8(offset + 11, 'a'.charCodeAt(0));
+            view.setUint32(offset + 12, 0, true);            // chunkStart
+            view.setUint32(offset + 16, 0, true);            // blockStart
+            view.setUint32(offset + 20, samplePosition, true); // sampleOffset
+            
+            offset += 24;
+        });
+        
+        console.log(`Created cue chunk with ${numCuePoints} markers`);
+        return buffer;
+    }
+
+    /**
+     * Parse sync points from iXML string
+     * @param {string} ixmlString - iXML XML string
+     * @returns {Array|null} - Array of sync points {time, label} or null
+     */
+    parseIXMLSyncPoints(ixmlString) {
+        if (!ixmlString) return null;
+
+        try {
+            const parser = new DOMParser();
+            const xmlDoc = parser.parseFromString(ixmlString, 'text/xml');
+            
+            const syncPointList = xmlDoc.querySelector('SYNC_POINT_LIST');
+            if (!syncPointList) return null;
+            
+            const syncPoints = [];
+            const syncPointNodes = syncPointList.querySelectorAll('SYNC_POINT');
+            
+            syncPointNodes.forEach(node => {
+                const lowNode = node.querySelector('SYNC_POINT_LOW');
+                const highNode = node.querySelector('SYNC_POINT_HIGH');
+                const commentNode = node.querySelector('SYNC_POINT_COMMENT');
+                
+                if (lowNode && highNode) {
+                    const low = parseInt(lowNode.textContent);
+                    const high = parseInt(highNode.textContent);
+                    const samplePosition = (high * 0x100000000) + low; // Combine 64-bit value
+                    
+                    // We need sample rate to convert to time - will be provided separately
+                    syncPoints.push({
+                        samplePosition,
+                        label: commentNode ? commentNode.textContent : ''
+                    });
+                }
+            });
+            
+            console.log(`Parsed ${syncPoints.length} sync points from iXML`);
+            return syncPoints.length > 0 ? syncPoints : null;
+        } catch (err) {
+            console.error('Error parsing iXML sync points:', err);
+            return null;
+        }
+    }
+
+    /**
+     * Inject cue markers into iXML as SYNC_POINT entries
+     * @param {string} existingIXML - Existing iXML string (or null to create new)
+     * @param {Array} markers - Array of markers with {time, label} properties
+     * @param {number} sampleRate - Sample rate in Hz
+     * @returns {string} - Updated iXML string
+     */
+    injectCuesIntoIXML(existingIXML, markers, sampleRate) {
+        let xmlDoc;
+        
+        if (existingIXML) {
+            // Parse existing iXML
+            const parser = new DOMParser();
+            xmlDoc = parser.parseFromString(existingIXML, 'text/xml');
+        } else {
+            // Create minimal iXML structure
+            xmlDoc = document.implementation.createDocument(null, 'BWFXML', null);
+        }
+        
+        // Find or create SYNC_POINT_LIST
+        let syncPointList = xmlDoc.querySelector('SYNC_POINT_LIST');
+        if (!syncPointList) {
+            syncPointList = xmlDoc.createElement('SYNC_POINT_LIST');
+            xmlDoc.documentElement.appendChild(syncPointList);
+        }
+        
+        // Clear existing sync points
+        while (syncPointList.firstChild) {
+            syncPointList.removeChild(syncPointList.firstChild);
+        }
+        
+        // Add new sync points
+        markers.forEach((marker, index) => {
+            const samplePosition = Math.round(marker.time * sampleRate);
+            const low = samplePosition & 0xFFFFFFFF;
+            const high = Math.floor(samplePosition / 0x100000000);
+            
+            const syncPoint = xmlDoc.createElement('SYNC_POINT');
+            
+            const typeNode = xmlDoc.createElement('SYNC_POINT_TYPE');
+            typeNode.textContent = 'CUE';
+            syncPoint.appendChild(typeNode);
+            
+            const functionNode = xmlDoc.createElement('SYNC_POINT_FUNCTION');
+            functionNode.textContent = 'MARKER';
+            syncPoint.appendChild(functionNode);
+            
+            if (marker.label) {
+                const commentNode = xmlDoc.createElement('SYNC_POINT_COMMENT');
+                commentNode.textContent = marker.label;
+                syncPoint.appendChild(commentNode);
+            }
+            
+            const lowNode = xmlDoc.createElement('SYNC_POINT_LOW');
+            lowNode.textContent = low.toString();
+            syncPoint.appendChild(lowNode);
+            
+            const highNode = xmlDoc.createElement('SYNC_POINT_HIGH');
+            highNode.textContent = high.toString();
+            syncPoint.appendChild(highNode);
+            
+            syncPointList.appendChild(syncPoint);
+        });
+        
+        // Serialize back to string
+        const serializer = new XMLSerializer();
+        const xmlString = serializer.serializeToString(xmlDoc);
+        
+        console.log(`Injected ${markers.length} cue markers into iXML`);
+        return xmlString;
+    }
+
+    /**
+     * Update WAV file with cue chunk and updated iXML
+     * @param {FileSystemFileHandle} fileHandle - File handle to write to
+     * @param {ArrayBuffer} originalBuffer - Original WAV file buffer
+     * @param {Uint8Array} cueChunk - Binary cue chunk data (or null to skip)
+     * @param {string} newIXMLString - New iXML content (or null to skip)
+     */
+    async updateCueMarkers(fileHandle, originalBuffer, cueChunk, newIXMLString) {
+        const view = new DataView(originalBuffer);
+        const chunks = [];
+        let offset = 12;
+
+        // Parse all chunks except 'cue ' and 'iXML'
+        while (offset < view.byteLength - 8) {
+            const chunkId = this.getChunkId(view, offset);
+            const chunkSize = view.getUint32(offset + 4, true);
+
+            if (chunkId !== 'cue ' && chunkId !== 'iXML') {
+                // Copy chunk (including header)
+                const chunkData = new Uint8Array(originalBuffer, offset, 8 + chunkSize + (chunkSize % 2));
+                chunks.push({ id: chunkId, data: chunkData });
+            }
+
+            offset += 8 + chunkSize;
+            if (chunkSize % 2 !== 0) offset++; // Pad byte
+        }
+
+        // Add new cue chunk if provided
+        if (cueChunk) {
+            chunks.push({ id: 'cue ', data: cueChunk });
+        }
+
+        // Add new iXML chunk if provided
+        if (newIXMLString) {
+            const ixmlBytes = new TextEncoder().encode(newIXMLString);
+            const ixmlChunkSize = ixmlBytes.length;
+            const ixmlChunk = new Uint8Array(8 + ixmlChunkSize + (ixmlChunkSize % 2));
+            const ixmlView = new DataView(ixmlChunk.buffer);
+
+            ixmlView.setUint8(0, 'i'.charCodeAt(0));
+            ixmlView.setUint8(1, 'X'.charCodeAt(0));
+            ixmlView.setUint8(2, 'M'.charCodeAt(0));
+            ixmlView.setUint8(3, 'L'.charCodeAt(0));
+            ixmlView.setUint32(4, ixmlChunkSize, true);
+            ixmlChunk.set(ixmlBytes, 8);
+
+            chunks.push({ id: 'iXML', data: ixmlChunk });
+        }
+
+        // Calculate total size
+        const totalDataSize = chunks.reduce((sum, chunk) => sum + chunk.data.byteLength, 0);
+        const newFileSize = 12 + totalDataSize;
+        const newBuffer = new Uint8Array(newFileSize);
+        const newView = new DataView(newBuffer.buffer);
+
+        // Write RIFF header
+        newView.setUint8(0, 'R'.charCodeAt(0));
+        newView.setUint8(1, 'I'.charCodeAt(0));
+        newView.setUint8(2, 'F'.charCodeAt(0));
+        newView.setUint8(3, 'F'.charCodeAt(0));
+        newView.setUint32(4, newFileSize - 8, true);
+        newView.setUint8(8, 'W'.charCodeAt(0));
+        newView.setUint8(9, 'A'.charCodeAt(0));
+        newView.setUint8(10, 'V'.charCodeAt(0));
+        newView.setUint8(11, 'E'.charCodeAt(0));
+
+        // Write all chunks
+        let writeOffset = 12;
+        for (const chunk of chunks) {
+            newBuffer.set(chunk.data, writeOffset);
+            writeOffset += chunk.data.byteLength;
+        }
+
+        // Write to file
+        const writable = await fileHandle.createWritable();
+        await writable.write(newBuffer);
+        await writable.close();
+        
+        console.log('Successfully updated cue markers in WAV file');
+    }
 }
 
