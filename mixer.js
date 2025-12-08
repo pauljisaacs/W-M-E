@@ -8,6 +8,7 @@ export class Mixer {
         this.channels = [];
         this.container = null;
         this.masterGain = null;
+        this.masterFaderLevel = 1.0; // Master fader default to unity gain
 
         // Automation state
         this.isRecording = false;
@@ -44,6 +45,14 @@ export class Mixer {
 
         this.container.addEventListener('input', (e) => {
             const input = e.target;
+            
+            // Handle master fader
+            if (input.classList.contains('master-fader')) {
+                const val = parseFloat(input.value);
+                this.setMasterVolume(val);
+                return;
+            }
+            
             const idx = parseInt(input.dataset.idx);
 
             if (isNaN(idx)) return;
@@ -75,6 +84,101 @@ export class Mixer {
         this.panAutomationPlayers = [];
         this.muteAutomationRecorders = [];
         this.muteAutomationPlayers = [];
+
+        // Create Master Fader Strip
+        const masterStrip = document.createElement('div');
+        masterStrip.className = 'channel-strip master-strip';
+        masterStrip.innerHTML = `
+            <div class="channel-header">
+                <div class="channel-name master-label">MASTER</div>
+                <button class="mute-btn master-mute-btn">M</button>
+            </div>
+            <div class="automation-controls" style="visibility: hidden;">
+                <button class="arm-btn" style="opacity: 0;">A</button>
+                <button class="clear-auto-btn" style="opacity: 0;">×</button>
+            </div>
+            <div class="fader-container">
+                <div class="meter-scale">
+                    <div class="scale-label" data-db="0">0</div>
+                    <div class="scale-label" data-db="-20">-20</div>
+                    <div class="scale-label" data-db="-40">-40</div>
+                    <div class="scale-label" data-db="-60">-60</div>
+                </div>
+                <canvas class="master-meter-left" width="5" height="100"></canvas>
+                <canvas class="master-meter-right" width="5" height="100"></canvas>
+                <input type="range" orient="vertical" min="0" max="3.162" step="0.01" value="${this.masterFaderLevel}" class="volume-fader master-fader" tabindex="-1">
+            </div>
+            <div class="master-db-label">0.0 dB</div>
+        `;
+        this.container.appendChild(masterStrip);
+        
+        // Master mute button handler
+        this.masterMuted = false;
+        const masterMuteBtn = masterStrip.querySelector('.master-mute-btn');
+        masterMuteBtn.addEventListener('click', () => {
+            this.masterMuted = !this.masterMuted;
+            if (this.masterMuted) {
+                masterMuteBtn.classList.add('active');
+                if (this.masterGain && this.audioCtx) {
+                    this.masterGain.gain.setTargetAtTime(0, this.audioCtx.currentTime, 0.005);
+                }
+            } else {
+                masterMuteBtn.classList.remove('active');
+                if (this.masterGain && this.audioCtx) {
+                    this.masterGain.gain.setTargetAtTime(this.masterFaderLevel, this.audioCtx.currentTime, 0.005);
+                }
+            }
+        });
+        
+        // Store reference to master meters
+        this.masterMeterLeft = masterStrip.querySelector('.master-meter-left');
+        this.masterMeterRight = masterStrip.querySelector('.master-meter-right');
+        this.masterMeterLevelLeft = 0;
+        this.masterMeterLevelRight = 0;
+        
+        // Create analyser for master output
+        if (this.audioCtx && this.masterGain) {
+            this.masterAnalyserLeft = this.audioCtx.createAnalyser();
+            this.masterAnalyserRight = this.audioCtx.createAnalyser();
+            this.masterAnalyserLeft.fftSize = 256;
+            this.masterAnalyserRight.fftSize = 256;
+            this.masterAnalyserLeft.smoothingTimeConstant = 0.5;
+            this.masterAnalyserRight.smoothingTimeConstant = 0.5;
+            
+            // Split master output to analysers
+            this.masterSplitter = this.audioCtx.createChannelSplitter(2);
+            this.masterGain.connect(this.masterSplitter);
+            this.masterSplitter.connect(this.masterAnalyserLeft, 0);
+            this.masterSplitter.connect(this.masterAnalyserRight, 1);
+        }
+        
+        // Prevent master fader from stealing focus
+        const masterFader = masterStrip.querySelector('.master-fader');
+        masterFader.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            // Still allow the fader to work, just don't take focus
+            const updateValue = (event) => {
+                const rect = masterFader.getBoundingClientRect();
+                const y = Math.max(0, Math.min(rect.height, rect.bottom - event.clientY));
+                const percent = y / rect.height;
+                const min = parseFloat(masterFader.min);
+                const max = parseFloat(masterFader.max);
+                const value = min + (percent * (max - min));
+                masterFader.value = value;
+                this.setMasterVolume(value);
+            };
+            
+            updateValue(e);
+            
+            const onMouseMove = (event) => updateValue(event);
+            const onMouseUp = () => {
+                document.removeEventListener('mousemove', onMouseMove);
+                document.removeEventListener('mouseup', onMouseUp);
+            };
+            
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+        });
 
         // Create channels
         for (let i = 0; i < trackCount; i++) {
@@ -142,9 +246,10 @@ export class Mixer {
                 analyserNode.fftSize = 256;
                 analyserNode.smoothingTimeConstant = 0.5;
 
-                // Chain: Input -> Gain -> Analyser -> Pan -> Output (Merger)
+                // Chain: Input -> Gain -> Analyser -> Pan -> Master Gain
                 gainNode.connect(analyserNode);
                 analyserNode.connect(panNode);
+                panNode.connect(this.masterGain);
             }
 
             // Store channel refs
@@ -327,6 +432,21 @@ export class Mixer {
         }
     }
 
+    setMasterVolume(val) {
+        this.masterFaderLevel = val;
+        
+        if (this.masterGain && this.audioCtx && !this.masterMuted) {
+            this.masterGain.gain.setTargetAtTime(val, this.audioCtx.currentTime, 0.005);
+        }
+        
+        // Update dB label
+        const dbLabel = this.container.querySelector('.master-db-label');
+        if (dbLabel) {
+            const db = val > 0 ? (20 * Math.log10(val)).toFixed(1) : '-∞';
+            dbLabel.textContent = `${db} dB`;
+        }
+    }
+
     setPan(idx, val) {
         const ch = this.channels[idx];
         if (ch.panNode) {
@@ -436,6 +556,57 @@ export class Mixer {
             const barHeight = ch.meterLevel * height;
             ctx.fillRect(0, height - barHeight, width, barHeight);
         });
+        
+        // Update master meters
+        if (this.masterMeterLeft && this.masterMeterRight && this.masterAnalyserLeft && this.masterAnalyserRight) {
+            const renderMasterMeter = (canvas, analyser, meterLevel) => {
+                const ctx = canvas.getContext('2d');
+                const width = canvas.width;
+                const height = canvas.height;
+
+                const dataArray = new Float32Array(analyser.fftSize);
+                analyser.getFloatTimeDomainData(dataArray);
+
+                let sum = 0;
+                for (let i = 0; i < dataArray.length; i++) {
+                    sum += dataArray[i] * dataArray[i];
+                }
+                const rms = Math.sqrt(sum / dataArray.length);
+                const db = 20 * Math.log10(Math.max(rms, 0.00001));
+
+                let targetPercent = (db + 60) / 60;
+                targetPercent = Math.max(0, Math.min(1, targetPercent));
+
+                if (targetPercent > meterLevel) {
+                    meterLevel += (targetPercent - meterLevel) * attackCoef;
+                } else {
+                    meterLevel += (targetPercent - meterLevel) * decayCoef;
+                }
+
+                meterLevel = Math.max(0, Math.min(1, meterLevel));
+
+                ctx.clearRect(0, 0, width, height);
+
+                const gradient = ctx.createLinearGradient(0, height, 0, 0);
+                gradient.addColorStop(0, '#00ff00');
+                gradient.addColorStop(0.66, '#00ff00');
+                gradient.addColorStop(0.66, '#ffff00');
+                gradient.addColorStop(0.80, '#ffff00');
+                gradient.addColorStop(0.80, '#ff9900');
+                gradient.addColorStop(0.98, '#ff9900');
+                gradient.addColorStop(0.98, '#ff0000');
+                gradient.addColorStop(1, '#ff0000');
+
+                ctx.fillStyle = gradient;
+                const barHeight = meterLevel * height;
+                ctx.fillRect(0, height - barHeight, width, barHeight);
+                
+                return meterLevel;
+            };
+            
+            this.masterMeterLevelLeft = renderMasterMeter(this.masterMeterLeft, this.masterAnalyserLeft, this.masterMeterLevelLeft);
+            this.masterMeterLevelRight = renderMasterMeter(this.masterMeterRight, this.masterAnalyserRight, this.masterMeterLevelRight);
+        }
     }
 
     getMixerState() {

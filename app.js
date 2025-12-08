@@ -45,6 +45,11 @@ class App {
         this.selectedCueMarkerId = null; // Track selected marker
         this.draggingCueMarkerId = null; // Track marker being dragged
 
+        // Auto-save
+        this.autoSaveEnabled = localStorage.getItem('autoSaveMetadata') === 'true';
+        this.autoSaveDebounceTimer = null;
+        this.autoSaveDelay = 1000; // 1 second debounce
+
         this.initEventListeners();
         this.initDragAndDrop();
         this.initColumnDragDrop();
@@ -171,6 +176,15 @@ class App {
             const format = e.target.value;
             document.getElementById('wav-options').style.display = format === 'wav' ? 'block' : 'none';
             document.getElementById('mp3-options').style.display = format === 'mp3' ? 'block' : 'none';
+        });
+
+        // Auto-save toggle
+        const autoSaveCheckbox = document.getElementById('auto-save-checkbox');
+        autoSaveCheckbox.checked = this.autoSaveEnabled;
+        autoSaveCheckbox.addEventListener('change', (e) => {
+            this.autoSaveEnabled = e.target.checked;
+            localStorage.setItem('autoSaveMetadata', this.autoSaveEnabled);
+            this.updateSaveButtonState();
         });
 
         // Mixer save/load controls
@@ -951,7 +965,11 @@ class App {
                     if (!this.pendingEdits) this.pendingEdits = {};
                     if (!this.pendingEdits[idx]) this.pendingEdits[idx] = {};
                     this.pendingEdits[idx].fps = e.target.value;
-                    console.log(`FPS changed for file ${idx}: ${e.target.value}`);
+                    
+                    // Trigger auto-save if enabled
+                    if (this.autoSaveEnabled) {
+                        this.scheduleAutoSave();
+                    }
                 });
 
                 td.appendChild(select);
@@ -976,7 +994,11 @@ class App {
                         if (!this.pendingEdits[idx]) this.pendingEdits[idx] = {};
                         this.pendingEdits[idx].tcStart = value;
                         e.target.classList.remove('invalid');
-                        console.log(`TC Start changed for file ${idx}: ${value}`);
+                        
+                        // Trigger auto-save if enabled
+                        if (this.autoSaveEnabled) {
+                            this.scheduleAutoSave();
+                        }
                     } else {
                         e.target.classList.add('invalid');
                         alert('Invalid timecode format. Please use HH:MM:SS:FF (e.g., 01:23:45:12)');
@@ -1103,6 +1125,53 @@ class App {
         this.files[index].metadata[key] = value;
         // Enable save button
         document.getElementById('batch-save-btn').disabled = false;
+        
+        // Trigger auto-save if enabled
+        if (this.autoSaveEnabled) {
+            this.scheduleAutoSave();
+        }
+    }
+
+    scheduleAutoSave() {
+        // Clear existing timer
+        if (this.autoSaveDebounceTimer) {
+            clearTimeout(this.autoSaveDebounceTimer);
+        }
+        
+        // Show "Saving..." toast
+        this.showToast('Saving...', 'info', 0); // 0 = persistent until replaced
+        
+        // Schedule save after delay
+        this.autoSaveDebounceTimer = setTimeout(async () => {
+            await this.performAutoSave();
+        }, this.autoSaveDelay);
+    }
+
+    async performAutoSave() {
+        if (this.selectedIndices.size === 0) {
+            this.showToast('No files selected', 'warning');
+            return;
+        }
+
+        try {
+            await this.saveSelected();
+            this.showToast('Saved', 'success');
+        } catch (error) {
+            console.error('Auto-save failed:', error);
+            this.showToast('Auto-save failed', 'error');
+        }
+    }
+
+    showToast(message, type = 'info', duration = 2000) {
+        const toast = document.getElementById('toast-notification');
+        toast.textContent = message;
+        toast.className = `toast-notification ${type} show`;
+        
+        if (duration > 0) {
+            setTimeout(() => {
+                toast.classList.remove('show');
+            }, duration);
+        }
     }
 
     async saveSelected() {
@@ -1371,7 +1440,7 @@ class App {
 
         const hasSelection = this.selectedIndices.size > 0;
         document.getElementById('batch-edit-btn').disabled = !hasSelection;
-        document.getElementById('batch-save-btn').disabled = !hasSelection;
+        this.updateSaveButtonState();
         document.getElementById('batch-remove-btn').disabled = !hasSelection;
         document.getElementById('view-ixml-btn').disabled = this.selectedIndices.size !== 1;
         document.getElementById('view-bext-btn').disabled = this.selectedIndices.size !== 1;
@@ -1380,6 +1449,21 @@ class App {
         document.getElementById('export-btn').disabled = !hasSelection;
         document.getElementById('save-mix-btn').disabled = this.selectedIndices.size !== 1;
         document.getElementById('load-mix-btn').disabled = this.selectedIndices.size !== 1;
+    }
+
+    updateSaveButtonState() {
+        const hasSelection = this.selectedIndices.size > 0;
+        const saveBtn = document.getElementById('batch-save-btn');
+        
+        if (this.autoSaveEnabled) {
+            saveBtn.disabled = true;
+            saveBtn.style.opacity = '0.5';
+            saveBtn.title = 'Auto-save is enabled';
+        } else {
+            saveBtn.disabled = !hasSelection;
+            saveBtn.style.opacity = '';
+            saveBtn.title = '';
+        }
     }
 
     openBatchEditModal() {

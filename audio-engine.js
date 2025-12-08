@@ -186,31 +186,21 @@ export class AudioEngine {
             this.masterBus = null;
         }
 
-        // Disconnect mixer nodes from old merger
-        if (this.mixerNodes) {
-            this.mixerNodes.forEach(node => {
-                if (node && node.output) {
-                    node.output.disconnect();
-                }
-            });
-        }
+        // Note: We don't disconnect mixer node outputs anymore since they're internally
+        // connected to the mixer's masterGain which connects to destination
 
         if (this.buffer && this.mixerNodes && this.mixerNodes.length > 0) {
             try {
                 const channelCount = Math.min(this.buffer.numberOfChannels, 32);
                 this.splitter = this.audioCtx.createChannelSplitter(channelCount);
-                // Use a GainNode as Master Bus to sum stereo outputs from panners
-                this.masterBus = this.audioCtx.createGain();
 
                 for (let i = 0; i < channelCount; i++) {
                     if (this.mixerNodes[i]) {
-                        // Splitter -> Mixer Input
+                        // Splitter -> Mixer Input (gainNode)
+                        // The mixer internally routes: gainNode -> analyser -> panNode -> masterGain -> destination
                         this.splitter.connect(this.mixerNodes[i].input, i);
-                        // Mixer Output -> Master Bus
-                        this.mixerNodes[i].output.connect(this.masterBus);
                     }
                 }
-                this.masterBus.connect(this.audioCtx.destination);
             } catch (err) {
                 console.error('Routing setup failed:', err);
             }

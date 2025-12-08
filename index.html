@@ -17,11 +17,17 @@
         <header class="app-header">
             <h1>Wave Agent X</h1>
             <div class="header-controls">
-                <button id="import-btn" class="btn primary">Import Audio Files</button>
+                <button id="import-btn" class="btn secondary">Import</button>
                 <div class="batch-actions">
+                    <button id="batch-remove-btn" class="btn secondary" disabled>Remove</button>
                     <button id="batch-edit-btn" class="btn secondary" disabled>Batch Edit</button>
-                    <button id="batch-save-btn" class="btn secondary" disabled>Save Selected</button>
-                    <button id="batch-remove-btn" class="btn secondary" disabled>Remove Selected</button>
+                    <button id="batch-save-btn" class="btn secondary" disabled>Save</button>
+                </div>
+                <div class="auto-save-toggle">
+                    <label>
+                        <input type="checkbox" id="auto-save-checkbox">
+                        <span>Auto-save metadata changes</span>
+                    </label>
                 </div>
             </div>
         </header>
@@ -418,6 +424,10 @@
             console.warn('⚠️ Service Workers not supported in this browser');
         }
     </script>
+
+    <!-- Toast Notification -->
+    <div id="toast-notification" class="toast-notification"></div>
+
 </body>
 
 </html>
