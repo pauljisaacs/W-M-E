@@ -22,7 +22,7 @@ class App {
                 // On state change (mute/solo), re-render waveform
                 const canvas = document.getElementById('waveform-canvas');
                 if (this.audioEngine.buffer) {
-                    this.audioEngine.renderWaveform(canvas, this.audioEngine.buffer, this.mixer.channels);
+                    this.audioEngine.renderWaveform(canvas, this.audioEngine.buffer, this.mixer.channels, this.cueMarkers, this.selectedCueMarkerId);
                 }
             }
         );
@@ -39,6 +39,11 @@ class App {
         this.currentFileMetadata = null; // Store current file's metadata for timecode
         this.region = { start: null, end: null }; // Selected time region
         this.isLooping = false; // Loop mode state
+        
+        // Cue Markers
+        this.cueMarkers = new CueMarkerCollection();
+        this.selectedCueMarkerId = null; // Track selected marker
+        this.draggingCueMarkerId = null; // Track marker being dragged
 
         this.initEventListeners();
         this.initDragAndDrop();
@@ -172,6 +177,18 @@ class App {
         document.getElementById('save-mix-btn').addEventListener('click', () => this.saveMixerSettingsToFile());
         document.getElementById('load-mix-btn').addEventListener('click', () => this.loadMixerSettingsFromFile());
 
+        // Cue Marker Modal controls
+        document.getElementById('cue-close-btn').addEventListener('click', () => this.closeCueMarkerModal());
+        document.getElementById('cue-cancel-btn').addEventListener('click', () => this.closeCueMarkerModal());
+        document.getElementById('cue-apply-btn').addEventListener('click', () => this.applyCueMarkerEdit());
+        document.getElementById('cue-delete-btn').addEventListener('click', () => this.deleteCueMarkerFromModal());
+
+        const cueMarkerModal = document.getElementById('cue-marker-modal');
+        cueMarkerModal.addEventListener('click', (e) => {
+            if (e.target.id === 'cue-marker-modal') {
+                this.closeCueMarkerModal();
+            }
+        });
 
         // Keyboard Shortcuts
         document.addEventListener('keydown', (e) => {
@@ -227,10 +244,41 @@ class App {
                 this.selectAll();
             }
 
-            // Delete/Backspace to remove selected files (only if not typing in an editable field)
-            if ((e.key === 'Backspace' || e.key === 'Delete') && this.selectedIndices.size > 0 && !this.isEditingText(e.target)) {
+            // Delete/Backspace to remove selected files or cue markers
+            if ((e.key === 'Backspace' || e.key === 'Delete') && !this.isEditingText(e.target)) {
                 e.preventDefault();
-                this.removeSelected();
+                
+                // If a cue marker is selected, delete it
+                if (this.selectedCueMarkerId !== null) {
+                    this.deleteCueMarker(this.selectedCueMarkerId);
+                }
+                // Otherwise, remove selected files
+                else if (this.selectedIndices.size > 0) {
+                    this.removeSelected();
+                }
+            }
+            
+            // M key - Create cue marker at current playhead position
+            if (e.key === 'm' && !this.isEditingText(e.target)) {
+                e.preventDefault();
+                if (this.audioEngine.buffer) {
+                    const time = this.audioEngine.getCurrentTime();
+                    if (time < this.audioEngine.buffer.duration) {
+                        this.createCueMarker(time);
+                    }
+                }
+            }
+            
+            // , key - Jump to previous cue marker
+            if (e.key === ',' && !this.isEditingText(e.target)) {
+                e.preventDefault();
+                this.jumpToPreviousCue();
+            }
+            
+            // . key - Jump to next cue marker
+            if (e.key === '.' && !this.isEditingText(e.target)) {
+                e.preventDefault();
+                this.jumpToNextCue();
             }
         });
 
@@ -277,10 +325,39 @@ class App {
         };
 
         let wasPlaying = false;
+        let isDraggingCueMarker = false;
+        let draggedCueMarkerId = null;
 
         canvas.addEventListener('mousedown', (e) => {
+            if (!this.audioEngine.buffer) return;
+
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+
+            // Check if clicking on a cue marker
+            const clickedMarker = this.cueMarkers.findAtCanvasPosition(
+                x,
+                rect.width,
+                this.audioEngine.buffer.duration
+            );
+
+            if (clickedMarker) {
+                // Start dragging cue marker
+                isDraggingCueMarker = true;
+                draggedCueMarkerId = clickedMarker.id;
+                this.selectedCueMarkerId = clickedMarker.id;
+                this.refreshWaveform();
+                e.stopPropagation();
+                return;
+            }
+
+            // Otherwise, start dragging playhead
             isDragging = true;
             wasPlaying = this.audioEngine.isPlaying;
+
+            // Deselect any selected marker
+            this.selectedCueMarkerId = null;
+            this.refreshWaveform();
 
             // Pause while dragging
             if (wasPlaying) {
@@ -292,12 +369,34 @@ class App {
         });
 
         canvas.addEventListener('mousemove', (e) => {
+            if (!this.audioEngine.buffer) return;
+
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+
+            if (isDraggingCueMarker && draggedCueMarkerId) {
+                // Update cue marker position
+                const time = canvasXToTime(x, rect.width, this.audioEngine.buffer.duration);
+                const clampedTime = Math.max(0, Math.min(time, this.audioEngine.buffer.duration));
+                this.cueMarkers.updateTime(draggedCueMarkerId, clampedTime);
+                this.refreshWaveform();
+                return;
+            }
+
             if (isDragging) {
                 updatePlayheadPosition(e);
             }
         });
 
         canvas.addEventListener('mouseup', (e) => {
+            if (isDraggingCueMarker) {
+                // Finished dragging cue marker - save changes
+                isDraggingCueMarker = false;
+                draggedCueMarkerId = null;
+                this.saveCueMarkers();
+                return;
+            }
+
             if (isDragging) {
                 const result = updatePlayheadPosition(e);
                 if (result) {
@@ -313,6 +412,14 @@ class App {
         });
 
         canvas.addEventListener('mouseleave', (e) => {
+            if (isDraggingCueMarker) {
+                // Finished dragging cue marker
+                isDraggingCueMarker = false;
+                draggedCueMarkerId = null;
+                this.saveCueMarkers();
+                return;
+            }
+
             if (isDragging) {
                 const result = updatePlayheadPosition(e);
                 if (result) {
@@ -324,6 +431,24 @@ class App {
                     }
                 }
                 isDragging = false;
+            }
+        });
+
+        // Double-click to edit cue marker
+        canvas.addEventListener('dblclick', (e) => {
+            if (!this.audioEngine.buffer) return;
+
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+
+            const clickedMarker = this.cueMarkers.findAtCanvasPosition(
+                x,
+                rect.width,
+                this.audioEngine.buffer.duration
+            );
+
+            if (clickedMarker) {
+                this.openCueMarkerModal(clickedMarker.id);
             }
         });
 
@@ -1630,7 +1755,7 @@ class App {
                 },
                 () => {
                     // Mixer state changed (mute/solo), re-render waveform
-                    this.audioEngine.renderWaveform(canvas, buffer, this.mixer.channels);
+                    this.audioEngine.renderWaveform(canvas, buffer, this.mixer.channels, this.cueMarkers, this.selectedCueMarkerId);
                 }
             );
 
@@ -1639,7 +1764,13 @@ class App {
             this.mixer.buildUI(trackCount, item.metadata.trackNames);
 
             // Render Waveform (initial)
-            this.audioEngine.renderWaveform(canvas, buffer, this.mixer.channels);
+            this.audioEngine.renderWaveform(canvas, buffer, this.mixer.channels, this.cueMarkers, this.selectedCueMarkerId);
+
+            // Load cue markers from file
+            await this.loadCueMarkers(item);
+
+            // Re-render waveform with loaded markers
+            this.audioEngine.renderWaveform(canvas, buffer, this.mixer.channels, this.cueMarkers, this.selectedCueMarkerId);
 
             // Connect Mixer to Audio Engine
             const mixerNodes = this.mixer.getChannelNodes();
@@ -2408,6 +2539,278 @@ class App {
         const h = Math.floor(totalSeconds / 3600);
 
         return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}:${frames.toString().padStart(2, '0')}`;
+    }
+
+    // ===== Cue Marker Methods =====
+
+    /**
+     * Create a new cue marker at specified time
+     */
+    createCueMarker(time) {
+        if (this.cueMarkers.isFull()) {
+            alert('Maximum 100 cue markers reached');
+            return;
+        }
+
+        const id = this.cueMarkers.add(time);
+        if (id) {
+            this.selectedCueMarkerId = id;
+            this.saveCueMarkers(); // Auto-save
+            this.refreshWaveform();
+            console.log(`Created cue marker at ${time.toFixed(3)}s`);
+        }
+    }
+
+    /**
+     * Delete a cue marker by ID
+     */
+    deleteCueMarker(id) {
+        if (this.cueMarkers.remove(id)) {
+            this.selectedCueMarkerId = null;
+            this.saveCueMarkers(); // Auto-save
+            this.refreshWaveform();
+            console.log(`Deleted cue marker #${id}`);
+        }
+    }
+
+    /**
+     * Jump to next cue marker
+     */
+    jumpToNextCue() {
+        if (!this.audioEngine.buffer) return;
+
+        const currentTime = this.audioEngine.getCurrentTime();
+        const nextMarker = this.cueMarkers.getNextMarker(currentTime);
+
+        let targetTime;
+        if (nextMarker) {
+            targetTime = nextMarker.time;
+            this.audioEngine.seek(targetTime);
+            this.selectedCueMarkerId = nextMarker.id;
+            console.log(`Jumped to next cue marker #${nextMarker.id} at ${targetTime.toFixed(3)}s`);
+        } else {
+            // No next marker - jump to 0.1s before end
+            targetTime = this.audioEngine.buffer.duration - 0.1;
+            this.audioEngine.seek(Math.max(0, targetTime));
+            this.selectedCueMarkerId = null;
+            console.log('No next cue marker - jumped to end');
+        }
+
+        // Update playhead UI
+        const percent = (targetTime / this.audioEngine.buffer.duration) * 100;
+        const playhead = document.getElementById('playhead');
+        if (playhead) {
+            playhead.style.left = `${percent}%`;
+        }
+        document.getElementById('current-time').textContent = this.formatTime(targetTime);
+        const currentTimecode = document.getElementById('current-timecode');
+        if (currentTimecode) {
+            currentTimecode.textContent = this.secondsToTimecode(targetTime);
+        }
+
+        this.refreshWaveform();
+    }
+
+    /**
+     * Jump to previous cue marker
+     */
+    jumpToPreviousCue() {
+        if (!this.audioEngine.buffer) return;
+
+        const currentTime = this.audioEngine.getCurrentTime();
+        const prevMarker = this.cueMarkers.getPreviousMarker(currentTime);
+
+        let targetTime;
+        if (prevMarker) {
+            targetTime = prevMarker.time;
+            this.audioEngine.seek(targetTime);
+            this.selectedCueMarkerId = prevMarker.id;
+            console.log(`Jumped to previous cue marker #${prevMarker.id} at ${targetTime.toFixed(3)}s`);
+        } else {
+            // No previous marker - jump to start
+            targetTime = 0;
+            this.audioEngine.seek(targetTime);
+            this.selectedCueMarkerId = null;
+            console.log('No previous cue marker - jumped to start');
+        }
+
+        // Update playhead UI
+        const percent = (targetTime / this.audioEngine.buffer.duration) * 100;
+        const playhead = document.getElementById('playhead');
+        if (playhead) {
+            playhead.style.left = `${percent}%`;
+        }
+        document.getElementById('current-time').textContent = this.formatTime(targetTime);
+        const currentTimecode = document.getElementById('current-timecode');
+        if (currentTimecode) {
+            currentTimecode.textContent = this.secondsToTimecode(targetTime);
+        }
+
+        this.refreshWaveform();
+    }
+
+    /**
+     * Refresh waveform rendering (to show updated cue markers)
+     */
+    refreshWaveform() {
+        const canvas = document.getElementById('waveform-canvas');
+        if (this.audioEngine.buffer && canvas) {
+            this.audioEngine.renderWaveform(canvas, this.audioEngine.buffer, this.mixer.channels, this.cueMarkers, this.selectedCueMarkerId);
+        }
+    }
+
+    /**
+     * Save cue markers to WAV file(s)
+     */
+    async saveCueMarkers() {
+        if (this.currentlyLoadedFileIndex === -1) {
+            console.warn('No file loaded - cannot save cue markers');
+            return;
+        }
+
+        const item = this.files[this.currentlyLoadedFileIndex];
+        const isGroup = item.isGroup;
+        const targets = isGroup ? item.siblings : [item];
+
+        for (const target of targets) {
+            try {
+                const arrayBuffer = await target.file.arrayBuffer();
+                const sampleRate = target.metadata.sampleRate;
+
+                if (!sampleRate) {
+                    console.error(`Cannot save cue markers: no sample rate for ${target.metadata.filename}`);
+                    continue;
+                }
+
+                // Create cue chunk
+                const cueChunk = this.metadataHandler.createCueChunk(
+                    this.cueMarkers.getAllSorted(),
+                    sampleRate
+                );
+
+                // Update iXML with sync points
+                const existingIXML = this.metadataHandler.getIXMLChunk(arrayBuffer);
+                const newIXML = this.metadataHandler.injectCuesIntoIXML(
+                    existingIXML,
+                    this.cueMarkers.getAllSorted(),
+                    sampleRate
+                );
+
+                // Write both chunks to file
+                await this.metadataHandler.updateCueMarkers(
+                    target.handle,
+                    arrayBuffer,
+                    cueChunk,
+                    newIXML
+                );
+
+                // Refresh file object
+                target.file = await target.handle.getFile();
+
+                console.log(`✓ Cue markers saved to ${target.metadata.filename}`);
+            } catch (err) {
+                console.error(`Failed to save cue markers to ${target.metadata.filename}:`, err);
+            }
+        }
+    }
+
+    /**
+     * Load cue markers from WAV file
+     */
+    async loadCueMarkers(item) {
+        this.cueMarkers.clear();
+        this.selectedCueMarkerId = null;
+
+        try {
+            const arrayBuffer = await item.file.arrayBuffer();
+            const sampleRate = item.metadata.sampleRate;
+
+            if (!sampleRate) {
+                console.warn('Cannot load cue markers: no sample rate');
+                return;
+            }
+
+            // Try loading from iXML first (has labels)
+            const ixmlString = this.metadataHandler.getIXMLChunk(arrayBuffer);
+            if (ixmlString) {
+                const syncPoints = this.metadataHandler.parseIXMLSyncPoints(ixmlString);
+                if (syncPoints && syncPoints.length > 0) {
+                    syncPoints.forEach(sp => {
+                        const time = sp.samplePosition / sampleRate;
+                        this.cueMarkers.add(time, sp.label || '');
+                    });
+                    console.log(`Loaded ${syncPoints.length} cue markers from iXML`);
+                    return;
+                }
+            }
+
+            // Fallback to cue chunk (no labels)
+            const cuePoints = this.metadataHandler.parseCueChunk(arrayBuffer);
+            if (cuePoints && cuePoints.length > 0) {
+                cuePoints.forEach(cp => {
+                    const time = cp.samplePosition / sampleRate;
+                    this.cueMarkers.add(time, '');
+                });
+                console.log(`Loaded ${cuePoints.length} cue markers from cue chunk`);
+            }
+        } catch (err) {
+            console.error('Error loading cue markers:', err);
+        }
+    }
+
+    /**
+     * Open cue marker edit modal
+     */
+    openCueMarkerModal(markerId) {
+        const marker = this.cueMarkers.findById(markerId);
+        if (!marker) return;
+
+        this.editingCueMarkerId = markerId;
+
+        document.getElementById('cue-label-input').value = marker.label || '';
+        document.getElementById('cue-time-display').value = this.formatTime(marker.time);
+
+        const modal = document.getElementById('cue-marker-modal');
+        modal.classList.add('active');
+
+        // Focus on label input
+        setTimeout(() => {
+            document.getElementById('cue-label-input').focus();
+        }, 100);
+    }
+
+    /**
+     * Close cue marker modal
+     */
+    closeCueMarkerModal() {
+        const modal = document.getElementById('cue-marker-modal');
+        modal.classList.remove('active');
+        this.editingCueMarkerId = null;
+    }
+
+    /**
+     * Apply cue marker label edit
+     */
+    applyCueMarkerEdit() {
+        if (!this.editingCueMarkerId) return;
+
+        const newLabel = document.getElementById('cue-label-input').value;
+        this.cueMarkers.updateLabel(this.editingCueMarkerId, newLabel);
+        this.saveCueMarkers();
+        this.refreshWaveform();
+        this.closeCueMarkerModal();
+    }
+
+    /**
+     * Delete cue marker from modal
+     */
+    deleteCueMarkerFromModal() {
+        if (!this.editingCueMarkerId) return;
+
+        if (confirm('Delete this cue marker?')) {
+            this.deleteCueMarker(this.editingCueMarkerId);
+            this.closeCueMarkerModal();
+        }
     }
 }
 
