@@ -204,6 +204,19 @@ class App {
             }
         });
 
+        // Combine Sibling Files controls
+        document.getElementById('combine-btn').addEventListener('click', () => this.openCombineModal());
+        document.getElementById('combine-close-btn').addEventListener('click', () => this.closeCombineModal());
+        document.getElementById('combine-cancel-btn').addEventListener('click', () => this.closeCombineModal());
+        document.getElementById('combine-confirm-btn').addEventListener('click', () => this.processCombineFiles());
+
+        const combineModal = document.getElementById('combine-modal');
+        combineModal.addEventListener('click', (e) => {
+            if (e.target.id === 'combine-modal') {
+                this.closeCombineModal();
+            }
+        });
+
         // Keyboard Shortcuts
         document.addEventListener('keydown', (e) => {
             // Arrow key navigation (only if not typing in an editable field)
@@ -1037,8 +1050,21 @@ class App {
 
         // Create all cells in original order (Draggable)
         // 0: Ch, 1: Bits, 2: Rate, 3: Filename, 4: Format, 5: Scene, 6: Take, 7: Duration, 8: TC Start, 9: FPS, 10: Notes, 11: Tape, 12: Project, 13: Date
+        
+        // Format channel display with Mono/Poly indicator
+        const item = this.files[index];
+        const channelCount = metadata.channels || 0;
+        
+        // For sibling groups, check if all siblings are mono (1 channel each)
+        const isMonoGroup = item.isGroup && item.siblings && item.siblings.every(s => s.metadata.channels === 1);
+        
+        const channelDisplay = isMonoGroup ? `${channelCount} (Mono)` :
+                               channelCount === 1 ? `${channelCount} (Mono)` : 
+                               channelCount >= 2 ? `${channelCount} (Poly)` : 
+                               channelCount;
+        
         const cells = [
-            createCell('channels', metadata.channels, false),
+            createCell('channels', channelDisplay, false),
             createCell('bitDepth', metadata.bitDepth ? metadata.bitDepth : '', false),
             createCell('sampleRate', metadata.sampleRate ? (metadata.sampleRate / 1000) + 'k' : '', false),
             createCell('filename', metadata.filename, false),
@@ -1449,6 +1475,10 @@ class App {
         document.getElementById('export-btn').disabled = !hasSelection;
         document.getElementById('save-mix-btn').disabled = this.selectedIndices.size !== 1;
         document.getElementById('load-mix-btn').disabled = this.selectedIndices.size !== 1;
+        
+        // Enable combine button if any sibling groups are detected in file list
+        const hasSiblingGroups = this.files.some(item => item.isGroup);
+        document.getElementById('combine-btn').disabled = !hasSiblingGroups;
     }
 
     updateSaveButtonState() {
@@ -1818,33 +1848,30 @@ class App {
             canvas.width = canvas.parentElement.clientWidth;
             canvas.height = canvas.parentElement.clientHeight;
 
-            // Use item.metadata.trackNames which is now synthesized for groups or loaded for single
-            // Initialize Mixer
-            this.mixer = new Mixer(this.audioEngine.audioCtx,
-                (trackIndex, newName) => {
-                    // Find the current item in the source of truth by filename
-                    // This is robust against sorting or index shifts
-                    const activeItem = this.files.find(f => f.metadata.filename === item.metadata.filename);
+            // Update mixer callbacks for this file (reuse existing mixer instance)
+            this.mixer.onTrackNameChange = (trackIndex, newName) => {
+                // Find the current item in the source of truth by filename
+                // This is robust against sorting or index shifts
+                const activeItem = this.files.find(f => f.metadata.filename === item.metadata.filename);
 
-                    if (activeItem) {
-                        if (!activeItem.metadata.trackNames) activeItem.metadata.trackNames = [];
-                        activeItem.metadata.trackNames[trackIndex] = newName;
-                        console.log(`Track ${trackIndex} renamed to ${newName} for ${activeItem.metadata.filename}`);
+                if (activeItem) {
+                    if (!activeItem.metadata.trackNames) activeItem.metadata.trackNames = [];
+                    activeItem.metadata.trackNames[trackIndex] = newName;
+                    console.log(`Track ${trackIndex} renamed to ${newName} for ${activeItem.metadata.filename}`);
 
-                        // Enable save button
-                        document.getElementById('batch-save-btn').disabled = false;
-                    } else {
-                        console.warn('Mixer callback error: Loaded file not found in current file list', item.metadata.filename);
-                    }
-                },
-                () => {
-                    // Mixer state changed (mute/solo), re-render waveform
-                    this.audioEngine.renderWaveform(canvas, buffer, this.mixer.channels, this.cueMarkers, this.selectedCueMarkerId);
+                    // Enable save button
+                    document.getElementById('batch-save-btn').disabled = false;
+                } else {
+                    console.warn('Mixer callback error: Loaded file not found in current file list', item.metadata.filename);
                 }
-            );
+            };
 
-            // Re-initialize mixer and build UI
-            await this.mixer.init('mixer-container');
+            this.mixer.onStateChange = () => {
+                // Mixer state changed (mute/solo), re-render waveform
+                this.audioEngine.renderWaveform(canvas, buffer, this.mixer.channels, this.cueMarkers, this.selectedCueMarkerId);
+            };
+
+            // Build mixer UI for this file (reuses existing mixer container)
             this.mixer.buildUI(trackCount, item.metadata.trackNames);
 
             // Render Waveform (initial)
@@ -2896,6 +2923,446 @@ class App {
             this.closeCueMarkerModal();
         }
     }
+
+    /**
+     * Open combine sibling files modal
+     */
+    openCombineModal() {
+        // Find all sibling groups
+        const siblingGroups = this.files.filter(item => item.isGroup);
+        
+        if (siblingGroups.length === 0) {
+            alert('No sibling file groups detected.');
+            return;
+        }
+
+        const container = document.getElementById('combine-groups-container');
+        container.innerHTML = '';
+
+        // Store combine state
+        this.combineGroups = siblingGroups.map((group, groupIndex) => {
+            const baseName = group.metadata.filename.replace(/_X\.wav$/, '');
+            
+            return {
+                groupIndex: groupIndex,
+                baseName: baseName,
+                siblings: group.siblings.map((sib, index) => ({
+                    originalIndex: index,
+                    handle: sib.handle,
+                    file: sib.file,
+                    metadata: sib.metadata,
+                    order: index,
+                    selected: true // All selected by default
+                })),
+                metadata: { ...group.metadata },
+                destinationHandle: null // Will store directory handle
+            };
+        });
+
+        // Render each group
+        this.combineGroups.forEach((group, groupIndex) => {
+            const groupDiv = document.createElement('div');
+            groupDiv.className = 'combine-group';
+            groupDiv.dataset.groupIndex = groupIndex;
+
+            const header = document.createElement('div');
+            header.className = 'combine-group-header';
+            header.innerHTML = `
+                <h4>${group.baseName}</h4>
+                <div class="combine-group-info">
+                    ${group.siblings.length} files • 
+                    ${group.metadata.sampleRate / 1000}kHz • 
+                    ${group.metadata.bitDepth}-bit • 
+                    ${group.metadata.duration}
+                </div>
+            `;
+
+            const fileList = document.createElement('div');
+            fileList.className = 'combine-file-list';
+            fileList.dataset.groupIndex = groupIndex;
+
+            group.siblings.forEach((sibling, index) => {
+                const fileItem = document.createElement('div');
+                fileItem.className = 'combine-file-item';
+                fileItem.draggable = true;
+                fileItem.dataset.groupIndex = groupIndex;
+                fileItem.dataset.fileIndex = index;
+
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.className = 'combine-file-checkbox';
+                checkbox.checked = true;
+                checkbox.dataset.groupIndex = groupIndex;
+                checkbox.dataset.fileIndex = index;
+                checkbox.addEventListener('change', (e) => {
+                    this.combineGroups[groupIndex].siblings[index].selected = e.target.checked;
+                    // Update channel count preview
+                    const selectedCount = this.combineGroups[groupIndex].siblings.filter(s => s.selected).length;
+                    const countSpan = groupDiv.querySelector('.selected-count');
+                    if (countSpan) {
+                        countSpan.textContent = selectedCount;
+                    }
+                });
+
+                const dragHandle = document.createElement('div');
+                dragHandle.className = 'drag-handle';
+                dragHandle.textContent = '⋮⋮';
+
+                const fileName = document.createElement('div');
+                fileName.className = 'file-name';
+                fileName.textContent = sibling.metadata.filename;
+
+                const channelLabel = document.createElement('div');
+                channelLabel.className = 'channel-label';
+                channelLabel.textContent = `Ch ${index + 1}`;
+
+                fileItem.appendChild(checkbox);
+                fileItem.appendChild(dragHandle);
+                fileItem.appendChild(fileName);
+                fileItem.appendChild(channelLabel);
+
+                // Drag and drop handlers
+                fileItem.addEventListener('dragstart', (e) => {
+                    e.dataTransfer.effectAllowed = 'move';
+                    e.dataTransfer.setData('text/plain', JSON.stringify({ groupIndex, fileIndex: index }));
+                    fileItem.classList.add('dragging');
+                });
+
+                fileItem.addEventListener('dragend', (e) => {
+                    fileItem.classList.remove('dragging');
+                });
+
+                fileItem.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'move';
+                    const dragging = fileList.querySelector('.dragging');
+                    if (dragging && dragging !== fileItem) {
+                        const rect = fileItem.getBoundingClientRect();
+                        const midpoint = rect.top + rect.height / 2;
+                        if (e.clientY < midpoint) {
+                            fileList.insertBefore(dragging, fileItem);
+                        } else {
+                            fileList.insertBefore(dragging, fileItem.nextSibling);
+                        }
+                    }
+                });
+
+                fileList.appendChild(fileItem);
+            });
+
+            const destination = document.createElement('div');
+            destination.className = 'combine-destination';
+            
+            const outputRow = document.createElement('div');
+            outputRow.className = 'combine-output-row';
+            outputRow.innerHTML = `
+                <label>Output filename:</label>
+                <input type="text" class="combine-output-name" value="${group.baseName}_poly.wav" data-group-index="${groupIndex}">
+            `;
+            
+            const destinationRow = document.createElement('div');
+            destinationRow.className = 'combine-destination-row';
+            destinationRow.innerHTML = `
+                <label>Save to:</label>
+                <button class="btn secondary combine-select-dir" data-group-index="${groupIndex}">Select Destination Folder</button>
+                <span class="combine-dest-path" data-group-index="${groupIndex}">Same as source files</span>
+            `;
+            
+            const dirButton = destinationRow.querySelector('.combine-select-dir');
+            dirButton.addEventListener('click', async () => {
+                try {
+                    const dirHandle = await window.showDirectoryPicker();
+                    this.combineGroups[groupIndex].destinationHandle = dirHandle;
+                    const pathSpan = destinationRow.querySelector('.combine-dest-path');
+                    pathSpan.textContent = dirHandle.name;
+                    pathSpan.style.color = 'var(--accent-primary)';
+                } catch (err) {
+                    if (err.name !== 'AbortError') {
+                        console.error('Error selecting directory:', err);
+                    }
+                }
+            });
+            
+            const selectionInfo = document.createElement('div');
+            selectionInfo.className = 'combine-selection-info';
+            selectionInfo.innerHTML = `
+                Selected: <span class="selected-count">${group.siblings.length}</span> / ${group.siblings.length} files
+            `;
+            
+            destination.appendChild(selectionInfo);
+            destination.appendChild(outputRow);
+            destination.appendChild(destinationRow);
+
+            groupDiv.appendChild(header);
+            groupDiv.appendChild(fileList);
+            groupDiv.appendChild(destination);
+            container.appendChild(groupDiv);
+        });
+
+        const modal = document.getElementById('combine-modal');
+        modal.classList.add('active');
+    }
+
+    /**
+     * Close combine modal
+     */
+    closeCombineModal() {
+        const modal = document.getElementById('combine-modal');
+        modal.classList.remove('active');
+        this.combineGroups = null;
+    }
+
+    /**
+     * Process combine operation for all groups
+     */
+    async processCombineFiles() {
+        if (!this.combineGroups || this.combineGroups.length === 0) {
+            console.error('No combine groups found');
+            alert('No groups to combine. Please close and reopen the Combine modal.');
+            return;
+        }
+
+        // Validate that all groups still exist in this.files
+        const currentSiblingGroups = this.files.filter(item => item.isGroup);
+        if (currentSiblingGroups.length === 0) {
+            console.error('No sibling groups found in current files');
+            alert('No sibling groups detected. Files may have been modified. Please close and reopen the Combine modal.');
+            return;
+        }
+
+        // Store groups in local variable before closing modal (closing modal will null this.combineGroups)
+        const groupsToProcess = this.combineGroups;
+
+        // Collect current order from DOM and filter selected files
+        groupsToProcess.forEach((group, groupIndex) => {
+            // Ensure siblings is always an array
+            if (!group.siblings || !Array.isArray(group.siblings)) {
+                console.error(`Invalid siblings array for group ${groupIndex}`);
+                group.siblings = [];
+                return;
+            }
+            
+            const fileList = document.querySelector(`.combine-file-list[data-group-index="${groupIndex}"]`) ||
+                            document.querySelectorAll('.combine-file-list')[groupIndex];
+            
+            if (!fileList) {
+                console.error(`Could not find file list for group ${groupIndex}`);
+                group.siblings = []; // Ensure it's an empty array, not undefined
+                return;
+            }
+            
+            const fileItems = fileList.querySelectorAll('.combine-file-item');
+            
+            const newOrder = [];
+            fileItems.forEach((item) => {
+                const fileIndex = parseInt(item.dataset.fileIndex);
+                const sibling = group.siblings[fileIndex];
+                if (sibling && sibling.selected) {
+                    newOrder.push(sibling);
+                }
+            });
+            
+            group.siblings = newOrder;
+            
+            // Get output filename
+            const outputInput = document.querySelector(`.combine-output-name[data-group-index="${groupIndex}"]`) ||
+                               document.querySelectorAll('.combine-output-name')[groupIndex];
+            group.outputFilename = outputInput.value.trim();
+            
+            if (!group.outputFilename) {
+                group.outputFilename = `${group.baseName}_poly.wav`;
+            } else if (!group.outputFilename.toLowerCase().endsWith('.wav')) {
+                group.outputFilename += '.wav';
+            }
+        });
+
+        this.closeCombineModal();
+
+        // Show progress overlay
+        const progressOverlay = document.getElementById('loading-overlay');
+        const progressText = document.getElementById('progress-text');
+        const progressFill = document.getElementById('progress-fill');
+        
+        if (!progressOverlay || !progressText || !progressFill) {
+            console.error('Progress overlay elements not found');
+            alert('Error: Progress overlay elements not found. Please refresh the page.');
+            return;
+        }
+        
+        progressOverlay.style.display = 'flex';
+
+        // Process each group
+        let successCount = 0;
+        let failCount = 0;
+        const totalGroups = groupsToProcess.length;
+
+        for (let i = 0; i < groupsToProcess.length; i++) {
+            const group = groupsToProcess[i];
+            
+            // Validate group exists
+            if (!group) {
+                console.error(`Group at index ${i} is null or undefined`);
+                failCount++;
+                continue;
+            }
+            
+            // Validate siblings array exists
+            if (!group.siblings || !Array.isArray(group.siblings)) {
+                console.error(`Invalid siblings array for group ${i}:`, group);
+                this.showToast(`${group.baseName || 'Group'}: Invalid file data`, 'error', 3000);
+                failCount++;
+                continue;
+            }
+            
+            // Validate at least 2 files selected
+            if (group.siblings.length < 2) {
+                this.showToast(`${group.baseName}: Need at least 2 files to combine (${group.siblings.length} selected)`, 'warning', 3000);
+                failCount++;
+                continue;
+            }
+            
+            try {
+                // Update progress
+                const progress = Math.round((i / totalGroups) * 100);
+                progressFill.style.width = `${progress}%`;
+                progressText.textContent = `${progress}%`;
+                
+                this.showToast(`Combining ${group.baseName} (${i + 1}/${totalGroups})...`, 'info', 0);
+
+                // Load all file buffers
+                const fileBuffers = await Promise.all(
+                    group.siblings.map(sib => sib.file.arrayBuffer())
+                );
+
+                // Extract track names
+                const trackNames = group.siblings.map((sib, i) => {
+                    if (sib.metadata.trackNames && sib.metadata.trackNames.length > 0) {
+                        return sib.metadata.trackNames[0];
+                    }
+                    return `Ch${i + 1}`;
+                });
+
+                // Combine audio files
+                const combinedBlob = await this.audioProcessor.combineToPolyphonic(
+                    fileBuffers,
+                    trackNames,
+                    group.metadata
+                );
+
+                // Prepare metadata for polyphonic file
+                const polyMetadata = {
+                    ...group.metadata,
+                    filename: group.outputFilename,
+                    channels: group.siblings.length,
+                    trackNames: trackNames
+                };
+
+                // Add metadata to combined file
+                const combinedArrayBuffer = await combinedBlob.arrayBuffer();
+                const finalBlob = await this.metadataHandler.saveWav(
+                    { arrayBuffer: async () => combinedArrayBuffer },
+                    polyMetadata
+                );
+
+                // Save file
+                const suggestedName = group.outputFilename;
+                let handle;
+                
+                try {
+                    if (group.destinationHandle) {
+                        // Save to selected directory
+                        handle = await group.destinationHandle.getFileHandle(suggestedName, { create: true });
+                        
+                        const writable = await handle.createWritable();
+                        await writable.write(finalBlob);
+                        await writable.close();
+                    } else {
+                        // Show save dialog
+                        handle = await window.showSaveFilePicker({
+                            suggestedName: suggestedName,
+                            types: [{
+                                description: 'WAV Audio',
+                                accept: { 'audio/wav': ['.wav'] }
+                            }]
+                        });
+
+                        const writable = await handle.createWritable();
+                        await writable.write(finalBlob);
+                        await writable.close();
+                    }
+
+                    console.log(`✓ Combined file saved: ${group.outputFilename}`);
+
+                    // Auto-add to file list
+                    const newFile = await handle.getFile();
+                    const metadata = await this.metadataHandler.parseFile(newFile);
+                    
+                    // Add as individual file
+                    this.files.push({
+                        handle: handle,
+                        metadata: metadata,
+                        file: newFile,
+                        isGroup: false
+                    });
+
+                    successCount++;
+                } catch (err) {
+                    console.error('Save failed:', err);
+                    if (err.name === 'AbortError') {
+                        // User cancelled
+                        failCount++;
+                    } else {
+                        // Fallback: trigger download
+                        const url = URL.createObjectURL(finalBlob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = suggestedName;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                        
+                        successCount++;
+                    }
+                }
+
+            } catch (err) {
+                console.error(`Failed to combine ${group.baseName}:`, err);
+                this.showToast(`Failed to combine ${group.baseName}: ${err.message}`, 'error', 5000);
+                failCount++;
+            }
+        }
+
+        // Hide progress overlay
+        if (progressOverlay) {
+            progressOverlay.style.display = 'none';
+        }
+        if (progressFill) {
+            progressFill.style.width = '0%';
+        }
+        if (progressText) {
+            progressText.textContent = '0%';
+        }
+
+        // Re-render table
+        const tbody = document.getElementById('file-list-body');
+        tbody.innerHTML = '';
+        this.files.forEach((file, i) => this.addTableRow(i, file.metadata));
+        this.updateSelectionUI();
+
+        // Close modal to prevent stale data issues
+        this.closeCombineModal();
+
+        // Show summary
+        if (successCount > 0) {
+            this.showToast(`Successfully combined ${successCount} file group(s)`, 'success', 3000);
+        }
+        
+        if (failCount > 0) {
+            this.showToast(`${failCount} group(s) failed to combine`, 'error', 5000);
+        }
+    }
 }
 
-const app = new App();
+// Wait for DOM to load before initializing app
+document.addEventListener('DOMContentLoaded', () => {
+    const app = new App();
+});

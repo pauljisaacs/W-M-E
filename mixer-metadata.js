@@ -29,13 +29,36 @@ export class MixerMetadata {
             xml += `    <SOLO>${ch.isSoloed}</SOLO>\n`;
 
             // Automation
-            if (ch.automation && ch.automation.volume && ch.automation.volume.length > 0) {
+            if (ch.automation && (ch.automation.volume?.length > 0 || ch.automation.pan?.length > 0 || ch.automation.mute?.length > 0)) {
                 xml += `    <AUTOMATION>\n`;
-                xml += `      <VOLUME_AUTOMATION>\n`;
-                ch.automation.volume.forEach(pt => {
-                    xml += `        <POINT time="${pt.time.toFixed(3)}" value="${pt.value.toFixed(4)}"/>\n`;
-                });
-                xml += `      </VOLUME_AUTOMATION>\n`;
+                
+                // Volume automation
+                if (ch.automation.volume && ch.automation.volume.length > 0) {
+                    xml += `      <VOLUME_AUTOMATION>\n`;
+                    ch.automation.volume.forEach(pt => {
+                        xml += `        <POINT time="${pt.time.toFixed(3)}" value="${pt.value.toFixed(4)}"/>\n`;
+                    });
+                    xml += `      </VOLUME_AUTOMATION>\n`;
+                }
+                
+                // Pan automation
+                if (ch.automation.pan && ch.automation.pan.length > 0) {
+                    xml += `      <PAN_AUTOMATION>\n`;
+                    ch.automation.pan.forEach(pt => {
+                        xml += `        <POINT time="${pt.time.toFixed(3)}" value="${pt.value.toFixed(4)}"/>\n`;
+                    });
+                    xml += `      </PAN_AUTOMATION>\n`;
+                }
+                
+                // Mute automation
+                if (ch.automation.mute && ch.automation.mute.length > 0) {
+                    xml += `      <MUTE_AUTOMATION>\n`;
+                    ch.automation.mute.forEach(pt => {
+                        xml += `        <POINT time="${pt.time.toFixed(3)}" value="${pt.value.toFixed(4)}"/>\n`;
+                    });
+                    xml += `      </MUTE_AUTOMATION>\n`;
+                }
+                
                 xml += `    </AUTOMATION>\n`;
             }
 
@@ -77,13 +100,36 @@ export class MixerMetadata {
                 const solo = chEl.querySelector('SOLO')?.textContent === 'true';
 
                 // Parse Automation
-                const automation = { volume: [], pan: [] };
+                const automation = { volume: [], pan: [], mute: [] };
                 const autoEl = chEl.querySelector('AUTOMATION');
                 if (autoEl) {
+                    // Parse volume automation
                     const volAuto = autoEl.querySelector('VOLUME_AUTOMATION');
                     if (volAuto) {
                         volAuto.querySelectorAll('POINT').forEach(pt => {
                             automation.volume.push({
+                                time: parseFloat(pt.getAttribute('time')),
+                                value: parseFloat(pt.getAttribute('value'))
+                            });
+                        });
+                    }
+                    
+                    // Parse pan automation
+                    const panAuto = autoEl.querySelector('PAN_AUTOMATION');
+                    if (panAuto) {
+                        panAuto.querySelectorAll('POINT').forEach(pt => {
+                            automation.pan.push({
+                                time: parseFloat(pt.getAttribute('time')),
+                                value: parseFloat(pt.getAttribute('value'))
+                            });
+                        });
+                    }
+                    
+                    // Parse mute automation
+                    const muteAuto = autoEl.querySelector('MUTE_AUTOMATION');
+                    if (muteAuto) {
+                        muteAuto.querySelectorAll('POINT').forEach(pt => {
+                            automation.mute.push({
                                 time: parseFloat(pt.getAttribute('time')),
                                 value: parseFloat(pt.getAttribute('value'))
                             });

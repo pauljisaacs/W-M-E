@@ -1,4 +1,4 @@
-const CACHE_NAME = 'wave-agent-x-v17';
+const CACHE_NAME = 'wave-agent-x-v47';
 const ASSETS = [
   './',
   './index.html',

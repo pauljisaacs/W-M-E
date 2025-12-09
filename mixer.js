@@ -13,6 +13,7 @@ export class Mixer {
         // Automation state
         this.isRecording = false;
         this.currentTime = 0;
+        this.sessionStartTime = 0; // Shared start time for all automation in a recording session
         this.automationRecorders = [];
         this.automationPlayers = [];
     }
@@ -34,12 +35,16 @@ export class Mixer {
 
             if (btn.classList.contains('mute-btn')) {
                 this.toggleMute(idx, btn);
+                e.stopPropagation();
             } else if (btn.classList.contains('solo-btn')) {
                 this.toggleSolo(idx, btn);
+                e.stopPropagation();
             } else if (btn.classList.contains('arm-btn')) {
                 this.toggleArm(idx);
+                e.stopPropagation();
             } else if (btn.classList.contains('clear-auto-btn')) {
                 this.clearAutomation(idx);
+                e.stopPropagation();
             }
         });
 
@@ -59,23 +64,77 @@ export class Mixer {
 
             if (input.classList.contains('volume-fader')) {
                 const val = parseFloat(input.value);
-                // If recording and armed, record point
-                if (this.isRecording && this.automationRecorders[idx].isRecording) {
+                // Touch-write mode: if armed and touching, record point
+                if (this.automationRecorders[idx] && this.automationRecorders[idx].isArmed && this.isTouchingFader[idx]) {
+                    if (!this.automationRecorders[idx].isRecording) {
+                        // Start recording for this touch - use session start time
+                        this.automationRecorders[idx].start(this.sessionStartTime);
+                    }
                     this.automationRecorders[idx].recordPoint(this.currentTime, val);
                 }
                 this.setVolume(idx, val);
             } else if (input.classList.contains('pan-knob')) {
                 const val = parseFloat(input.value);
-                // If recording and armed, record pan point
-                if (this.isRecording && this.panAutomationRecorders[idx].isRecording) {
+                
+                // Set touching state if not already set (input can fire before mousedown)
+                if (!this.isTouchingPan[idx]) {
+                    this.isTouchingPan[idx] = true;
+                }
+                
+                // Touch-write mode: if armed and touching, record point
+                if (this.panAutomationRecorders[idx] && this.panAutomationRecorders[idx].isArmed && this.isTouchingPan[idx]) {
+                    if (!this.panAutomationRecorders[idx].isRecording) {
+                        // Start recording for this touch - use session start time
+                        this.panAutomationRecorders[idx].start(this.sessionStartTime);
+                    }
                     this.panAutomationRecorders[idx].recordPoint(this.currentTime, val);
                 }
                 this.setPan(idx, val);
             }
         });
+        
+        // Track mouse/touch events on faders and pan knobs for touch-write automation
+        this.container.addEventListener('mousedown', (e) => {
+            const input = e.target;
+            const idx = parseInt(input.dataset.idx);
+            if (isNaN(idx)) return;
+            
+            if (input.classList.contains('volume-fader')) {
+                this.isTouchingFader[idx] = true;
+            } else if (input.classList.contains('pan-knob')) {
+                this.isTouchingPan[idx] = true;
+            }
+        });
+        
+        this.container.addEventListener('mouseup', (e) => {
+            const input = e.target;
+            const idx = parseInt(input.dataset.idx);
+            if (isNaN(idx) || idx >= this.channels.length) return;
+            
+            if (input.classList.contains('volume-fader')) {
+                this.handleFaderRelease(idx);
+            } else if (input.classList.contains('pan-knob')) {
+                this.handlePanRelease(idx);
+            }
+        });
+        
+        // Also handle mouse leaving while dragging
+        document.addEventListener('mouseup', () => {
+            // Release all touched controls
+            this.isTouchingFader.forEach((touching, idx) => {
+                if (touching) this.handleFaderRelease(idx);
+            });
+            this.isTouchingPan.forEach((touching, idx) => {
+                if (touching) this.handlePanRelease(idx);
+            });
+        });
     }
 
     buildUI(trackCount, trackNames = []) {
+        if (!this.container) {
+            console.error('Mixer container not initialized. Call init() first.');
+            return;
+        }
         this.container.innerHTML = '';
         this.channels = [];
         this.automationRecorders = [];
@@ -84,6 +143,8 @@ export class Mixer {
         this.panAutomationPlayers = [];
         this.muteAutomationRecorders = [];
         this.muteAutomationPlayers = [];
+        this.isTouchingFader = [];
+        this.isTouchingPan = [];
 
         // Create Master Fader Strip
         const masterStrip = document.createElement('div');
@@ -189,6 +250,8 @@ export class Mixer {
             this.panAutomationPlayers[i] = new AutomationPlayer([]);
             this.muteAutomationRecorders[i] = new AutomationRecorder(i, 'mute');
             this.muteAutomationPlayers[i] = new AutomationPlayer([]);
+            this.isTouchingFader[i] = false;
+            this.isTouchingPan[i] = false;
 
             const trackName = (trackNames && trackNames[i]) ? trackNames[i] : `Ch ${i + 1}`;
 
@@ -264,7 +327,7 @@ export class Mixer {
                 isSoloed: false,
                 canvas: strip.querySelector('.vu-meter'),
                 meterLevel: 0,
-                automation: { volume: [], pan: [] }
+                automation: { volume: [], pan: [], mute: [] }
             });
         }
 
@@ -273,13 +336,17 @@ export class Mixer {
 
     toggleArm(idx) {
         const recorder = this.automationRecorders[idx];
+        const panRecorder = this.panAutomationRecorders[idx];
+        const muteRecorder = this.muteAutomationRecorders[idx];
         const btn = this.container.querySelector(`.arm-btn[data-idx="${idx}"]`);
 
         // We use a custom property on the recorder to track "Armed" state
         // The recorder.isRecording property tracks actual recording (during playback)
         if (recorder.isArmed) {
-            // Disarm
+            // Disarm volume, pan, and mute
             recorder.isArmed = false;
+            panRecorder.isArmed = false;
+            muteRecorder.isArmed = false;
             btn.classList.remove('active');
 
             // If currently recording, stop this track
@@ -290,31 +357,60 @@ export class Mixer {
                     this.automationPlayers[idx].points = points;
                     this.updateAutomationUI(idx);
                 }
+                
+                const panPoints = panRecorder.stop();
+                if (panPoints.length > 0) {
+                    this.channels[idx].automation.pan = panPoints;
+                    this.panAutomationPlayers[idx].points = panPoints;
+                }
+                
+                const mutePoints = muteRecorder.stop();
+                console.log(`[Mute] Stopped mute recorder for channel ${idx}, points:`, mutePoints.length);
+                if (mutePoints.length > 0) {
+                    this.channels[idx].automation.mute = mutePoints;
+                    this.muteAutomationPlayers[idx].points = mutePoints;
+                    console.log(`[Mute] Saved ${mutePoints.length} mute automation points for channel ${idx}`);
+                }
             }
         } else {
-            // Arm
+            // Arm volume, pan, and mute
             recorder.isArmed = true;
+            panRecorder.isArmed = true;
+            muteRecorder.isArmed = true;
             btn.classList.add('active');
 
             // If currently recording, start this track
             if (this.isRecording) {
-                recorder.start(this.currentTime);
+                recorder.start(this.sessionStartTime);
                 recorder.recordPoint(this.currentTime, this.channels[idx].volume);
+                
+                panRecorder.start(this.sessionStartTime);
+                panRecorder.recordPoint(this.currentTime, this.channels[idx].pan);
+                
+                muteRecorder.start(this.sessionStartTime);
+                muteRecorder.recordPoint(this.currentTime, this.channels[idx].isMuted ? 1 : 0);
             }
         }
     }
 
     clearAutomation(idx) {
         if (confirm(`Clear automation for Channel ${idx + 1}?`)) {
+            // Clear volume, pan, and mute automation
             this.channels[idx].automation.volume = [];
+            this.channels[idx].automation.pan = [];
+            this.channels[idx].automation.mute = [];
             this.automationPlayers[idx].clear();
+            this.panAutomationPlayers[idx].clear();
+            this.muteAutomationPlayers[idx].clear();
             this.updateAutomationUI(idx);
         }
     }
 
     updateAutomationUI(idx) {
         const fader = this.container.querySelector(`.volume-fader[data-idx="${idx}"]`);
-        const hasAuto = this.channels[idx].automation.volume.length > 0;
+        const hasAuto = this.channels[idx].automation.volume.length > 0 || 
+                        this.channels[idx].automation.pan.length > 0 || 
+                        this.channels[idx].automation.mute.length > 0;
         if (hasAuto) {
             fader.classList.add('has-automation');
         } else {
@@ -326,50 +422,17 @@ export class Mixer {
     }
 
     startRecording(startTime) {
+        // Touch-write automation mode: Recording happens automatically when
+        // armed controls are touched during playback. This method kept for compatibility.
         this.isRecording = true;
         this.currentTime = startTime;
-
-        this.automationRecorders.forEach((recorder, idx) => {
-            if (recorder.isArmed) {
-                recorder.start(startTime);
-                recorder.recordPoint(startTime, this.channels[idx].volume);
-                // Also start pan and mute recording
-                this.panAutomationRecorders[idx].start(startTime);
-                this.panAutomationRecorders[idx].recordPoint(startTime, this.channels[idx].panNode ? this.channels[idx].panNode.pan.value : 0);
-                this.muteAutomationRecorders[idx].start(startTime);
-                this.muteAutomationRecorders[idx].recordPoint(startTime, this.channels[idx].isMuted ? 1 : 0);
-            }
-        });
+        this.sessionStartTime = startTime; // Set session start time for all automation
     }
 
     stopRecording() {
+        // Touch-write automation mode: Recording stops automatically when
+        // controls are released. This method kept for compatibility.
         this.isRecording = false;
-
-        this.automationRecorders.forEach((recorder, idx) => {
-            if (recorder.isArmed) {
-                const volumePoints = recorder.stop();
-                if (volumePoints.length > 0) {
-                    this.channels[idx].automation.volume = volumePoints;
-                    this.automationPlayers[idx].points = volumePoints;
-                }
-
-                // Stop and save pan automation
-                const panPoints = this.panAutomationRecorders[idx].stop();
-                if (panPoints.length > 0) {
-                    this.channels[idx].automation.pan = panPoints;
-                    this.panAutomationPlayers[idx].points = panPoints;
-                }
-
-                // Stop and save mute automation
-                const mutePoints = this.muteAutomationRecorders[idx].stop();
-                if (mutePoints.length > 0) {
-                    this.channels[idx].automation.mute = mutePoints;
-                    this.muteAutomationPlayers[idx].points = mutePoints;
-                }
-
-                this.updateAutomationUI(idx);
-            }
-        });
     }
 
     updateAutomation(currentTime) {
@@ -378,15 +441,22 @@ export class Mixer {
         this.automationPlayers.forEach((player, idx) => {
             const recorder = this.automationRecorders[idx];
 
-            // Only play back if NOT recording on this channel
-            // (If armed and recording, user is controlling fader)
-            if (!recorder.isArmed || !this.isRecording) {
+            // Touch-write mode: play back automation unless user is currently touching the control
+            // Volume: play back if not touching fader OR not armed
+            if (!this.isTouchingFader[idx] || !recorder.isArmed) {
                 const volumeVal = player.getValue(currentTime);
                 if (volumeVal !== null) {
                     this.setVolume(idx, volumeVal, true);
+                    // Update volume fader UI
+                    const volumeFader = this.container.querySelector(`.volume-fader[data-idx="${idx}"]`);
+                    if (volumeFader && Math.abs(volumeFader.value - volumeVal) > 0.01) {
+                        volumeFader.value = volumeVal;
+                    }
                 }
+            }
 
-                // Play back pan automation
+            // Pan: play back if not touching pan knob OR not armed
+            if (!this.isTouchingPan[idx] || (this.panAutomationRecorders[idx] && !this.panAutomationRecorders[idx].isArmed)) {
                 const panVal = this.panAutomationPlayers[idx].getValue(currentTime);
                 if (panVal !== null) {
                     this.setPan(idx, panVal);
@@ -396,24 +466,65 @@ export class Mixer {
                         panKnob.value = panVal;
                     }
                 }
+            }
 
-                // Play back mute automation
-                const muteVal = this.muteAutomationPlayers[idx].getValue(currentTime);
-                if (muteVal !== null) {
-                    const shouldBeMuted = muteVal > 0.5;
-                    if (this.channels[idx].isMuted !== shouldBeMuted) {
-                        const muteBtn = this.container.querySelector(`.mute-btn[data-idx="${idx}"]`);
-                        if (muteBtn) {
-                            this.toggleMute(idx, muteBtn);
+            // Mute automation always plays back (no touch override for mute)
+            const muteVal = this.muteAutomationPlayers[idx].getValue(currentTime);
+            if (muteVal !== null) {
+                const shouldBeMuted = muteVal > 0.5;
+                if (this.channels[idx].isMuted !== shouldBeMuted) {
+                    // Directly set mute state (don't toggle)
+                    this.channels[idx].isMuted = shouldBeMuted;
+                    const muteBtn = this.container.querySelector(`.mute-btn[data-idx="${idx}"]`);
+                    if (muteBtn) {
+                        if (shouldBeMuted) {
+                            muteBtn.classList.add('active');
+                        } else {
+                            muteBtn.classList.remove('active');
                         }
                     }
+                    this.updateGains();
+                    if (this.onStateChange) this.onStateChange();
                 }
             }
         });
     }
 
+    handleFaderRelease(idx) {
+        if (!this.isTouchingFader[idx]) return;
+        this.isTouchingFader[idx] = false;
+        
+        // If armed and was recording during touch, stop and save automation
+        if (this.automationRecorders[idx] && this.automationRecorders[idx].isArmed && this.automationRecorders[idx].isRecording) {
+            const points = this.automationRecorders[idx].stop();
+            if (points.length > 0) {
+                this.channels[idx].automation.volume = points;
+                this.automationPlayers[idx].points = points;
+                this.updateAutomationUI(idx);
+            }
+        }
+    }
+
+    handlePanRelease(idx) {
+        if (!this.isTouchingPan[idx]) return;
+        this.isTouchingPan[idx] = false;
+        
+        // If armed and was recording during touch, stop and save automation
+        if (this.panAutomationRecorders[idx] && this.panAutomationRecorders[idx].isArmed && this.panAutomationRecorders[idx].isRecording) {
+            const points = this.panAutomationRecorders[idx].stop();
+            if (points.length > 0) {
+                this.channels[idx].automation.pan = points;
+                this.panAutomationPlayers[idx].points = points;
+            }
+        }
+    }
+
     setVolume(idx, val, fromAutomation = false) {
         const ch = this.channels[idx];
+        if (!ch || !isFinite(val)) {
+            if (!isFinite(val)) console.warn(`setVolume: non-finite value ${val} for channel ${idx}`);
+            return;
+        }
         ch.volume = val;
 
         if (ch.gainNode && this.audioCtx) {
@@ -465,7 +576,13 @@ export class Mixer {
         }
 
         // If recording and armed, record mute state
-        if (this.isRecording && this.muteAutomationRecorders[index].isRecording) {
+        if (this.isRecording && this.muteAutomationRecorders[index].isArmed) {
+            if (!this.muteAutomationRecorders[index].isRecording) {
+                // Start recording for this mute change - use session start time
+                console.log(`[Mute] Starting mute automation recording for channel ${index}`);
+                this.muteAutomationRecorders[index].start(this.sessionStartTime);
+            }
+            console.log(`[Mute] Recording mute point: channel=${index}, time=${this.currentTime}, value=${ch.isMuted ? 1 : 0}`);
             this.muteAutomationRecorders[index].recordPoint(this.currentTime, ch.isMuted ? 1 : 0);
         }
 
@@ -664,6 +781,12 @@ export class Mixer {
                 ch.automation = chState.automation;
                 if (chState.automation.volume) {
                     this.automationPlayers[index].points = chState.automation.volume;
+                }
+                if (chState.automation.pan) {
+                    this.panAutomationPlayers[index].points = chState.automation.pan;
+                }
+                if (chState.automation.mute) {
+                    this.muteAutomationPlayers[index].points = chState.automation.mute;
                 }
                 this.updateAutomationUI(index);
             }

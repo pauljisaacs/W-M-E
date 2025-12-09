@@ -365,4 +365,149 @@ export class AudioProcessor {
             if (chunkSize % 2 !== 0) offset++;
         }
     }
+
+    /**
+     * Combines multiple monophonic WAV files into a single polyphonic WAV file.
+     * @param {Array<ArrayBuffer>} fileBuffers - Array of WAV file buffers to combine
+     * @param {Array<String>} trackNames - Array of track names for each channel
+     * @param {Object} metadata - Metadata object to apply to the combined file
+     * @returns {Promise<Blob>} - The combined WAV file as a Blob
+     */
+    async combineToPolyphonic(fileBuffers, trackNames, metadata) {
+        console.log(`[Combine] Combining ${fileBuffers.length} files into polyphonic file`);
+        
+        // Parse all files and validate compatibility
+        const fileInfos = [];
+        let referenceSampleRate = null;
+        let referenceBitDepth = null;
+        let referenceAudioFormat = null;
+        let referenceDataSize = null;
+        let referenceDuration = null;
+        
+        for (let i = 0; i < fileBuffers.length; i++) {
+            const view = new DataView(fileBuffers[i]);
+            const info = this.parseWavFormat(view);
+            
+            if (!info) {
+                throw new Error(`File ${i + 1} is not a valid WAV file`);
+            }
+            
+            if (info.channels !== 1) {
+                throw new Error(`File ${i + 1} is not monophonic (has ${info.channels} channels)`);
+            }
+            
+            // Store reference values from first file
+            if (i === 0) {
+                referenceSampleRate = info.sampleRate;
+                referenceBitDepth = info.bitDepth;
+                referenceAudioFormat = info.audioFormat;
+                referenceDataSize = info.dataSize;
+                referenceDuration = info.dataSize / (info.sampleRate * (info.bitDepth / 8));
+            } else {
+                // Validate compatibility
+                if (info.sampleRate !== referenceSampleRate) {
+                    throw new Error(`Sample rate mismatch: File 1 has ${referenceSampleRate}Hz, File ${i + 1} has ${info.sampleRate}Hz`);
+                }
+                if (info.bitDepth !== referenceBitDepth) {
+                    throw new Error(`Bit depth mismatch: File 1 has ${referenceBitDepth}-bit, File ${i + 1} has ${info.bitDepth}-bit`);
+                }
+                if (info.audioFormat !== referenceAudioFormat) {
+                    throw new Error(`Audio format mismatch: File 1 has format ${referenceAudioFormat}, File ${i + 1} has format ${info.audioFormat}`);
+                }
+                if (info.dataSize !== referenceDataSize) {
+                    const duration = info.dataSize / (info.sampleRate * (info.bitDepth / 8));
+                    throw new Error(`Duration mismatch: File 1 has ${referenceDuration.toFixed(3)}s, File ${i + 1} has ${duration.toFixed(3)}s`);
+                }
+            }
+            
+            fileInfos.push(info);
+        }
+        
+        console.log(`[Combine] All files validated: ${referenceSampleRate}Hz, ${referenceBitDepth}-bit, ${fileBuffers.length} channels`);
+        
+        // Calculate output parameters
+        const numChannels = fileBuffers.length;
+        const sampleRate = referenceSampleRate;
+        const bitDepth = referenceBitDepth;
+        const audioFormat = referenceAudioFormat;
+        const bytesPerSample = bitDepth / 8;
+        const numSamples = referenceDataSize / bytesPerSample;
+        const blockAlign = numChannels * bytesPerSample;
+        const byteRate = sampleRate * blockAlign;
+        const dataSize = numSamples * blockAlign;
+        
+        // Create output buffer
+        const outputBuffer = new ArrayBuffer(44 + dataSize); // RIFF header + fmt + data
+        const outputView = new DataView(outputBuffer);
+        
+        // Write RIFF header
+        outputView.setUint8(0, 0x52); // R
+        outputView.setUint8(1, 0x49); // I
+        outputView.setUint8(2, 0x46); // F
+        outputView.setUint8(3, 0x46); // F
+        outputView.setUint32(4, 36 + dataSize, true); // File size - 8
+        outputView.setUint8(8, 0x57); // W
+        outputView.setUint8(9, 0x41); // A
+        outputView.setUint8(10, 0x56); // V
+        outputView.setUint8(11, 0x45); // E
+        
+        // Write fmt chunk
+        outputView.setUint8(12, 0x66); // f
+        outputView.setUint8(13, 0x6D); // m
+        outputView.setUint8(14, 0x74); // t
+        outputView.setUint8(15, 0x20); // space
+        outputView.setUint32(16, 16, true); // fmt chunk size
+        outputView.setUint16(20, audioFormat, true); // Audio format (1=PCM, 3=Float)
+        outputView.setUint16(22, numChannels, true); // Number of channels
+        outputView.setUint32(24, sampleRate, true); // Sample rate
+        outputView.setUint32(28, byteRate, true); // Byte rate
+        outputView.setUint16(32, blockAlign, true); // Block align
+        outputView.setUint16(34, bitDepth, true); // Bits per sample
+        
+        // Write data chunk header
+        outputView.setUint8(36, 0x64); // d
+        outputView.setUint8(37, 0x61); // a
+        outputView.setUint8(38, 0x74); // t
+        outputView.setUint8(39, 0x61); // a
+        outputView.setUint32(40, dataSize, true); // Data size
+        
+        // Interleave audio data
+        console.log(`[Combine] Interleaving ${numSamples} samples across ${numChannels} channels`);
+        
+        let outputOffset = 44; // Start of data chunk
+        
+        for (let sample = 0; sample < numSamples; sample++) {
+            for (let channel = 0; channel < numChannels; channel++) {
+                const fileView = new DataView(fileBuffers[channel]);
+                const fileInfo = fileInfos[channel];
+                const inputOffset = fileInfo.dataOffset + (sample * bytesPerSample);
+                
+                // Copy sample based on bit depth and format
+                if (audioFormat === 3 && bitDepth === 32) { // Float
+                    const value = fileView.getFloat32(inputOffset, true);
+                    outputView.setFloat32(outputOffset, value, true);
+                } else if (bitDepth === 16) {
+                    const value = fileView.getInt16(inputOffset, true);
+                    outputView.setInt16(outputOffset, value, true);
+                } else if (bitDepth === 24) {
+                    const b0 = fileView.getUint8(inputOffset);
+                    const b1 = fileView.getUint8(inputOffset + 1);
+                    const b2 = fileView.getUint8(inputOffset + 2);
+                    outputView.setUint8(outputOffset, b0);
+                    outputView.setUint8(outputOffset + 1, b1);
+                    outputView.setUint8(outputOffset + 2, b2);
+                } else if (bitDepth === 32) { // Int32
+                    const value = fileView.getInt32(inputOffset, true);
+                    outputView.setInt32(outputOffset, value, true);
+                }
+                
+                outputOffset += bytesPerSample;
+            }
+        }
+        
+        console.log(`[Combine] Audio data interleaved successfully`);
+        
+        // Create blob and return (metadata will be added via MetadataHandler)
+        return new Blob([outputBuffer], { type: 'audio/wav' });
+    }
 }

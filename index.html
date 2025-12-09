@@ -22,6 +22,7 @@
                     <button id="batch-remove-btn" class="btn secondary" disabled>Remove</button>
                     <button id="batch-edit-btn" class="btn secondary" disabled>Batch Edit</button>
                     <button id="batch-save-btn" class="btn secondary" disabled>Save</button>
+                    <button id="combine-btn" class="btn secondary" disabled>Combine Sibling Files</button>
                 </div>
                 <div class="auto-save-toggle">
                     <label>
@@ -424,6 +425,25 @@
             console.warn('⚠️ Service Workers not supported in this browser');
         }
     </script>
+
+    <!-- Combine Sibling Files Modal -->
+    <div id="combine-modal" class="modal">
+        <div class="modal-content large-modal">
+            <div class="modal-header">
+                <h3>Combine Sibling Files into Polyphonic File</h3>
+                <button class="close-modal" id="combine-close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="combine-groups-container">
+                    <!-- Sibling groups will be listed here -->
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="combine-cancel-btn" class="btn secondary">Cancel</button>
+                <button id="combine-confirm-btn" class="btn primary">Combine Files</button>
+            </div>
+        </div>
+    </div>
 
     <!-- Toast Notification -->
     <div id="toast-notification" class="toast-notification"></div>
