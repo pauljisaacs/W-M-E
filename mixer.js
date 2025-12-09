@@ -249,7 +249,7 @@ export class Mixer {
             this.panAutomationRecorders[i] = new AutomationRecorder(i, 'pan');
             this.panAutomationPlayers[i] = new AutomationPlayer([]);
             this.muteAutomationRecorders[i] = new AutomationRecorder(i, 'mute');
-            this.muteAutomationPlayers[i] = new AutomationPlayer([]);
+            this.muteAutomationPlayers[i] = new AutomationPlayer([], 'step'); // Use step interpolation for mute
             this.isTouchingFader[i] = false;
             this.isTouchingPan[i] = false;
 
@@ -385,12 +385,16 @@ export class Mixer {
                 recorder.recordPoint(this.currentTime, this.channels[idx].volume);
                 
                 panRecorder.start(this.sessionStartTime);
-                panRecorder.recordPoint(this.currentTime, this.channels[idx].pan);
+                const panValue = this.channels[idx].panNode ? this.channels[idx].panNode.pan.value : 0;
+                panRecorder.recordPoint(this.currentTime, panValue);
                 
                 muteRecorder.start(this.sessionStartTime);
                 muteRecorder.recordPoint(this.currentTime, this.channels[idx].isMuted ? 1 : 0);
             }
         }
+        
+        // Update the arm all button state after individual arm/disarm
+        this.updateArmAllButtonState();
     }
 
     clearAutomation(idx) {
@@ -404,6 +408,136 @@ export class Mixer {
             this.muteAutomationPlayers[idx].clear();
             this.updateAutomationUI(idx);
         }
+    }
+
+    clearAllAutomation() {
+        if (confirm(`Clear all automation on all ${this.channels.length} channels?`)) {
+            for (let i = 0; i < this.channels.length; i++) {
+                // Clear volume, pan, and mute automation
+                this.channels[i].automation.volume = [];
+                this.channels[i].automation.pan = [];
+                this.channels[i].automation.mute = [];
+                this.automationPlayers[i].clear();
+                this.panAutomationPlayers[i].clear();
+                this.muteAutomationPlayers[i].clear();
+                this.updateAutomationUI(i);
+            }
+            console.log('Cleared all automation on all channels');
+        }
+    }
+
+    toggleArmAll() {
+        // Check if any channel is armed
+        const anyArmed = this.automationRecorders.some(recorder => recorder.isArmed);
+        
+        // If any are armed, disarm all. Otherwise, arm all.
+        const shouldArm = !anyArmed;
+        
+        for (let i = 0; i < this.channels.length; i++) {
+            const recorder = this.automationRecorders[i];
+            const panRecorder = this.panAutomationRecorders[i];
+            const muteRecorder = this.muteAutomationRecorders[i];
+            const btn = this.container.querySelector(`.arm-btn[data-idx="${i}"]`);
+            
+            if (shouldArm) {
+                // Arm all
+                if (!recorder.isArmed) {
+                    recorder.isArmed = true;
+                    panRecorder.isArmed = true;
+                    muteRecorder.isArmed = true;
+                    btn.classList.add('active');
+                    
+                    // If currently recording, start this track
+                    if (this.isRecording) {
+                        recorder.start(this.sessionStartTime);
+                        recorder.recordPoint(this.currentTime, this.channels[i].volume);
+                        
+                        panRecorder.start(this.sessionStartTime);
+                        const panValue = this.channels[i].panNode ? this.channels[i].panNode.pan.value : 0;
+                        panRecorder.recordPoint(this.currentTime, panValue);
+                        
+                        muteRecorder.start(this.sessionStartTime);
+                        muteRecorder.recordPoint(this.currentTime, this.channels[i].isMuted ? 1 : 0);
+                    }
+                }
+            } else {
+                // Disarm all
+                if (recorder.isArmed) {
+                    recorder.isArmed = false;
+                    panRecorder.isArmed = false;
+                    muteRecorder.isArmed = false;
+                    btn.classList.remove('active');
+                    
+                    // If currently recording, stop this track
+                    if (this.isRecording) {
+                        const points = recorder.stop();
+                        if (points.length > 0) {
+                            this.channels[i].automation.volume = points;
+                            this.automationPlayers[i].points = points;
+                            this.updateAutomationUI(i);
+                        }
+                        
+                        const panPoints = panRecorder.stop();
+                        if (panPoints.length > 0) {
+                            this.channels[i].automation.pan = panPoints;
+                            this.panAutomationPlayers[i].points = panPoints;
+                        }
+                        
+                        const mutePoints = muteRecorder.stop();
+                        if (mutePoints.length > 0) {
+                            this.channels[i].automation.mute = mutePoints;
+                            this.muteAutomationPlayers[i].points = mutePoints;
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Update the button text
+        this.updateArmAllButtonState();
+        
+        console.log(shouldArm ? 'Armed all channels' : 'Disarmed all channels');
+    }
+
+    updateArmAllButtonState() {
+        const btn = document.getElementById('arm-all-btn');
+        if (!btn) return;
+        
+        const anyArmed = this.automationRecorders.some(recorder => recorder.isArmed);
+        btn.textContent = anyArmed ? 'Disarm All' : 'Arm All';
+        btn.classList.toggle('active', anyArmed);
+    }
+
+    toggleMuteAll() {
+        // Check if any channel is muted
+        const anyMuted = this.channels.some(ch => ch.isMuted);
+        
+        // If any are muted, unmute all. Otherwise, mute all.
+        const shouldMute = !anyMuted;
+        
+        for (let i = 0; i < this.channels.length; i++) {
+            const ch = this.channels[i];
+            const btn = this.container.querySelector(`.mute-btn[data-idx="${i}"]`);
+            
+            if (ch.isMuted !== shouldMute) {
+                // Toggle this channel's mute state
+                this.toggleMute(i, btn);
+            }
+        }
+        
+        // Update button text
+        this.updateMuteAllButtonState();
+        
+        console.log(shouldMute ? 'Muted all channels' : 'Unmuted all channels');
+    }
+
+    updateMuteAllButtonState() {
+        const btn = document.getElementById('mute-all-btn');
+        if (!btn) return;
+        
+        const anyMuted = this.channels.some(ch => ch.isMuted);
+        btn.textContent = anyMuted ? 'Unmute All' : 'Mute All';
+        btn.classList.toggle('active', anyMuted);
     }
 
     updateAutomationUI(idx) {
@@ -423,29 +557,87 @@ export class Mixer {
 
     startRecording(startTime) {
         // Touch-write automation mode: Recording happens automatically when
-        // armed controls are touched during playback. This method kept for compatibility.
+        // armed controls are touched during playback.
         this.isRecording = true;
         this.currentTime = startTime;
         this.sessionStartTime = startTime; // Set session start time for all automation
+        
+        // Record initial state for all armed channels at the start time
+        // Only if they haven't already recorded points (to preserve existing automation)
+        if (!this.channels || !this.automationRecorders) return; // Safety check
+        
+        for (let i = 0; i < this.channels.length; i++) {
+            // Volume automation - only record initial state if no points exist yet
+            if (this.automationRecorders[i] && this.automationRecorders[i].isArmed && !this.automationRecorders[i].isRecording && this.automationRecorders[i].points.length === 0) {
+                this.automationRecorders[i].start(startTime);
+                this.automationRecorders[i].recordPoint(startTime, this.channels[i].volume);
+            }
+            
+            // Pan automation - only record initial state if no points exist yet
+            if (this.panAutomationRecorders[i] && this.panAutomationRecorders[i].isArmed && !this.panAutomationRecorders[i].isRecording && this.panAutomationRecorders[i].points.length === 0) {
+                this.panAutomationRecorders[i].start(startTime);
+                const panValue = this.channels[i].panNode ? this.channels[i].panNode.pan.value : 0;
+                this.panAutomationRecorders[i].recordPoint(startTime, panValue);
+            }
+            
+            // Mute automation - only record initial state if no points exist yet
+            if (this.muteAutomationRecorders[i] && this.muteAutomationRecorders[i].isArmed && !this.muteAutomationRecorders[i].isRecording && this.muteAutomationRecorders[i].points.length === 0) {
+                this.muteAutomationRecorders[i].start(startTime);
+                this.muteAutomationRecorders[i].recordPoint(startTime, this.channels[i].isMuted ? 1 : 0);
+                console.log(`[Mute] Recording initial state for channel ${i} at time ${startTime}: ${this.channels[i].isMuted ? 1 : 0}`);
+            }
+        }
     }
 
     stopRecording() {
         // Touch-write automation mode: Recording stops automatically when
-        // controls are released. This method kept for compatibility.
+        // controls are released. This method is called when playback stops.
+        // Save all armed recorders' points to players for playback.
         this.isRecording = false;
+        
+        for (let i = 0; i < this.channels.length; i++) {
+            // Volume automation
+            if (this.automationRecorders[i].isArmed && this.automationRecorders[i].isRecording) {
+                const points = this.automationRecorders[i].stop();
+                if (points.length > 0) {
+                    this.channels[i].automation.volume = points;
+                    this.automationPlayers[i].points = points;
+                    this.updateAutomationUI(i);
+                }
+            }
+            
+            // Pan automation
+            if (this.panAutomationRecorders[i].isArmed && this.panAutomationRecorders[i].isRecording) {
+                const points = this.panAutomationRecorders[i].stop();
+                if (points.length > 0) {
+                    this.channels[i].automation.pan = points;
+                    this.panAutomationPlayers[i].points = points;
+                }
+            }
+            
+            // Mute automation
+            if (this.muteAutomationRecorders[i].isArmed && this.muteAutomationRecorders[i].isRecording) {
+                const points = this.muteAutomationRecorders[i].stop();
+                console.log(`[Mute] Stopped recording for channel ${i}, points:`, points.length);
+                if (points.length > 0) {
+                    this.channels[i].automation.mute = points;
+                    this.muteAutomationPlayers[i].points = points;
+                    console.log(`[Mute] Saved ${points.length} mute automation points for channel ${i}`);
+                }
+            }
+        }
     }
 
     updateAutomation(currentTime) {
         this.currentTime = currentTime;
 
-        this.automationPlayers.forEach((player, idx) => {
+        // Iterate through all channels to update all automation types
+        for (let idx = 0; idx < this.channels.length; idx++) {
+            // Volume automation
             const recorder = this.automationRecorders[idx];
-
-            // Touch-write mode: play back automation unless user is currently touching the control
-            // Volume: play back if not touching fader OR not armed
             if (!this.isTouchingFader[idx] || !recorder.isArmed) {
-                const volumeVal = player.getValue(currentTime);
-                if (volumeVal !== null) {
+                const volumeVal = this.automationPlayers[idx].getValue(currentTime);
+                if (volumeVal !== null && isFinite(volumeVal)) {
                     this.setVolume(idx, volumeVal, true);
                     // Update volume fader UI
                     const volumeFader = this.container.querySelector(`.volume-fader[data-idx="${idx}"]`);
@@ -455,10 +647,10 @@ export class Mixer {
                 }
             }
 
-            // Pan: play back if not touching pan knob OR not armed
+            // Pan automation
             if (!this.isTouchingPan[idx] || (this.panAutomationRecorders[idx] && !this.panAutomationRecorders[idx].isArmed)) {
                 const panVal = this.panAutomationPlayers[idx].getValue(currentTime);
-                if (panVal !== null) {
+                if (panVal !== null && isFinite(panVal)) {
                     this.setPan(idx, panVal);
                     // Update pan knob UI
                     const panKnob = this.container.querySelector(`.pan-knob[data-idx="${idx}"]`);
@@ -473,6 +665,7 @@ export class Mixer {
             if (muteVal !== null) {
                 const shouldBeMuted = muteVal > 0.5;
                 if (this.channels[idx].isMuted !== shouldBeMuted) {
+                    console.log(`[Mute Playback] Channel ${idx} at time ${currentTime.toFixed(2)}: muteVal=${muteVal}, shouldBeMuted=${shouldBeMuted}, interpolationMode=${this.muteAutomationPlayers[idx].interpolationMode}, points:`, this.muteAutomationPlayers[idx].points);
                     // Directly set mute state (don't toggle)
                     this.channels[idx].isMuted = shouldBeMuted;
                     const muteBtn = this.container.querySelector(`.mute-btn[data-idx="${idx}"]`);
@@ -487,7 +680,7 @@ export class Mixer {
                     if (this.onStateChange) this.onStateChange();
                 }
             }
-        });
+        }
     }
 
     handleFaderRelease(idx) {
@@ -581,6 +774,11 @@ export class Mixer {
                 // Start recording for this mute change - use session start time
                 console.log(`[Mute] Starting mute automation recording for channel ${index}`);
                 this.muteAutomationRecorders[index].start(this.sessionStartTime);
+                
+                // Record initial state at time 0 (the state BEFORE this change)
+                const initialState = !ch.isMuted ? 1 : 0; // Opposite of current (about to be toggled) state
+                this.muteAutomationRecorders[index].recordPoint(this.sessionStartTime, initialState);
+                console.log(`[Mute] Recording initial state for channel ${index} at time ${this.sessionStartTime}: ${initialState}`);
             }
             console.log(`[Mute] Recording mute point: channel=${index}, time=${this.currentTime}, value=${ch.isMuted ? 1 : 0}`);
             this.muteAutomationRecorders[index].recordPoint(this.currentTime, ch.isMuted ? 1 : 0);
@@ -588,6 +786,9 @@ export class Mixer {
 
         this.updateGains();
         if (this.onStateChange) this.onStateChange();
+        
+        // Update Mute All button state
+        this.updateMuteAllButtonState();
     }
 
     toggleSolo(index, btn) {

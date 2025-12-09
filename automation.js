@@ -20,8 +20,9 @@ export class AutomationRecorder {
     recordPoint(currentTime, value) {
         if (!this.isRecording) return;
 
-        const relativeTime = currentTime - this.startTime;
-        this.points.push({ time: relativeTime, value });
+        // Record absolute time (not relative to start time)
+        // This allows automation to play back correctly regardless of where playback starts
+        this.points.push({ time: currentTime, value });
     }
 
     stop() {
@@ -93,9 +94,10 @@ export class AutomationRecorder {
 }
 
 export class AutomationPlayer {
-    constructor(automationData) {
+    constructor(automationData, interpolationMode = 'linear') {
         this.points = automationData || [];
         this.isEnabled = true;
+        this.interpolationMode = interpolationMode; // 'linear' or 'step'
     }
 
     /**
@@ -119,10 +121,15 @@ export class AutomationPlayer {
         // Find surrounding points
         for (let i = 0; i < this.points.length - 1; i++) {
             if (this.points[i].time <= currentTime && this.points[i + 1].time >= currentTime) {
-                // Linear interpolation
-                const t = (currentTime - this.points[i].time) /
-                    (this.points[i + 1].time - this.points[i].time);
-                return this.points[i].value + (this.points[i + 1].value - this.points[i].value) * t;
+                if (this.interpolationMode === 'step') {
+                    // Step interpolation (hold value until next point)
+                    return this.points[i].value;
+                } else {
+                    // Linear interpolation
+                    const t = (currentTime - this.points[i].time) /
+                        (this.points[i + 1].time - this.points[i].time);
+                    return this.points[i].value + (this.points[i + 1].value - this.points[i].value) * t;
+                }
             }
         }
 

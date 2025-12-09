@@ -494,28 +494,56 @@ export class MetadataHandler {
         const view = new DataView(originalBuffer);
 
         // We need to reconstruct the file.
-        // Strategy: Copy all chunks EXCEPT bext and iXML.
+        // Strategy: Copy essential chunks (fmt, data) and any other valid chunks EXCEPT bext and iXML.
         // Append new bext and iXML chunks.
         // Update RIFF size.
 
         const newChunks = [];
         let offset = 12;
+        let dataChunkEnd = 0;
 
         // 1. Collect existing chunks we want to keep (fmt, data, etc.)
-        while (offset < view.byteLength) {
+        // Stop at first invalid chunk or when we've passed the data chunk
+        while (offset < view.byteLength - 8) {
             const chunkId = this.getChunkId(view, offset);
             const chunkSize = view.getUint32(offset + 4, true);
 
+            // Validate chunk ID (must be 4 printable ASCII chars)
+            const isValidChunkId = chunkId && chunkId.length === 4 && 
+                                   /^[A-Za-z0-9_\- ]{4}$/.test(chunkId);
+
+            if (!isValidChunkId || chunkSize < 0 || chunkSize > view.byteLength) {
+                console.log(`Invalid chunk at offset ${offset}: "${chunkId}" (size: ${chunkSize}), stopping chunk collection`);
+                break;
+            }
+
+            // Keep essential chunks, skip metadata chunks
             if (chunkId !== 'bext' && chunkId !== 'iXML' && chunkId !== 'JUNK') {
+                console.log(`Keeping chunk: ${chunkId} (${chunkSize} bytes)`);
                 newChunks.push({
                     id: chunkId,
                     data: originalBuffer.slice(offset + 8, offset + 8 + chunkSize)
                 });
+
+                // Track where data chunk ends
+                if (chunkId === 'data') {
+                    dataChunkEnd = offset + 8 + chunkSize;
+                }
+            } else {
+                console.log(`Skipping chunk: ${chunkId} (${chunkSize} bytes)`);
             }
 
             offset += 8 + chunkSize;
             if (offset % 2 !== 0) offset++;
+
+            // Safety: if we've gone past data chunk end by a lot, stop
+            if (dataChunkEnd > 0 && offset > dataChunkEnd + 100 * 1024 * 1024) {
+                console.log(`Passed data chunk by 100MB, stopping at offset ${offset}`);
+                break;
+            }
         }
+
+        console.log(`Collected ${newChunks.length} chunks to keep`);
 
         // 2. Create new BEXT chunk
         const bextData = this.createBextChunk(metadata);
@@ -603,11 +631,11 @@ export class MetadataHandler {
             }
         };
 
-        // Update Sound Devices style tags
-        if (metadata.scene) updateTag('sSCENE', metadata.scene);
-        if (metadata.take) updateTag('sTAKE', metadata.take);
-        if (metadata.tape) updateTag('sTAPE', metadata.tape);
-        if (metadata.notes !== undefined) updateTag('sNOTE', metadata.notes);
+        // Update Sound Devices style tags (always write, even if undefined - use empty string)
+        updateTag('sSCENE', metadata.scene || '');
+        updateTag('sTAKE', metadata.take || '');
+        updateTag('sTAPE', metadata.tape || '');
+        updateTag('sNOTE', metadata.notes || '');
 
         // Update sSPEED tag if FPS changed
         if (metadata.fps) {
@@ -785,20 +813,67 @@ export class MetadataHandler {
             console.log('Updated iXML length:', xml.length);
             console.log('First 500 chars of updated iXML:', xml.substring(0, 500));
         } else {
-            console.log('No original iXML found, creating minimal version');
-            // No original iXML, create minimal version (fallback)
-            xml = '<BWFXML><PROJECT>' + (metadata.project || '') + '</PROJECT>';
-            xml += '<SCENE>' + (metadata.scene || '') + '</SCENE>';
-            xml += '<TAKE>' + (metadata.take || '') + '</TAKE>';
-            xml += '<TAPE>' + (metadata.tape || '') + '</TAPE>';
-            xml += '<NOTE>' + (metadata.notes || '') + '</NOTE>';
-
-            if (metadata.trackNames && metadata.trackNames.length > 0) {
-                xml += '<TRACK_LIST>';
-                metadata.trackNames.forEach((name, i) => {
-                    xml += `<TRACK><CHANNEL_INDEX>${i + 1}</CHANNEL_INDEX><NAME>${name}</NAME></TRACK>`;
-                });
-                xml += '</TRACK_LIST>';
+            console.log('No original iXML found, creating complete iXML structure');
+            console.log('Creating iXML with metadata:', { 
+                project: metadata.project, 
+                scene: metadata.scene, 
+                take: metadata.take, 
+                tape: metadata.tape, 
+                notes: metadata.notes,
+                channels: metadata.channels,
+                sampleRate: metadata.sampleRate,
+                bitDepth: metadata.bitDepth
+            });
+            
+            // Create a more complete iXML structure
+            xml = '<?xml version="1.0" encoding="UTF-8"?>\n';
+            xml += '<BWFXML>\n';
+            
+            // Basic metadata
+            xml += '  <PROJECT>' + (metadata.project || '') + '</PROJECT>\n';
+            xml += '  <SCENE>' + (metadata.scene || '') + '</SCENE>\n';
+            xml += '  <TAKE>' + (metadata.take || '') + '</TAKE>\n';
+            xml += '  <TAPE>' + (metadata.tape || '') + '</TAPE>\n';
+            xml += '  <NOTE>' + (metadata.notes || '') + '</NOTE>\n';
+            
+            // File metadata
+            if (metadata.sampleRate) {
+                xml += '  <SPEED>\n';
+                xml += '    <MASTER_SPEED>' + metadata.sampleRate + '</MASTER_SPEED>\n';
+                xml += '    <CURRENT_SPEED>' + metadata.sampleRate + '</CURRENT_SPEED>\n';
+                
+                // Add timecode info if available
+                if (metadata.fps) {
+                    const fpsMap = {
+                        '23.98': '24', '24': '24', '25': '25', 
+                        '29.97': '30', '29.97df': '30DF', '30': '30',
+                        '48': '48', '50': '50', '59.94': '60', '60': '60'
+                    };
+                    xml += '    <TIMECODE_RATE>' + (fpsMap[metadata.fps] || '30') + '</TIMECODE_RATE>\n';
+                    xml += '    <TIMECODE_FLAG>NDF</TIMECODE_FLAG>\n';
+                }
+                
+                xml += '  </SPEED>\n';
+            }
+            
+            // Track list
+            const numChannels = metadata.channels || 1;
+            if (numChannels > 0) {
+                xml += '  <TRACK_LIST>\n';
+                
+                for (let i = 0; i < numChannels; i++) {
+                    const trackName = (metadata.trackNames && metadata.trackNames[i]) 
+                                    ? metadata.trackNames[i] 
+                                    : `Track ${i + 1}`;
+                    
+                    xml += '    <TRACK>\n';
+                    xml += '      <CHANNEL_INDEX>' + (i + 1) + '</CHANNEL_INDEX>\n';
+                    xml += '      <INTERLEAVE_INDEX>' + (i + 1) + '</INTERLEAVE_INDEX>\n';
+                    xml += '      <NAME>' + trackName + '</NAME>\n';
+                    xml += '    </TRACK>\n';
+                }
+                
+                xml += '  </TRACK_LIST>\n';
             }
 
             xml += '</BWFXML>';

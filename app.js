@@ -188,6 +188,9 @@ class App {
         });
 
         // Mixer save/load controls
+        document.getElementById('mute-all-btn').addEventListener('click', () => this.mixer.toggleMuteAll());
+        document.getElementById('arm-all-btn').addEventListener('click', () => this.mixer.toggleArmAll());
+        document.getElementById('clear-all-automation-btn').addEventListener('click', () => this.mixer.clearAllAutomation());
         document.getElementById('save-mix-btn').addEventListener('click', () => this.saveMixerSettingsToFile());
         document.getElementById('load-mix-btn').addEventListener('click', () => this.loadMixerSettingsFromFile());
 
@@ -265,8 +268,8 @@ class App {
                 this.togglePlay();
             }
 
-            // Command/Ctrl + A for select all
-            if ((e.metaKey || e.ctrlKey) && e.key === 'a') {
+            // Command/Ctrl + A for select all (only if not typing in an editable field)
+            if ((e.metaKey || e.ctrlKey) && e.key === 'a' && !this.isEditingText(e.target)) {
                 e.preventDefault();
                 this.selectAll();
             }
@@ -881,8 +884,8 @@ class App {
 
             // Bucket has potential siblings
             // Group by Base Name (regex match)
-            // Regex: BaseName + Underscore + (Number OR Single Letter) + .wav
-            const regex = /^(.*)_([0-9]+|[A-Z])\.wav$/i;
+            // Regex: BaseName + Underscore + (Number OR Letter(s)+Number OR Single/Multiple Letters) + .wav
+            const regex = /^(.*)_([0-9]+|[A-Z]+[0-9]*|[A-Z])\.wav$/i;
             const groups = new Map(); // key: baseName, value: [items]
             const singles = [];
 
@@ -1036,7 +1039,12 @@ class App {
             if (editable) {
                 td.contentEditable = true;
                 td.addEventListener('blur', (e) => {
-                    this.updateMetadata(index, key, e.target.textContent);
+                    const newValue = e.target.textContent;
+                    const oldValue = this.files[index].metadata[key] || '';
+                    // Only update if value actually changed
+                    if (newValue !== oldValue) {
+                        this.updateMetadata(index, key, newValue);
+                    }
                 });
                 td.addEventListener('keydown', (e) => {
                     if (e.key === 'Enter') {
@@ -1294,8 +1302,9 @@ class App {
                             // Refresh the file object from the handle
                             target.file = await target.handle.getFile();
 
-                            // Re-parse metadata to keep state fresh
-                            target.metadata = await this.metadataHandler.parseFile(target.file);
+                            // Update metadata with what we just saved (instead of re-parsing)
+                            // This ensures the UI shows exactly what was saved
+                            target.metadata = { ...target.metadata, ...metadataToSave };
                         }
                     } else {
                         // Fallback download
@@ -1573,6 +1582,11 @@ class App {
         const item = this.files[index];
 
         try {
+            // Refresh file from handle to ensure we read the latest version
+            if (item.handle && item.handle.kind === 'file') {
+                item.file = await item.handle.getFile();
+            }
+            
             const arrayBuffer = await item.file.arrayBuffer();
             const ixmlData = this.extractIXML(arrayBuffer);
 
@@ -1861,6 +1875,11 @@ class App {
 
                     // Enable save button
                     document.getElementById('batch-save-btn').disabled = false;
+                    
+                    // Trigger auto-save if enabled
+                    if (this.autoSaveEnabled) {
+                        this.scheduleAutoSave();
+                    }
                 } else {
                     console.warn('Mixer callback error: Loaded file not found in current file list', item.metadata.filename);
                 }
