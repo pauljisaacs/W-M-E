@@ -104,7 +104,7 @@ body {
 
 /* Metadata List */
 .metadata-section {
-    flex: 1;
+    flex: 0.95;
     overflow: hidden;
     display: flex;
     flex-direction: column;
@@ -594,6 +594,7 @@ td:nth-child(14) {
 }
 
 /* Mixer */
+
 .mixer-section .section-content {
     padding: 0.5rem 1rem;
     overflow-x: auto;
@@ -625,7 +626,7 @@ td:nth-child(14) {
     width: 90px;
     min-width: 90px;
     margin-right: 1rem;
-    gap: 0.38rem; /*master strip vertical position*/
+    gap: 0.44rem; /*master strip vertical position*/
 }
 
 .master-strip .channel-header {
@@ -652,8 +653,8 @@ td:nth-child(14) {
 
 .master-meter-left,
 .master-meter-right {
-    width: 5px;
-    height: 100px;
+    width: 10px;
+    height: 200px;
     background-color: #111;
     margin-right: 2px;
     border-radius: 2px;
@@ -697,7 +698,7 @@ td:nth-child(14) {
 }
 
 .fader-container {
-    height: 100px;
+    height: 200px;
     display: flex;
     align-items: flex-end;
     justify-content: center;
@@ -717,7 +718,7 @@ td:nth-child(14) {
     display: flex;
     flex-direction: column;
     justify-content: space-between;
-    height: 100px;
+    height: 200px;
     width: 30px;
     font-size: 0.55rem;
     color: var(--text-muted);
