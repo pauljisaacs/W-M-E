@@ -17,12 +17,13 @@
         <header class="app-header">
             <h1>Wave Agent X</h1>
             <div class="header-controls">
-                <button id="import-btn" class="btn secondary">Import</button>
                 <div class="batch-actions">
+                    <button id="import-btn" class="btn secondary">Import</button>
                     <button id="batch-remove-btn" class="btn secondary" disabled>Remove</button>
                     <button id="batch-edit-btn" class="btn secondary" disabled>Batch Edit</button>
                     <button id="batch-save-btn" class="btn secondary" disabled>Save</button>
-                    <button id="combine-btn" class="btn secondary" disabled>Combine Sibling Files</button>
+                    <button id="combine-btn" class="btn secondary" disabled>Combine</button>
+                    <button id="split-btn" class="btn secondary" disabled>Split</button>
                 </div>
                 <div class="auto-save-toggle">
                     <label>
@@ -73,30 +74,7 @@
         <!-- Player & Waveform -->
         <section class="player-section collapsible expanded">
             <div class="section-header">
-                <h2>Player & Waveform</h2>
-                <div style="display: flex; gap: 10px; align-items: center;">
-                    <button id="normalize-btn" class="btn secondary" disabled>Normalize</button>
-                    <button class="toggle-btn">▼</button>
-                </div>
-            </div>
-            <div class="section-content">
-                <div id="region-selector" class="region-selector">
-                    <span class="region-hint">Click and drag here to create region</span>
-                </div>
-                <div class="waveform-container">
-                    <canvas id="waveform-canvas"></canvas>
-                    <div id="region-overlay" class="region-overlay"></div>
-                    <div id="playhead"></div>
-                    <div id="loading-overlay" class="loading-overlay" style="display: none;">
-                        <div class="loading-content">
-                            <div class="loading-text">Loading audio...</div>
-                            <div class="progress-bar">
-                                <div id="progress-fill" class="progress-fill"></div>
-                            </div>
-                            <div id="progress-text" class="progress-text">0%</div>
-                        </div>
-                    </div>
-                </div>
+                <h2 id="player-filename" style="font-weight: normal;">No file loaded</h2>
                 <div class="transport-controls">
                     <button id="play-btn" class="btn-icon">▶</button>
                     <button id="stop-btn" class="btn-icon">⏹</button>
@@ -109,15 +87,47 @@
                         <span id="current-timecode">00:00:00:00</span>
                     </div>
                 </div>
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <button id="normalize-btn" class="btn secondary" disabled>Normalize</button>
+                    <button class="toggle-btn">▼</button>
+                </div>
+            </div>
+            <div class="section-content">
+                <div id="region-selector" class="region-selector">
+                    <span class="region-hint">Click and drag here to create region</span>
+                </div>
+                <div class="waveform-wrapper">
+                    <div class="amplitude-scale">
+                        <div class="scale-mark" style="top: 0%;">0</div>
+                        <div class="scale-mark" style="top: 16.67%;">-10</div>
+                        <div class="scale-mark" style="top: 33.33%;">-20</div>
+                        <div class="scale-mark" style="top: 50%;">-∞</div>
+                        <div class="scale-mark" style="top: 66.67%;">-20</div>
+                        <div class="scale-mark" style="top: 83.33%;">-10</div>
+                        <div class="scale-mark" style="top: 100%;">0</div>
+                    </div>
+                    <div class="waveform-container">
+                        <canvas id="waveform-canvas"></canvas>
+                        <div id="region-overlay" class="region-overlay"></div>
+                        <div id="playhead"></div>
+                        <div id="loading-overlay" class="loading-overlay" style="display: none;">
+                            <div class="loading-content">
+                                <div class="loading-text">Loading audio...</div>
+                                <div class="progress-bar">
+                                    <div id="progress-fill" class="progress-fill"></div>
+                                </div>
+                                <div id="progress-text" class="progress-text">0%</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </section>
 
         <!-- Mixer -->
         <section class="mixer-section collapsible expanded">
             <div class="section-header">
-                <h2>Channel Mixer <span id="mixer-filename"
-                        style="font-weight: normal; font-size: 0.8em; color: var(--text-secondary); margin-left: 10px;"></span>
-                </h2>
+                <h2>Channel Mixer</h2>
                 <div style="display: flex; gap: 10px; align-items: center;">
                     <button id="mute-all-btn" class="btn secondary">Mute All</button>
                     <button id="arm-all-btn" class="btn secondary">Arm All</button>
@@ -444,6 +454,30 @@
             <div class="modal-footer">
                 <button id="combine-cancel-btn" class="btn secondary">Cancel</button>
                 <button id="combine-confirm-btn" class="btn primary">Combine Files</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Split Modal -->
+    <div id="split-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Split Polyphonic File</h3>
+                <button class="close-modal" id="split-close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-info">Split <span id="split-filename"></span> into individual monophonic files.</p>
+                <p class="modal-info">Each output file will retain all original metadata with the correct track name.</p>
+                
+                <div class="form-row">
+                    <label>Save to: Select Destination Folder</label>
+                    <button id="split-folder-btn" class="btn secondary">Choose Folder</button>
+                    <span id="split-folder-path" style="margin-left: 10px; color: var(--text-muted); font-size: 0.9em;">No folder selected</span>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="split-cancel-btn" class="btn secondary">Cancel</button>
+                <button id="split-confirm-btn" class="btn primary" disabled>Split Files</button>
             </div>
         </div>
     </div>

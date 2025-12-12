@@ -220,6 +220,20 @@ class App {
             }
         });
 
+        // Split Poly File controls
+        document.getElementById('split-btn').addEventListener('click', () => this.openSplitModal());
+        document.getElementById('split-close-btn').addEventListener('click', () => this.closeSplitModal());
+        document.getElementById('split-cancel-btn').addEventListener('click', () => this.closeSplitModal());
+        document.getElementById('split-folder-btn').addEventListener('click', () => this.selectSplitFolder());
+        document.getElementById('split-confirm-btn').addEventListener('click', () => this.processSplitFile());
+
+        const splitModal = document.getElementById('split-modal');
+        splitModal.addEventListener('click', (e) => {
+            if (e.target.id === 'split-modal') {
+                this.closeSplitModal();
+            }
+        });
+
         // Keyboard Shortcuts
         document.addEventListener('keydown', (e) => {
             // Arrow key navigation (only if not typing in an editable field)
@@ -1439,9 +1453,9 @@ class App {
                 console.warn(`File ${item.metadata.filename} is ${fileSizeGB.toFixed(2)} GB - skipping audio loading (Metadata Only mode)`);
 
                 // Update UI to show metadata-only mode
-                const mixerFilename = document.getElementById('mixer-filename');
-                if (mixerFilename) {
-                    mixerFilename.innerHTML = `${item.metadata.filename} <span style="color: #ffcf44; font-size: 0.8em;">(Metadata Only - File too large: ${fileSizeGB.toFixed(2)} GB)</span>`;
+                const playerFilename = document.getElementById('player-filename');
+                if (playerFilename) {
+                    playerFilename.innerHTML = `${item.metadata.filename} <span style="color: #ffcf44; font-size: 0.8em;">(Metadata Only - ${fileSizeGB.toFixed(2)} GB)</span>`;
                 }
 
                 // Clear waveform with informative message
@@ -1485,9 +1499,21 @@ class App {
         document.getElementById('save-mix-btn').disabled = this.selectedIndices.size !== 1;
         document.getElementById('load-mix-btn').disabled = this.selectedIndices.size !== 1;
         
-        // Enable combine button if any sibling groups are detected in file list
+        // Enable combine button if any sibling groups are detected AND no poly file is selected
         const hasSiblingGroups = this.files.some(item => item.isGroup);
-        document.getElementById('combine-btn').disabled = !hasSiblingGroups;
+        let isPolySelected = false;
+        if (this.selectedIndices.size === 1) {
+            const selectedIndex = Array.from(this.selectedIndices)[0];
+            const selectedFile = this.files[selectedIndex];
+            isPolySelected = selectedFile && 
+                           selectedFile.metadata && 
+                           selectedFile.metadata.channels > 1 && 
+                           !selectedFile.isGroup;
+        }
+        document.getElementById('combine-btn').disabled = !hasSiblingGroups || isPolySelected;
+        
+        // Enable split button if exactly one poly file is selected (not a sibling group)
+        document.getElementById('split-btn').disabled = !isPolySelected;
     }
 
     updateSaveButtonState() {
@@ -1914,19 +1940,19 @@ class App {
             // Store metadata for timecode calculation
             this.currentFileMetadata = item.metadata;
 
-            // Update Mixer Header
-            const mixerFilename = document.getElementById('mixer-filename');
-            if (mixerFilename) {
-                mixerFilename.textContent = item.metadata.filename;
+            // Update Player Header
+            const playerFilename = document.getElementById('player-filename');
+            if (playerFilename) {
+                playerFilename.textContent = item.metadata.filename;
             }
 
         } catch (err) {
             console.error('Error loading audio:', err);
 
             // Handle large file errors gracefully
-            const mixerFilename = document.getElementById('mixer-filename');
-            if (mixerFilename) {
-                mixerFilename.innerHTML = `${item.metadata.filename} <span style="color: #ffcf44; font-size: 0.8em;">(Error Loading Audio)</span>`;
+            const playerFilename = document.getElementById('player-filename');
+            if (playerFilename) {
+                playerFilename.innerHTML = `${item.metadata.filename} <span style="color: #ffcf44; font-size: 0.8em;">(Error)</span>`;
             }
 
             // Clear waveform
@@ -3378,6 +3404,431 @@ class App {
         if (failCount > 0) {
             this.showToast(`${failCount} group(s) failed to combine`, 'error', 5000);
         }
+    }
+
+    /**
+     * Open Split modal for the selected poly file
+     */
+    openSplitModal() {
+        // Get the selected poly file
+        if (this.selectedIndices.size !== 1) {
+            alert('Please select exactly one poly file to split.');
+            return;
+        }
+
+        const selectedIndex = Array.from(this.selectedIndices)[0];
+        const selectedFile = this.files[selectedIndex];
+
+        if (!selectedFile || !selectedFile.metadata || selectedFile.metadata.channels <= 1) {
+            alert('Selected file is not a poly file.');
+            return;
+        }
+
+        // Store the file to split
+        this.splitFileData = {
+            index: selectedIndex,
+            file: selectedFile.file,
+            handle: selectedFile.handle,
+            metadata: selectedFile.metadata,
+            destinationHandle: null
+        };
+
+        // Update modal info
+        document.getElementById('split-filename').textContent = selectedFile.metadata.filename;
+        document.getElementById('split-folder-path').textContent = 'No folder selected';
+        document.getElementById('split-confirm-btn').disabled = true;
+
+        // Show modal
+        const modal = document.getElementById('split-modal');
+        modal.classList.add('active');
+    }
+
+    /**
+     * Close Split modal
+     */
+    closeSplitModal() {
+        const modal = document.getElementById('split-modal');
+        modal.classList.remove('active');
+        this.splitFileData = null;
+    }
+
+    /**
+     * Select destination folder for split files
+     */
+    async selectSplitFolder() {
+        try {
+            const dirHandle = await window.showDirectoryPicker();
+            this.splitFileData.destinationHandle = dirHandle;
+            document.getElementById('split-folder-path').textContent = dirHandle.name;
+            document.getElementById('split-confirm-btn').disabled = false;
+        } catch (err) {
+            if (err.name !== 'AbortError') {
+                console.error('Error selecting folder:', err);
+                alert('Failed to select folder');
+            }
+        }
+    }
+
+    /**
+     * Process split operation
+     */
+    async processSplitFile() {
+        if (!this.splitFileData || !this.splitFileData.destinationHandle) {
+            alert('Please select a destination folder first.');
+            return;
+        }
+
+        try {
+            document.body.style.cursor = 'wait';
+            this.showToast('Splitting file...', 'info', 2000);
+
+            const { file, handle, metadata, destinationHandle } = this.splitFileData;
+            const channels = metadata.channels;
+
+            // Read the original file
+            const arrayBuffer = await file.arrayBuffer();
+            
+            // Get track names from iXML BEFORE decoding (decoding detaches the buffer)
+            const trackNames = [];
+            const ixmlString = this.metadataHandler.getIXMLChunk(arrayBuffer);
+            if (ixmlString) {
+                const parser = new DOMParser();
+                const xmlDoc = parser.parseFromString(ixmlString, 'text/xml');
+                const tracks = xmlDoc.querySelectorAll('TRACK');
+                tracks.forEach(track => {
+                    const name = track.querySelector('NAME')?.textContent || '';
+                    trackNames.push(name);
+                });
+            }
+            
+            // Decode audio using AudioEngine (handles both native and manual WAV decoding)
+            // Note: This may detach the arrayBuffer
+            const audioBuffer = await this.audioEngine.decodeFile(arrayBuffer);
+
+            // Split each channel into a separate file
+            const baseName = metadata.filename.replace(/\.wav$/i, '');
+            
+            for (let ch = 0; ch < channels; ch++) {
+                // Create mono audio buffer for this channel
+                const monoBuffer = this.audioEngine.audioCtx.createBuffer(
+                    1,
+                    audioBuffer.length,
+                    audioBuffer.sampleRate
+                );
+                
+                const channelData = audioBuffer.getChannelData(ch);
+                monoBuffer.copyToChannel(channelData, 0);
+
+                // Generate filename with track name or channel number
+                const trackName = trackNames[ch] || `Ch${ch + 1}`;
+                const sanitizedTrackName = trackName.replace(/[^a-zA-Z0-9_-]/g, '_');
+                const outputFilename = `${baseName}_${sanitizedTrackName}.wav`;
+
+                // Encode as WAV
+                const wavBlob = await this.encodeWAV(monoBuffer);
+                let wavArrayBuffer = await wavBlob.arrayBuffer();
+
+                // Add iXML metadata with correct track name
+                if (ixmlString) {
+                    const updatedIXML = this.updateIXMLForMonoTrack(ixmlString, ch, trackName);
+                    wavArrayBuffer = this.injectIXMLChunk(wavArrayBuffer, updatedIXML);
+                }
+
+                // Add bEXT metadata with track name
+                const bextData = {
+                    description: trackName,
+                    originator: metadata.originator || '',
+                    originatorReference: metadata.originatorReference || '',
+                    originationDate: metadata.originationDate || '',
+                    originationTime: metadata.originationTime || '',
+                    timeReference: metadata.timeReference || 0
+                };
+                wavArrayBuffer = this.injectBextChunk(wavArrayBuffer, bextData);
+
+                // Write file to destination
+                const fileHandle = await destinationHandle.getFileHandle(outputFilename, { create: true });
+                const writable = await fileHandle.createWritable();
+                await writable.write(wavArrayBuffer);
+                await writable.close();
+            }
+
+            this.showToast(`Successfully split into ${channels} mono files`, 'success', 3000);
+            this.closeSplitModal();
+
+        } catch (err) {
+            console.error('Error splitting file:', err);
+            this.showToast(`Failed to split file: ${err.message}`, 'error', 5000);
+        } finally {
+            document.body.style.cursor = 'default';
+        }
+    }
+
+    /**
+     * Update iXML to contain only the track info for a specific channel
+     */
+    updateIXMLForMonoTrack(ixmlString, channelIndex, trackName) {
+        try {
+            const parser = new DOMParser();
+            const xmlDoc = parser.parseFromString(ixmlString, 'text/xml');
+            
+            // Find the TRACK_LIST
+            const trackList = xmlDoc.querySelector('TRACK_LIST');
+            if (trackList) {
+                // Update track count to 1
+                const trackCount = trackList.querySelector('TRACK_COUNT');
+                if (trackCount) {
+                    trackCount.textContent = '1';
+                }
+
+                // Keep only the track for this channel
+                const tracks = trackList.querySelectorAll('TRACK');
+                if (tracks[channelIndex]) {
+                    // Remove all tracks
+                    tracks.forEach(track => track.remove());
+                    
+                    // Add back only this channel's track with updated channel index
+                    const singleTrack = xmlDoc.createElement('TRACK');
+                    const channelIndexEl = xmlDoc.createElement('CHANNEL_INDEX');
+                    channelIndexEl.textContent = '1';
+                    const interleaveIndexEl = xmlDoc.createElement('INTERLEAVE_INDEX');
+                    interleaveIndexEl.textContent = '1';
+                    const nameEl = xmlDoc.createElement('NAME');
+                    nameEl.textContent = trackName;
+                    
+                    singleTrack.appendChild(channelIndexEl);
+                    singleTrack.appendChild(interleaveIndexEl);
+                    singleTrack.appendChild(nameEl);
+                    trackList.appendChild(singleTrack);
+                }
+            }
+
+            const serializer = new XMLSerializer();
+            return serializer.serializeToString(xmlDoc);
+        } catch (err) {
+            console.error('Error updating iXML for mono track:', err);
+            return ixmlString;
+        }
+    }
+
+    /**
+     * Encode AudioBuffer to WAV blob
+     */
+    async encodeWAV(audioBuffer) {
+        const numberOfChannels = audioBuffer.numberOfChannels;
+        const sampleRate = audioBuffer.sampleRate;
+        const format = 1; // PCM
+        const bitDepth = 16;
+
+        const bytesPerSample = bitDepth / 8;
+        const blockAlign = numberOfChannels * bytesPerSample;
+        
+        const samples = audioBuffer.getChannelData(0);
+        const dataLength = samples.length * blockAlign;
+        const buffer = new ArrayBuffer(44 + dataLength);
+        const view = new DataView(buffer);
+
+        // WAV header
+        const writeString = (offset, string) => {
+            for (let i = 0; i < string.length; i++) {
+                view.setUint8(offset + i, string.charCodeAt(i));
+            }
+        };
+
+        writeString(0, 'RIFF');
+        view.setUint32(4, 36 + dataLength, true);
+        writeString(8, 'WAVE');
+        writeString(12, 'fmt ');
+        view.setUint32(16, 16, true); // fmt chunk size
+        view.setUint16(20, format, true);
+        view.setUint16(22, numberOfChannels, true);
+        view.setUint32(24, sampleRate, true);
+        view.setUint32(28, sampleRate * blockAlign, true); // byte rate
+        view.setUint16(32, blockAlign, true);
+        view.setUint16(34, bitDepth, true);
+        writeString(36, 'data');
+        view.setUint32(40, dataLength, true);
+
+        // Write audio data
+        const offset = 44;
+        for (let i = 0; i < samples.length; i++) {
+            const sample = Math.max(-1, Math.min(1, samples[i]));
+            const intSample = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+            view.setInt16(offset + (i * 2), intSample, true);
+        }
+
+        return new Blob([buffer], { type: 'audio/wav' });
+    }
+
+    /**
+     * Inject iXML chunk into WAV buffer (returns new buffer)
+     */
+    injectIXMLChunk(originalBuffer, ixmlString) {
+        const view = new DataView(originalBuffer);
+        const chunks = [];
+        let offset = 12;
+
+        // Parse all chunks except iXML
+        while (offset < view.byteLength - 8) {
+            const chunkId = String.fromCharCode(
+                view.getUint8(offset),
+                view.getUint8(offset + 1),
+                view.getUint8(offset + 2),
+                view.getUint8(offset + 3)
+            );
+            const chunkSize = view.getUint32(offset + 4, true);
+
+            if (chunkId !== 'iXML') {
+                const chunkData = new Uint8Array(originalBuffer, offset, 8 + chunkSize + (chunkSize % 2));
+                chunks.push(chunkData);
+            }
+
+            offset += 8 + chunkSize;
+            if (chunkSize % 2 !== 0) offset++;
+        }
+
+        // Add new iXML chunk
+        const ixmlBytes = new TextEncoder().encode(ixmlString);
+        const ixmlChunkSize = ixmlBytes.length;
+        const ixmlChunk = new Uint8Array(8 + ixmlChunkSize + (ixmlChunkSize % 2));
+        const ixmlView = new DataView(ixmlChunk.buffer);
+
+        ixmlView.setUint8(0, 'i'.charCodeAt(0));
+        ixmlView.setUint8(1, 'X'.charCodeAt(0));
+        ixmlView.setUint8(2, 'M'.charCodeAt(0));
+        ixmlView.setUint8(3, 'L'.charCodeAt(0));
+        ixmlView.setUint32(4, ixmlChunkSize, true);
+        ixmlChunk.set(ixmlBytes, 8);
+
+        chunks.push(ixmlChunk);
+
+        // Calculate total size
+        const totalDataSize = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+        const newFileSize = 12 + totalDataSize;
+        const newBuffer = new Uint8Array(newFileSize);
+        const newView = new DataView(newBuffer.buffer);
+
+        // Write RIFF header
+        newView.setUint8(0, 'R'.charCodeAt(0));
+        newView.setUint8(1, 'I'.charCodeAt(0));
+        newView.setUint8(2, 'F'.charCodeAt(0));
+        newView.setUint8(3, 'F'.charCodeAt(0));
+        newView.setUint32(4, newFileSize - 8, true);
+        newView.setUint8(8, 'W'.charCodeAt(0));
+        newView.setUint8(9, 'A'.charCodeAt(0));
+        newView.setUint8(10, 'V'.charCodeAt(0));
+        newView.setUint8(11, 'E'.charCodeAt(0));
+
+        // Write all chunks
+        let writeOffset = 12;
+        for (const chunk of chunks) {
+            newBuffer.set(chunk, writeOffset);
+            writeOffset += chunk.byteLength;
+        }
+
+        return newBuffer.buffer;
+    }
+
+    /**
+     * Inject bEXT chunk into WAV buffer (returns new buffer)
+     */
+    injectBextChunk(originalBuffer, bextData) {
+        const view = new DataView(originalBuffer);
+        const chunks = [];
+        let offset = 12;
+
+        // Parse all chunks except bext
+        while (offset < view.byteLength - 8) {
+            const chunkId = String.fromCharCode(
+                view.getUint8(offset),
+                view.getUint8(offset + 1),
+                view.getUint8(offset + 2),
+                view.getUint8(offset + 3)
+            );
+            const chunkSize = view.getUint32(offset + 4, true);
+
+            if (chunkId !== 'bext') {
+                const chunkData = new Uint8Array(originalBuffer, offset, 8 + chunkSize + (chunkSize % 2));
+                chunks.push(chunkData);
+            }
+
+            offset += 8 + chunkSize;
+            if (chunkSize % 2 !== 0) offset++;
+        }
+
+        // Create new bEXT chunk (minimum size is 602 bytes)
+        const bextChunk = new Uint8Array(610); // 8 header + 602 data
+        const bextView = new DataView(bextChunk.buffer);
+
+        // Chunk ID and size
+        bextView.setUint8(0, 'b'.charCodeAt(0));
+        bextView.setUint8(1, 'e'.charCodeAt(0));
+        bextView.setUint8(2, 'x'.charCodeAt(0));
+        bextView.setUint8(3, 't'.charCodeAt(0));
+        bextView.setUint32(4, 602, true);
+
+        const encoder = new TextEncoder();
+
+        // Description (256 bytes)
+        if (bextData.description) {
+            const descBytes = encoder.encode(bextData.description.substring(0, 255));
+            bextChunk.set(descBytes, 8);
+        }
+
+        // Originator (32 bytes)
+        if (bextData.originator) {
+            const origBytes = encoder.encode(bextData.originator.substring(0, 31));
+            bextChunk.set(origBytes, 8 + 256);
+        }
+
+        // Originator Reference (32 bytes)
+        if (bextData.originatorReference) {
+            const origRefBytes = encoder.encode(bextData.originatorReference.substring(0, 31));
+            bextChunk.set(origRefBytes, 8 + 256 + 32);
+        }
+
+        // Origination Date (10 bytes, YYYY-MM-DD)
+        if (bextData.originationDate) {
+            const dateBytes = encoder.encode(bextData.originationDate.substring(0, 10));
+            bextChunk.set(dateBytes, 8 + 256 + 32 + 32);
+        }
+
+        // Origination Time (8 bytes, HH:MM:SS)
+        if (bextData.originationTime) {
+            const timeBytes = encoder.encode(bextData.originationTime.substring(0, 8));
+            bextChunk.set(timeBytes, 8 + 256 + 32 + 32 + 10);
+        }
+
+        // Time Reference (8 bytes, 64-bit unsigned int)
+        const timeRef = bextData.timeReference || 0;
+        bextView.setBigUint64(8 + 256 + 32 + 32 + 10 + 8, BigInt(timeRef), true);
+
+        chunks.push(bextChunk);
+
+        // Calculate total size
+        const totalDataSize = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+        const newFileSize = 12 + totalDataSize;
+        const newBuffer = new Uint8Array(newFileSize);
+        const newView = new DataView(newBuffer.buffer);
+
+        // Write RIFF header
+        newView.setUint8(0, 'R'.charCodeAt(0));
+        newView.setUint8(1, 'I'.charCodeAt(0));
+        newView.setUint8(2, 'F'.charCodeAt(0));
+        newView.setUint8(3, 'F'.charCodeAt(0));
+        newView.setUint32(4, newFileSize - 8, true);
+        newView.setUint8(8, 'W'.charCodeAt(0));
+        newView.setUint8(9, 'A'.charCodeAt(0));
+        newView.setUint8(10, 'V'.charCodeAt(0));
+        newView.setUint8(11, 'E'.charCodeAt(0));
+
+        // Write all chunks
+        let writeOffset = 12;
+        for (const chunk of chunks) {
+            newBuffer.set(chunk, writeOffset);
+            writeOffset += chunk.byteLength;
+        }
+
+        return newBuffer.buffer;
     }
 }
 
