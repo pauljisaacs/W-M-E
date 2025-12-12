@@ -11,7 +11,7 @@
 
 export class MixerMetadata {
     static VERSION = "2.0";
-    static NAMESPACE = "http://wav-metadata-editor/mixer/2.0";
+    static NAMESPACE = "http://wav-agent-x/mix_automation/2.0";
 
     /**
      * Serialize mixer channels to XML string
@@ -26,7 +26,6 @@ export class MixerMetadata {
             xml += `    <VOLUME>${ch.volume.toFixed(4)}</VOLUME>\n`;
             xml += `    <PAN>${ch.pan.toFixed(4)}</PAN>\n`;
             xml += `    <MUTE>${ch.isMuted}</MUTE>\n`;
-            xml += `    <SOLO>${ch.isSoloed}</SOLO>\n`;
 
             // Automation
             if (ch.automation && (ch.automation.volume?.length > 0 || ch.automation.pan?.length > 0 || ch.automation.mute?.length > 0)) {
@@ -76,17 +75,31 @@ export class MixerMetadata {
      */
     static parseFromXML(xmlString) {
         try {
+            console.log('XML string length:', xmlString?.length);
             const parser = new DOMParser();
             const xmlDoc = parser.parseFromString(xmlString, 'text/xml');
 
             // Check for parse errors
-            if (xmlDoc.querySelector('parsererror')) {
-                console.error('XML parse error');
+            const parseError = xmlDoc.querySelector('parsererror');
+            if (parseError) {
+                console.error('XML parse error:', parseError.textContent);
+                console.error('XML string (first 1000 chars):', xmlString?.substring(0, 1000));
+                console.error('XML string (last 500 chars):', xmlString?.substring(xmlString.length - 500));
                 return null;
             }
 
-            const mixerSettings = xmlDoc.querySelector('MIXER_SETTINGS');
-            if (!mixerSettings) return null;
+            // Look for MIXER_SETTINGS with or without namespace
+            let mixerSettings = xmlDoc.querySelector('MIXER_SETTINGS');
+            console.log('querySelector result:', mixerSettings);
+            if (!mixerSettings) {
+                // Try with namespace prefix in case it's namespaced
+                mixerSettings = xmlDoc.getElementsByTagName('MIXER_SETTINGS')[0];
+                console.log('getElementsByTagName result:', mixerSettings);
+            }
+            if (!mixerSettings) {
+                console.error('MIXER_SETTINGS element not found in XML');
+                return null;
+            }
 
             const version = mixerSettings.getAttribute('version') || '1.0';
             const channelElements = mixerSettings.querySelectorAll('CHANNEL');
@@ -172,9 +185,43 @@ export class MixerMetadata {
             const parser = new DOMParser();
             const xmlDoc = parser.parseFromString(existingIXML, 'text/xml');
 
-            if (xmlDoc.querySelector('parsererror')) {
-                console.warn('Existing iXML is invalid, creating new structure');
-                return `<?xml version="1.0" encoding="UTF-8"?>\n<BWFXML>\n  ${mixerXML}\n</BWFXML>`;
+            // Check for parser errors
+            const parseError = xmlDoc.querySelector('parsererror');
+            if (parseError) {
+                console.warn('XML parser error detected:', parseError.textContent);
+                console.warn('Attempting to inject mixer settings into raw XML...');
+                
+                // Remove existing MIXER_SETTINGS if present (using string manipulation)
+                let cleanedXML = existingIXML;
+                const mixerStartPattern = /<MIXER_SETTINGS[^>]*>/;
+                const mixerEndPattern = /<\/MIXER_SETTINGS>/;
+                
+                const startMatch = cleanedXML.match(mixerStartPattern);
+                if (startMatch) {
+                    const startIndex = cleanedXML.indexOf(startMatch[0]);
+                    const endMatch = cleanedXML.substring(startIndex).match(mixerEndPattern);
+                    
+                    if (endMatch) {
+                        const endIndex = startIndex + cleanedXML.substring(startIndex).indexOf(endMatch[0]) + endMatch[0].length;
+                        cleanedXML = cleanedXML.substring(0, startIndex) + cleanedXML.substring(endIndex);
+                        // Clean up extra whitespace/newlines left behind
+                        cleanedXML = cleanedXML.replace(/\n\s*\n\s*\n/g, '\n');
+                    }
+                }
+                
+                // Try to inject by string manipulation as fallback
+                const closingBwfxml = '</BWFXML>';
+                const closingIndex = cleanedXML.lastIndexOf(closingBwfxml);
+                
+                if (closingIndex !== -1) {
+                    // Insert mixer settings before closing tag
+                    return cleanedXML.substring(0, closingIndex) + 
+                           '\n  ' + mixerXML + '\n' + 
+                           cleanedXML.substring(closingIndex);
+                } else {
+                    console.error('Could not find closing BWFXML tag, wrapping entire content');
+                    return `<?xml version="1.0" encoding="UTF-8"?>\n<BWFXML>\n${cleanedXML}\n  ${mixerXML}\n</BWFXML>`;
+                }
             }
 
             let bwfxml = xmlDoc.querySelector('BWFXML');

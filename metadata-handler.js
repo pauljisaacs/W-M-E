@@ -924,7 +924,16 @@ export class MetadataHandler {
 
             if (chunkId === 'iXML') {
                 const chunkData = new Uint8Array(arrayBuffer, offset + 8, chunkSize);
-                return this.textDecoder.decode(chunkData);
+                let xmlString = this.textDecoder.decode(chunkData);
+                
+                // Find the actual end of XML content (after closing BWFXML tag)
+                const endTag = '</BWFXML>';
+                const endIndex = xmlString.lastIndexOf(endTag);
+                if (endIndex !== -1) {
+                    xmlString = xmlString.substring(0, endIndex + endTag.length);
+                }
+                
+                return xmlString.trim();
             }
 
             offset += 8 + chunkSize;
@@ -1030,12 +1039,17 @@ export class MetadataHandler {
                 
                 for (let i = 0; i < numCuePoints; i++) {
                     const cueId = view.getUint32(cueOffset, true);
-                    const position = view.getUint32(cueOffset + 4, true); // Position in samples
-                    // Skip: fccChunk (4), chunkStart (4), blockStart (4), sampleOffset (4) = 16 bytes
+                    const playOrder = view.getUint32(cueOffset + 4, true);
+                    const dataChunkId = this.getChunkId(view, cueOffset + 8);
+                    const chunkStart = view.getUint32(cueOffset + 12, true);
+                    const blockStart = view.getUint32(cueOffset + 16, true);
+                    const sampleOffset = view.getUint32(cueOffset + 20, true); // Actual sample position
+                    
+                    console.log(`Cue point ${i}: id=${cueId}, samplePosition=${sampleOffset}`);
                     
                     cuePoints.push({
                         id: cueId,
-                        samplePosition: position
+                        samplePosition: sampleOffset
                     });
                     
                     cueOffset += 24; // Each cue point is 24 bytes
