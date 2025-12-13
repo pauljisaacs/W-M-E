@@ -3835,4 +3835,54 @@ class App {
 // Wait for DOM to load before initializing app
 document.addEventListener('DOMContentLoaded', () => {
     const app = new App();
+    window.app = app;
+
+    // Sound Report Modal open/close logic (guaranteed after DOM load)
+    const reportBtn = document.getElementById('report-btn');
+    if (reportBtn) {
+        reportBtn.addEventListener('click', () => {
+            const modal = document.getElementById('sound-report-modal');
+            if (modal) {
+                // Always re-render header fields and take list when opening
+                if (window.renderSoundReportHeaderFields) window.renderSoundReportHeaderFields();
+                if (window.renderSoundReportTakeListTable) window.renderSoundReportTakeListTable();
+                modal.style.display = 'block';
+                modal.classList.add('active');
+                // Optional: focus first input
+                const firstInput = modal.querySelector('input,select,textarea,button');
+                if (firstInput) firstInput.focus();
+            }
+        });
+    }
+    // Close/Exit buttons for Sound Report Modal
+    const closeBtn = document.getElementById('close-sound-report');
+    if (closeBtn) {
+        closeBtn.onclick = () => {
+            const modal = document.getElementById('sound-report-modal');
+            if (modal) {
+                modal.style.display = 'none';
+                modal.classList.remove('active');
+            }
+        };
+    }
+    const exitBtn = document.getElementById('exit-report-btn');
+    if (exitBtn) {
+        exitBtn.onclick = () => {
+            const modal = document.getElementById('sound-report-modal');
+            if (modal) {
+                modal.style.display = 'none';
+                modal.classList.remove('active');
+            }
+        };
+    }
+    // Optional: close on outside click
+    const soundReportModal = document.getElementById('sound-report-modal');
+    if (soundReportModal) {
+        soundReportModal.addEventListener('click', (e) => {
+            if (e.target === soundReportModal) {
+                soundReportModal.style.display = 'none';
+                soundReportModal.classList.remove('active');
+            }
+        });
+    }
 });

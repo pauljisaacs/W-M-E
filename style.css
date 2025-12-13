@@ -1,3 +1,32 @@
+.report-export-format-group {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    margin-right: auto;
+    font-size: 1rem;
+}
+.report-export-format-group label {
+    display: flex;
+    align-items: center;
+    gap: 0.4em;
+    font-weight: 500;
+    color: var(--text-main);
+}
+/* Channel Gain Box */
+.channel-gain-box {
+    margin: 0.25rem 0 0.1rem 0;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    text-align: center;
+    background: var(--bg-panel);
+    border-radius: 3px;
+    padding: 2px 0;
+    min-width: 48px;
+    user-select: none;
+    border: 1px solid var(--border-color);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.08);
+}
+
 :root {
     --bg-dark: #121212;
     --bg-panel: #1e1e1e;
@@ -685,6 +714,7 @@ td:nth-child(14) {
     background: none;
     color: var(--text-muted);
     cursor: pointer;
+    margin-top: 5px;
 }
 
 .mute-btn.active {
@@ -1312,4 +1342,176 @@ select {
 .combine-output-name:focus {
     outline: none;
     border-color: var(--accent-primary);
+}
+
+/* Sound Report Modal Styles */
+#sound-report-modal {
+    display: none;
+    position: fixed;
+    z-index: 10001;
+    left: 0; top: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.45);
+    justify-content: center;
+    align-items: center;
+}
+.sound-report-modal-content {
+    background: var(--bg-panel);
+    border-radius: 8px;
+    max-width: 1400px;
+    width: 95vw;
+    max-height: 95vh;
+    overflow-y: auto;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.25);
+    padding: 0;
+}
+#sound-report-modal .modal-header {
+    padding: 1.5rem 2rem 1rem 2rem;
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+#sound-report-modal .modal-header h2 {
+    margin: 0;
+    font-size: 1.5rem;
+}
+#sound-report-modal .modal-close {
+    background: none;
+    border: none;
+    font-size: 2rem;
+    color: var(--text-muted);
+    cursor: pointer;
+    line-height: 1;
+    padding: 0;
+    width: 32px;
+    height: 32px;
+}
+#sound-report-modal .modal-body {
+    padding: 2rem;
+    background: var(--bg-dark);
+}
+.report-title-section {
+    display: flex;
+    gap: 2rem;
+    align-items: center;
+    margin-bottom: 1.5rem;
+}
+.report-title-section label {
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+.report-header-fields {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1.2rem 2.2rem;
+    margin-bottom: 2rem;
+}
+.report-header-fields label {
+    font-size: 0.98rem;
+    color: var(--text-main);
+    font-weight: 500;
+}
+
+.header-field-group {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.5em;
+    margin-bottom: 0.2em;
+}
+
+.header-field-select {
+    width: 150px;
+    min-width: 120px;
+    max-width: 180px;
+}
+
+.header-field-input {
+    min-width: 120px;
+    max-width: 220px;
+}
+.report-take-list-section {
+    margin-bottom: 2rem;
+}
+#report-take-list-table-container {
+    overflow-x: auto;
+    background: var(--bg-panel);
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    margin-top: 0.5rem;
+}
+.report-take-list-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.98rem;
+}
+.report-take-list-table th, .report-take-list-table td {
+    padding: 0.5rem 0.7rem;
+    border-bottom: 1px solid var(--border-color);
+    text-align: left;
+}
+.report-take-list-table th {
+    background: var(--bg-hover);
+    font-weight: 600;
+    color: var(--accent-primary);
+}
+.report-take-list-table tr:nth-child(even) {
+    background: #232323;
+}
+.report-take-list-table tr:nth-child(odd) {
+    background: var(--bg-dark);
+}
+/* Report Filename Column */
+.report-take-list-table th:nth-child(1),
+.report-take-list-table td:nth-child(1) {
+    width: 210px;
+    max-width: 220px;
+}
+/* Report Scene Column */
+.report-take-list-table th:nth-child(2),
+.report-take-list-table td:nth-child(2) {
+    width: 210px;
+    max-width: 220px;
+}
+/* Report Take Column */
+.report-take-list-table th:nth-child(3),
+.report-take-list-table td:nth-child(3) {
+    width: 180px;
+    max-width: 220px;
+}
+/* Report Timecode Column */
+.report-take-list-table th:nth-child(4),
+.report-take-list-table td:nth-child(4) {
+    width: 180px;
+    max-width: 220px;
+}
+/* Report Duration Column */
+.report-take-list-table th:nth-child(5),
+.report-take-list-table td:nth-child(5) {
+    width: 180px;
+    max-width: 220px;
+}
+.take-list-options {
+    display: flex;
+    gap: 2rem;
+    margin-bottom: 0.5rem;
+    font-size: 0.95rem;
+}
+.report-preview-section {
+    margin-top: 2rem;
+}
+#report-pdf-preview {
+    width: 100%;
+    height: 350px;
+    border: 1px solid var(--border-color);
+    background: #fff;
+    border-radius: 4px;
+}
+#sound-report-modal .modal-footer {
+    padding: 1.5rem 2rem;
+    border-top: 1px solid var(--border-color);
+    display: flex;
+    gap: 1.5rem;
+    justify-content: flex-end;
+    background: var(--bg-panel);
 }
