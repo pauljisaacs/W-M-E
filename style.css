@@ -1,3 +1,21 @@
+.region-tooltip {
+    position: absolute;
+    top: 28px;
+    left: 0;
+    background: rgba(30,30,30,0.98);
+    color: #fff;
+    border-radius: 5px;
+    padding: 6px 14px;
+    font-size: 0.95em;
+    font-family: 'Inter', monospace, sans-serif;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.18);
+    pointer-events: none;
+    z-index: 20;
+    white-space: pre;
+    border: 1px solid #333;
+    min-width: 220px;
+    text-align: left;
+}
 .report-export-format-group {
     display: flex;
     align-items: center;
@@ -133,7 +151,7 @@ body {
 
 /* Metadata List */
 .metadata-section {
-    flex: 0.95;
+    flex: 1;
     overflow: hidden;
     display: flex;
     flex-direction: column;

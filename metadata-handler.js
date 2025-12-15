@@ -309,6 +309,7 @@ export class MetadataHandler {
     }
 
     parseIXML(view, offset, size, metadata) {
+
         // Use TextDecoder for proper UTF-8 handling
         const chunkData = new Uint8Array(view.buffer, view.byteOffset + offset, size);
         const decoder = new TextDecoder('utf-8');
@@ -318,10 +319,13 @@ export class MetadataHandler {
         // Store the original iXML for preservation
         metadata.ixmlRaw = xmlStr;
 
-
-
         const parser = new DOMParser();
         const xmlDoc = parser.parseFromString(xmlStr, "text/xml");
+
+        // Warn if SPEED tag is missing
+        if (!xmlDoc.querySelector('SPEED')) {
+            alert('Warning: Imported file is missing iXML SPEED tag. TC Start and timecode calculations may be unreliable.');
+        }
 
         // check for parse errors
         const parseError = xmlDoc.querySelector('parsererror');
@@ -335,32 +339,28 @@ export class MetadataHandler {
         metadata.project = this.getXmlVal(xmlDoc, "PROJECT");
         metadata.notes = this.getXmlVal(xmlDoc, "NOTE");
 
-        console.log('[parseIXML] Parsed values:', { scene: metadata.scene, take: metadata.take, tape: metadata.tape, notes: metadata.notes, project: metadata.project });
+        // --- TC Start Import Logic ---
+        // 1. BWF_TIME_REFERENCE (samples)
+        let bwfTimeRef = this.getXmlVal(xmlDoc, "BWF_TIME_REFERENCE");
+        // 2. Fallback: use bEXT (handled elsewhere)
 
-        // Parse FPS/Speed - the SPEED field often contains multiple values
-        // Format: "24000/1001 24000/1001 NDF 24000/1001 48000 24 ..."
-        // We want the first value and convert fractions to decimal FOR DISPLAY
-        // But store the exact fraction for precise calculations
+        if (bwfTimeRef && !isNaN(Number(bwfTimeRef)) && metadata.sampleRate && metadata.fpsExact) {
+            metadata.tcStart = this.samplesToTC(Number(bwfTimeRef), metadata.sampleRate, metadata.fpsExact);
+            metadata.timeReference = Number(bwfTimeRef);
+        }
 
-        // Check for nested elements first (Sound Devices style)
+        // FPS/Speed parsing (unchanged)
         let speedVal = this.getXmlVal(xmlDoc, "SPEED MASTER_SPEED") ||
             this.getXmlVal(xmlDoc, "SPEED CURRENT_SPEED") ||
             this.getXmlVal(xmlDoc, "SPEED TIMECODE_RATE");
-
         if (!speedVal) {
-            // Fallback to top-level SPEED or FRAME_RATE
             speedVal = this.getXmlVal(xmlDoc, "SPEED") || this.getXmlVal(xmlDoc, "FRAME_RATE");
         }
-
         if (speedVal) {
-            const firstValue = speedVal.trim().split(/\s+/)[0]; // Get first token
+            const firstValue = speedVal.trim().split(/\s+/)[0];
             if (firstValue.includes('/')) {
-                // Store exact fraction for calculations
                 const [num, den] = firstValue.split('/').map(Number);
                 metadata.fpsExact = { numerator: num, denominator: den };
-
-                // Calculate display FPS
-                // Special handling for 23.976 vs 24
                 const fps = num / den;
                 if (Math.abs(fps - 23.976) < 0.01) {
                     metadata.fps = "23.98";
@@ -368,7 +368,6 @@ export class MetadataHandler {
                     metadata.fps = "29.97";
                 } else {
                     metadata.fps = fps.toFixed(2);
-                    // Remove trailing zeros if integer
                     if (metadata.fps.endsWith('.00')) {
                         metadata.fps = metadata.fps.substring(0, metadata.fps.length - 3);
                     }
@@ -693,93 +692,78 @@ export class MetadataHandler {
 
         // If we have original iXML, preserve it and update only edited fields
         if (metadata.ixmlRaw) {
-            console.log('Preserving original iXML. Original length:', metadata.ixmlRaw.length);
-
             const parser = new DOMParser();
             const xmlDoc = parser.parseFromString(metadata.ixmlRaw, "text/xml");
 
-            // Update only the fields we allow editing
             this.updateXmlVal(xmlDoc, "PROJECT", metadata.project);
             this.updateXmlVal(xmlDoc, "SCENE", metadata.scene);
             this.updateXmlVal(xmlDoc, "TAKE", metadata.take);
             this.updateXmlVal(xmlDoc, "TAPE", metadata.tape);
             this.updateXmlVal(xmlDoc, "NOTE", metadata.notes);
 
-            // Update FPS/SPEED if changed
-            if (metadata.fpsExact) {
-                // SPEED tag contains nested elements, update MASTER_SPEED and CURRENT_SPEED
-                const masterSpeedEl = xmlDoc.querySelector("SPEED MASTER_SPEED");
-                const currentSpeedEl = xmlDoc.querySelector("SPEED CURRENT_SPEED");
-                const timecodeRateEl = xmlDoc.querySelector("SPEED TIMECODE_RATE");
-
-                if (masterSpeedEl || currentSpeedEl || timecodeRateEl) {
-                    const newFraction = `${metadata.fpsExact.numerator}/${metadata.fpsExact.denominator}`;
-
-                    if (masterSpeedEl) {
-                        masterSpeedEl.textContent = newFraction;
-                        console.log(`Updated MASTER_SPEED: ${newFraction}`);
-                    }
-                    if (currentSpeedEl) {
-                        currentSpeedEl.textContent = newFraction;
-                        console.log(`Updated CURRENT_SPEED: ${newFraction}`);
-                    }
-                    if (timecodeRateEl) {
-                        timecodeRateEl.textContent = newFraction;
-                        console.log(`Updated TIMECODE_RATE: ${newFraction}`);
-                    }
-                }
+            // --- TC Start Save Logic ---
+            // No longer write TIMECODE_START (non-standard)
+            // Write BWF_TIME_REFERENCE (samples)
+            if (metadata.timeReference !== undefined) {
+                this.updateXmlVal(xmlDoc, "BWF_TIME_REFERENCE", metadata.timeReference.toString());
             }
 
-            // Update timecode fields - check both nested SPEED elements and top-level elements
+            // Always write a complete SPEED tag
+            let speedEl = xmlDoc.querySelector("SPEED");
+            if (!speedEl) {
+                speedEl = xmlDoc.createElement("SPEED");
+                if (xmlDoc.documentElement) xmlDoc.documentElement.appendChild(speedEl);
+            }
+            // Helper to set or create a child element
+            function setSpeedChild(tag, value) {
+                let el = speedEl.querySelector(tag);
+                if (!el) {
+                    el = xmlDoc.createElement(tag);
+                    speedEl.appendChild(el);
+                }
+                el.textContent = value == null ? '' : value;
+            }
+            // NOTE (empty)
+            setSpeedChild('NOTE', '');
+            // MASTER_SPEED and CURRENT_SPEED (FPS as fraction)
+            let fpsFrac = metadata.fpsExact ? `${metadata.fpsExact.numerator}/${metadata.fpsExact.denominator}` : '';
+            setSpeedChild('MASTER_SPEED', fpsFrac);
+            setSpeedChild('CURRENT_SPEED', fpsFrac);
+            // TIMECODE_FLAG (always NDF for now)
+            setSpeedChild('TIMECODE_FLAG', 'NDF');
+            // TIMECODE_RATE (FPS as fraction)
+            setSpeedChild('TIMECODE_RATE', fpsFrac);
+            // FILE_SAMPLE_RATE
+            setSpeedChild('FILE_SAMPLE_RATE', metadata.sampleRate || '');
+            // AUDIO_BIT_DEPTH
+            setSpeedChild('AUDIO_BIT_DEPTH', metadata.bitDepth || '');
+            // DIGITIZER_SAMPLE_RATE
+            setSpeedChild('DIGITIZER_SAMPLE_RATE', metadata.sampleRate || '');
+            // TIMESTAMP_SAMPLE_RATE
+            setSpeedChild('TIMESTAMP_SAMPLE_RATE', metadata.sampleRate || '');
+            // TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_HI/LO
+            let hi = '0', lo = '0';
             if (metadata.timeReference !== undefined) {
                 const timeRef = BigInt(metadata.timeReference);
-                const hi = Number(timeRef >> 32n);
-                const lo = Number(timeRef & 0xFFFFFFFFn);
-
-                // Try nested elements first (inside SPEED tag)
-                let tsHiElement = xmlDoc.querySelector("SPEED TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_HI");
-                let tsLoElement = xmlDoc.querySelector("SPEED TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_LO");
-
-                // If not found, try top-level elements
-                if (!tsHiElement) {
-                    tsHiElement = xmlDoc.querySelector("TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_HI");
-                }
-                if (!tsLoElement) {
-                    tsLoElement = xmlDoc.querySelector("TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_LO");
-                }
-
-                if (tsHiElement && tsLoElement) {
-                    tsHiElement.textContent = hi.toString();
-                    tsLoElement.textContent = lo.toString();
-                    console.log(`Updated iXML TIMESTAMP: HI=${hi}, LO=${lo} (total samples: ${metadata.timeReference})`);
-                } else {
-                    console.log('Warning: No TIMESTAMP_SAMPLES_SINCE_MIDNIGHT fields found in iXML');
-                }
+                hi = (timeRef >> 32n).toString();
+                lo = (timeRef & 0xFFFFFFFFn).toString();
             }
+            setSpeedChild('TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_HI', hi);
+            setSpeedChild('TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_LO', lo);
 
-            // Update track names if they exist
+            // Track names (unchanged)
             if (metadata.trackNames && metadata.trackNames.length > 0) {
                 let trackList = xmlDoc.querySelector("TRACK_LIST");
-
-                // Create TRACK_LIST if it doesn't exist
                 if (!trackList) {
                     trackList = xmlDoc.createElement("TRACK_LIST");
-                    // Assuming TRACK_LIST is usually a child of the root BWFXML
                     if (xmlDoc.documentElement) {
                         xmlDoc.documentElement.appendChild(trackList);
                     }
                 }
-
-                // Get existing tracks
                 const existingTracks = Array.from(trackList.querySelectorAll("TRACK"));
-
-                // Iterate up to the max of existing or new names
                 const maxCount = Math.max(existingTracks.length, metadata.trackNames.length);
-
                 for (let i = 0; i < maxCount; i++) {
-                    // Update or create track
                     if (i < existingTracks.length) {
-                        // Existing track: Update NAME
                         if (i < metadata.trackNames.length) {
                             const track = existingTracks[i];
                             let nameEl = track.querySelector("NAME");
@@ -790,59 +774,39 @@ export class MetadataHandler {
                             nameEl.textContent = metadata.trackNames[i];
                         }
                     } else if (i < metadata.trackNames.length) {
-                        // New track needed
                         const newTrack = xmlDoc.createElement("TRACK");
-
                         const channelIndex = xmlDoc.createElement("CHANNEL_INDEX");
                         channelIndex.textContent = (i + 1).toString();
                         newTrack.appendChild(channelIndex);
-
                         const nameEl = xmlDoc.createElement("NAME");
                         nameEl.textContent = metadata.trackNames[i];
                         newTrack.appendChild(nameEl);
-
                         trackList.appendChild(newTrack);
                     }
                 }
             }
 
-            // Serialize back to string
             const serializer = new XMLSerializer();
             xml = serializer.serializeToString(xmlDoc);
-
-            console.log('Updated iXML length:', xml.length);
-            console.log('First 500 chars of updated iXML:', xml.substring(0, 500));
         } else {
-            console.log('No original iXML found, creating complete iXML structure');
-            console.log('Creating iXML with metadata:', { 
-                project: metadata.project, 
-                scene: metadata.scene, 
-                take: metadata.take, 
-                tape: metadata.tape, 
-                notes: metadata.notes,
-                channels: metadata.channels,
-                sampleRate: metadata.sampleRate,
-                bitDepth: metadata.bitDepth
-            });
-            
-            // Create a more complete iXML structure
+            // No original iXML, create new
             xml = '<?xml version="1.0" encoding="UTF-8"?>\n';
             xml += '<BWFXML>\n';
-            
-            // Basic metadata
             xml += '  <PROJECT>' + (metadata.project || '') + '</PROJECT>\n';
             xml += '  <SCENE>' + (metadata.scene || '') + '</SCENE>\n';
             xml += '  <TAKE>' + (metadata.take || '') + '</TAKE>\n';
             xml += '  <TAPE>' + (metadata.tape || '') + '</TAPE>\n';
             xml += '  <NOTE>' + (metadata.notes || '') + '</NOTE>\n';
-            
-            // File metadata
+            if (metadata.tcStart) {
+                // Do not write TIMECODE_START (non-standard)
+            }
+            if (metadata.timeReference !== undefined) {
+                xml += '  <BWF_TIME_REFERENCE>' + metadata.timeReference + '</BWF_TIME_REFERENCE>\n';
+            }
             if (metadata.sampleRate) {
                 xml += '  <SPEED>\n';
                 xml += '    <MASTER_SPEED>' + metadata.sampleRate + '</MASTER_SPEED>\n';
                 xml += '    <CURRENT_SPEED>' + metadata.sampleRate + '</CURRENT_SPEED>\n';
-                
-                // Add timecode info if available
                 if (metadata.fps) {
                     const fpsMap = {
                         '23.98': '24', '24': '24', '25': '25', 
@@ -852,33 +816,25 @@ export class MetadataHandler {
                     xml += '    <TIMECODE_RATE>' + (fpsMap[metadata.fps] || '30') + '</TIMECODE_RATE>\n';
                     xml += '    <TIMECODE_FLAG>NDF</TIMECODE_FLAG>\n';
                 }
-                
                 xml += '  </SPEED>\n';
             }
-            
-            // Track list
             const numChannels = metadata.channels || 1;
             if (numChannels > 0) {
                 xml += '  <TRACK_LIST>\n';
-                
                 for (let i = 0; i < numChannels; i++) {
                     const trackName = (metadata.trackNames && metadata.trackNames[i]) 
-                                    ? metadata.trackNames[i] 
-                                    : `Track ${i + 1}`;
-                    
+                        ? metadata.trackNames[i] 
+                        : `Track ${i + 1}`;
                     xml += '    <TRACK>\n';
                     xml += '      <CHANNEL_INDEX>' + (i + 1) + '</CHANNEL_INDEX>\n';
                     xml += '      <INTERLEAVE_INDEX>' + (i + 1) + '</INTERLEAVE_INDEX>\n';
                     xml += '      <NAME>' + trackName + '</NAME>\n';
                     xml += '    </TRACK>\n';
                 }
-                
                 xml += '  </TRACK_LIST>\n';
             }
-
             xml += '</BWFXML>';
         }
-
         return new TextEncoder().encode(xml).buffer;
     }
 

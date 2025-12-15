@@ -503,6 +503,7 @@ class App {
         let regionStartX = 0;
         let isDraggingEdge = false;
         let draggingEdge = null; // 'start' or 'end'
+        const regionTooltip = document.getElementById('region-tooltip');
 
         // Handle region edge dragging
         regionOverlay.addEventListener('mousedown', (e) => {
@@ -536,18 +537,21 @@ class App {
             const x = e.clientX - rect.left;
             const percent = x / rect.width;
 
-            // Check if clicking on existing region (handled by regionOverlay now)
-            if (this.region.start !== null) {
-                return;
-            }
-
-            // Start new region selection
+            // Always start a new region, replacing any existing one
             isSelectingRegion = true;
             regionStartX = x;
             this.region.start = percent * this.audioEngine.buffer.duration;
             this.region.end = this.region.start;
 
             this.updateRegionDisplay();
+
+            // Show tooltip at mouse position
+            if (regionTooltip) {
+                regionTooltip.style.display = 'block';
+                regionTooltip.style.left = `${x - 110}px`;
+                regionTooltip.style.top = '28px';
+                updateRegionTooltip(this.region.start, this.region.end);
+            }
         });
 
         // Listen to document for mousemove so we can track outside the element
@@ -567,6 +571,13 @@ class App {
                     this.region.end = Math.max(time, this.region.start + 0.01); // Keep 0.01s minimum
                 }
                 this.updateRegionDisplay();
+                // Show and update tooltip while dragging edge
+                if (regionTooltip) {
+                    regionTooltip.style.display = 'block';
+                    regionTooltip.style.left = `${x - 110}px`;
+                    regionTooltip.style.top = '28px';
+                    updateRegionTooltip(this.region.start, this.region.end);
+                }
                 return;
             }
 
@@ -574,6 +585,13 @@ class App {
             if (isSelectingRegion) {
                 this.region.end = time;
                 this.updateRegionDisplay();
+                // Update tooltip position and content
+                if (regionTooltip) {
+                    regionTooltip.style.display = 'block';
+                    regionTooltip.style.left = `${x - 110}px`;
+                    regionTooltip.style.top = '28px';
+                    updateRegionTooltip(this.region.start, this.region.end);
+                }
             }
         });
 
@@ -582,6 +600,10 @@ class App {
             if (isDraggingEdge) {
                 isDraggingEdge = false;
                 draggingEdge = null;
+                // Hide tooltip when done dragging edge
+                if (regionTooltip) {
+                    regionTooltip.style.display = 'none';
+                }
                 return;
             }
 
@@ -597,8 +619,42 @@ class App {
                 if (Math.abs(this.region.end - this.region.start) < 0.1) {
                     this.clearRegion();
                 }
+                // Hide tooltip
+                if (regionTooltip) {
+                    regionTooltip.style.display = 'none';
+                }
             }
         });
+        // Tooltip update helper
+        function updateRegionTooltip(start, end) {
+            if (!regionTooltip) return;
+            const s = Math.min(start, end);
+            const e = Math.max(start, end);
+            const absStart = window.app.formatTime ? window.app.formatTime(s) : secondsToHMS(s);
+            const absEnd = window.app.formatTime ? window.app.formatTime(e) : secondsToHMS(e);
+            const tcStart = window.app.secondsToTimecode ? window.app.secondsToTimecode(s) : secondsToTC(s);
+            const tcEnd = window.app.secondsToTimecode ? window.app.secondsToTimecode(e) : secondsToTC(e);
+            regionTooltip.innerHTML = `<b>Start:</b> ${absStart} <span style="color:#aaa">(${tcStart})</span><br><b>End:</b> ${absEnd} <span style="color:#aaa">(${tcEnd})</span>`;
+        }
+
+        // Fallbacks if not on window.app
+        function secondsToHMS(sec) {
+            sec = Math.max(0, sec|0);
+            const h = Math.floor(sec/3600);
+            const m = Math.floor((sec%3600)/60);
+            const s = Math.floor(sec%60);
+            return `${h.toString().padStart(2,'0')}:${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
+        }
+        function secondsToTC(sec) {
+            // Default 30 fps
+            const fps = 30;
+            sec = Math.max(0, sec);
+            const h = Math.floor(sec/3600);
+            const m = Math.floor((sec%3600)/60);
+            const s = Math.floor(sec%60);
+            const f = Math.floor((sec - Math.floor(sec)) * fps);
+            return `${h.toString().padStart(2,'0')}:${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}:${f.toString().padStart(2,'0')}`;
+        }
 
         // Toggle sections
         document.querySelectorAll('.toggle-btn').forEach(btn => {
@@ -852,7 +908,7 @@ class App {
         // Group files
         this.files = this.groupFiles(allItems);
 
-        // Re-render table completely
+        // Force full table refresh with latest metadata
         const tbody = document.getElementById('file-list-body');
         tbody.innerHTML = '';
         this.files.forEach((item, index) => {
@@ -1252,6 +1308,14 @@ class App {
                         // Update TC Start display value
                         metadata.tcStart = edits.tcStart;
 
+                        // Ensure sampleRate and fpsExact are present
+                        if (!metadata.sampleRate && this.files[index].metadata.sampleRate) {
+                            metadata.sampleRate = this.files[index].metadata.sampleRate;
+                        }
+                        if (!metadata.fpsExact && this.files[index].metadata.fpsExact) {
+                            metadata.fpsExact = this.files[index].metadata.fpsExact;
+                        }
+
                         // Convert TC Start back to timeReference (samples) for bEXT
                         if (metadata.sampleRate && metadata.fpsExact) {
                             metadata.timeReference = this.metadataHandler.tcToSamples(
@@ -1443,6 +1507,10 @@ class App {
 
         this.updateSelectionUI();
 
+        // Clear region selection when switching takes
+        this.clearRegion();
+
+
         // Load Audio for the clicked file (if selected and not already loaded)
         if (this.selectedIndices.has(index) && this.currentlyLoadedFileIndex !== index) {
             const item = this.files[index];
@@ -1470,9 +1538,28 @@ class App {
                 ctx.fillText('You can still edit and save metadata for this file', 20, 55);
 
                 this.currentlyLoadedFileIndex = index;
+                // Update TC counter display to new take's TC Start
+                const currentTimecode = document.getElementById('current-timecode');
+                if (currentTimecode) {
+                    // Show the TC Start for this file (if available)
+                    if (item.metadata && item.metadata.tcStart) {
+                        currentTimecode.textContent = item.metadata.tcStart;
+                    } else {
+                        currentTimecode.textContent = '00:00:00:00';
+                    }
+                }
             } else {
                 await this.loadAudioForFile(index);
                 this.currentlyLoadedFileIndex = index;
+                // Update TC counter display to new take's TC Start
+                const currentTimecode = document.getElementById('current-timecode');
+                if (currentTimecode) {
+                    if (item.metadata && item.metadata.tcStart) {
+                        currentTimecode.textContent = item.metadata.tcStart;
+                    } else {
+                        currentTimecode.textContent = '00:00:00:00';
+                    }
+                }
             }
         }
     }
@@ -1594,6 +1681,11 @@ class App {
         // Enable save button
         if (updateCount > 0) {
             document.getElementById('batch-save-btn').disabled = false;
+            
+            // Trigger auto-save if enabled
+            if (this.autoSaveEnabled) {
+                this.scheduleAutoSave();
+            }
         }
 
         this.closeBatchEditModal();
@@ -2261,11 +2353,16 @@ class App {
         const sep1 = document.getElementById('rename-sep1').value;
         const sep2 = document.getElementById('rename-sep2').value;
 
-        const newName = this.generateFilename(file.metadata, pattern, sep1, sep2);
+        // Extract track suffix from original filename to show preview with suffix
+        const originalName = file.metadata.filename;
+        const trackSuffixMatch = originalName.match(/(_\d+)\.wav$/);
+        const trackSuffix = trackSuffixMatch ? trackSuffixMatch[1] : '';
+
+        const newName = this.generateFilename(file.metadata, pattern, sep1, sep2, trackSuffix);
         document.getElementById('rename-preview').textContent = newName;
     }
 
-    generateFilename(metadata, pattern, sep1, sep2) {
+    generateFilename(metadata, pattern, sep1, sep2, trackSuffix = '') {
         const scene = metadata.scene || 'SCENE';
         const take = metadata.take || 'TAKE';
         const project = metadata.project || 'PROJECT';
@@ -2275,6 +2372,11 @@ class App {
             name = `${project}${sep1}${scene}${sep2}${take}`;
         } else {
             name = `${scene}${sep2}${take}`;
+        }
+
+        // Append track suffix if provided (for sibling files)
+        if (trackSuffix) {
+            name += trackSuffix;
         }
 
         return `${name}.wav`;
@@ -2292,23 +2394,36 @@ class App {
             const indices = Array.from(this.selectedIndices);
             let renamedCount = 0;
             let failedCount = 0;
+            const renamedIndices = new Set();
 
             for (const index of indices) {
                 const item = this.files[index];
-                const newName = this.generateFilename(item.metadata, pattern, sep1, sep2);
+                
+                // Determine which files to rename: if it's a group, rename all siblings, otherwise just this file
+                const targetFiles = item.isGroup ? item.siblings : [item];
 
-                if (item.metadata.filename === newName) continue; // Skip if same
+                for (const targetItem of targetFiles) {
+                    // Extract track suffix from original filename (e.g., '_1', '_2', '_3')
+                    const originalName = targetItem.metadata.filename;
+                    const trackSuffixMatch = originalName.match(/(_\d+)\.wav$/);
+                    const trackSuffix = trackSuffixMatch ? trackSuffixMatch[1] : '';
 
-                console.log(`Renaming ${item.metadata.filename} to ${newName}`);
+                    const newName = this.generateFilename(targetItem.metadata, pattern, sep1, sep2, trackSuffix);
 
-                if (item.handle.move) {
-                    await item.handle.move(newName);
-                    item.metadata.filename = newName;
-                    item.file = await item.handle.getFile(); // Refresh file object
-                    renamedCount++;
-                } else {
-                    console.warn('File System Access API "move" not supported on this handle.');
-                    failedCount++;
+                    if (originalName === newName) continue; // Skip if same
+
+                    console.log(`Renaming ${originalName} to ${newName}`);
+
+                    if (targetItem.handle && targetItem.handle.move) {
+                        await targetItem.handle.move(newName);
+                        targetItem.metadata.filename = newName;
+                        targetItem.file = await targetItem.handle.getFile(); // Refresh file object
+                        renamedCount++;
+                        renamedIndices.add(this.files.indexOf(targetItem));
+                    } else {
+                        console.warn(`File System Access API "move" not supported on ${originalName}.`);
+                        failedCount++;
+                    }
                 }
             }
 
@@ -2453,11 +2568,23 @@ class App {
                 let start = 0;
                 let end = buffer.duration;
                 let isRegionExport = false;
+                let exportMetadata = null;
 
                 // Only apply region if we are exporting the single currently loaded file
                 if (selectedFiles.length === 1 && this.region.start !== null && this.region.end !== null) {
                     const regionStart = Math.min(this.region.start, this.region.end);
                     const regionEnd = Math.max(this.region.start, this.region.end);
+
+                    // Calculate new timeReference for region export
+                    // New TC Start = old TC Start + region offset in samples
+                    const sampleRate = buffer.sampleRate;
+                    const regionStartSamples = Math.round(regionStart * sampleRate);
+                    const oldTimeReference = item.metadata.timeReference || 0;
+                    const newTimeReference = oldTimeReference + regionStartSamples;
+
+                    exportMetadata = {
+                        timeReference: newTimeReference
+                    };
 
                     // Extract region first
                     buffer = this.audioEngine.extractRegion(buffer, regionStart, regionEnd);
@@ -2478,8 +2605,48 @@ class App {
                 if (format === 'wav') {
                     const bitDepth = parseInt(document.getElementById('export-bitdepth').value);
                     const originalBuffer = await item.file.arrayBuffer();
-                    const wavBuffer = this.audioProcessor.createWavFile(renderedBuffer, bitDepth, originalBuffer);
-                    blob = new Blob([wavBuffer], { type: 'audio/wav' });
+                    const wavBuffer = this.audioProcessor.createWavFile(renderedBuffer, bitDepth, originalBuffer, exportMetadata);
+                    
+                    // For region exports, append fresh iXML chunk with proper TIMESTAMP_SAMPLES_SINCE_MIDNIGHT
+                    if (isRegionExport && exportMetadata) {
+                        // Create new metadata for the exported region
+                        const exportedMetadata = { ...item.metadata };
+                        exportedMetadata.timeReference = exportMetadata.timeReference;
+                        
+                        // Use metadata handler to create proper iXML chunk
+                        const ixmlChunk = this.metadataHandler.createIXMLChunk(exportedMetadata);
+                        
+                        // Append iXML chunk to the WAV file
+                        const wavView = new DataView(wavBuffer);
+                        const wavArray = new Uint8Array(wavBuffer);
+                        
+                        // Find the size of the RIFF file (excluding 8 bytes for 'RIFF' and size field)
+                        const riffSize = wavView.getUint32(4, true);
+                        const oldFileSize = riffSize + 8;
+                        const newFileSize = oldFileSize + 8 + ixmlChunk.byteLength; // 8 bytes for 'iXML' and size
+                        
+                        // Create new buffer with iXML chunk
+                        const newWavBuffer = new Uint8Array(newFileSize);
+                        newWavBuffer.set(wavArray);
+                        
+                        // Write iXML chunk header at the end
+                        const chunkOffset = oldFileSize;
+                        newWavBuffer[chunkOffset] = 0x69;     // 'i'
+                        newWavBuffer[chunkOffset + 1] = 0x58; // 'X'
+                        newWavBuffer[chunkOffset + 2] = 0x4D; // 'M'
+                        newWavBuffer[chunkOffset + 3] = 0x4C; // 'L'
+                        const chunkView = new DataView(newWavBuffer.buffer);
+                        chunkView.setUint32(chunkOffset + 4, ixmlChunk.byteLength, true);
+                        newWavBuffer.set(new Uint8Array(ixmlChunk), chunkOffset + 8);
+                        
+                        // Update RIFF size
+                        const newRiffSize = newFileSize - 8;
+                        chunkView.setUint32(4, newRiffSize, true);
+                        
+                        blob = new Blob([newWavBuffer.buffer], { type: 'audio/wav' });
+                    } else {
+                        blob = new Blob([wavBuffer], { type: 'audio/wav' });
+                    }
                 } else if (format === 'mp3') {
                     if (typeof lamejs === 'undefined') {
                         alert('lamejs library not loaded. Please refresh the page.');
@@ -3435,7 +3602,8 @@ class App {
 
         // Update modal info
         document.getElementById('split-filename').textContent = selectedFile.metadata.filename;
-        document.getElementById('split-folder-path').textContent = 'No folder selected';
+        // Show 'Same as source files' if no folder is selected
+        document.getElementById('split-folder-path').textContent = 'Same as source files';
         document.getElementById('split-confirm-btn').disabled = true;
 
         // Show modal
@@ -3462,7 +3630,12 @@ class App {
             document.getElementById('split-folder-path').textContent = dirHandle.name;
             document.getElementById('split-confirm-btn').disabled = false;
         } catch (err) {
-            if (err.name !== 'AbortError') {
+            // If user cancels, revert to 'Same as source files'
+            if (err.name === 'AbortError') {
+                this.splitFileData.destinationHandle = null;
+                document.getElementById('split-folder-path').textContent = 'Same as source files';
+                document.getElementById('split-confirm-btn').disabled = true;
+            } else {
                 console.error('Error selecting folder:', err);
                 alert('Failed to select folder');
             }

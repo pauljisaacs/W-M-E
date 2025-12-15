@@ -235,7 +235,7 @@ export class AudioProcessor {
         view.setUint8(offset + 2, (val >> 16) & 0xFF);
     }
 
-    createWavFile(audioBuffer, bitDepth, originalBuffer) {
+    createWavFile(audioBuffer, bitDepth, originalBuffer, exportMetadata) {
         const numChannels = audioBuffer.numberOfChannels;
         const sampleRate = audioBuffer.sampleRate;
         const length = audioBuffer.length;
@@ -299,9 +299,15 @@ export class AudioProcessor {
         }
         chunks.push({ id: 'data', data: dataChunk });
 
-        // 3. Copy metadata chunks from original buffer
+        // 3. Copy or update metadata chunks from original buffer
+        // For region exports with new timeReference, copy metadata and let the caller create fresh iXML
         if (originalBuffer) {
-            this.copyMetadataChunks(originalBuffer, chunks);
+            if (exportMetadata) {
+                this.copyBextChunk(originalBuffer, chunks, exportMetadata);
+                // Don't copy iXML - let the caller create fresh one with proper TIMESTAMP_SAMPLES_SINCE_MIDNIGHT
+            } else {
+                this.copyMetadataChunks(originalBuffer, chunks);
+            }
         }
 
         // Construct final file
@@ -334,6 +340,46 @@ export class AudioProcessor {
         }
 
         return fileBuffer.buffer;
+    }
+
+    /**
+     * Copy and update only the bEXT chunk with new timeReference
+     */
+    copyBextChunk(originalBuffer, chunks, exportMetadata) {
+        const view = new DataView(originalBuffer);
+        let offset = 12;
+        while (offset < view.byteLength - 8) {
+            const chunkId = String.fromCharCode(
+                view.getUint8(offset),
+                view.getUint8(offset + 1),
+                view.getUint8(offset + 2),
+                view.getUint8(offset + 3)
+            );
+            const chunkSize = view.getUint32(offset + 4, true);
+
+            if (chunkId === 'bext') {
+                // Copy and update bEXT chunk
+                let chunkData = new Uint8Array(originalBuffer.slice(offset + 8, offset + 8 + chunkSize));
+                if (exportMetadata && exportMetadata.timeReference !== undefined) {
+                    // Update timeReference (8 bytes at offset 338-345 in bEXT chunk)
+                    // Only update if the chunk is large enough
+                    if (chunkData.byteLength >= 346) {
+                        const dv = new DataView(chunkData.buffer, chunkData.byteOffset, chunkData.byteLength);
+                        // Write as two 32-bit little endian values (low, high)
+                        const timeRef = BigInt(exportMetadata.timeReference);
+                        const timeRefLow = Number(timeRef & 0xFFFFFFFFn);
+                        const timeRefHigh = Number((timeRef >> 32n) & 0xFFFFFFFFn);
+                        dv.setUint32(338, timeRefLow, true);   // Low 32 bits
+                        dv.setUint32(342, timeRefHigh, true);  // High 32 bits
+                    }
+                }
+                chunks.push({ id: chunkId, data: chunkData });
+                break; // Found bEXT, exit loop
+            }
+
+            offset += 8 + chunkSize;
+            if (chunkSize % 2 !== 0) offset++;
+        }
     }
 
     copyMetadataChunks(originalBuffer, chunks) {
