@@ -79,7 +79,7 @@ class App {
         this.selectedIndices = new Set();
         this.lastSelectedIndex = -1; // For shift-click range selection
         this.currentlyLoadedFileIndex = -1; // Track which file is currently loaded
-        this.columnOrder = [3, 12, 11, 0, 1, 2, 4, 5, 6, 7, 8, 9, 14, 10, 15]; // Default order: Filename, Project, Tape...
+        this.columnOrder = [3, 12, 11, 0, 1, 2, 4, 5, 6, 7, 8, 9, 10, 14]; // Default order: Filename, Project, Tape...
         this.sortColumn = null;
         this.sortDirection = 'asc';
         this.currentFileMetadata = null; // Store current file's metadata for timecode
@@ -1192,7 +1192,7 @@ class App {
         };
 
         // Create all cells in original order (Draggable)
-        // 0: Ch, 1: Bits, 2: Rate, 3: Filename, 4: Format, 5: Scene, 6: Take, 7: Duration, 8: TC Start, 9: FPS, 10: Notes, 11: Tape, 12: Project, 13: Date
+        // Indices: 0: Channels, 1: BitDepth, 2: SampleRate, 3: Filename, 4: Format, 5: Scene, 6: Take, 7: Duration, 8: TCStart, 9: FPS, 10: FileSize, 11: Tape, 12: Project, 14: Notes
         
         // Format channel display with Mono/Poly indicator
         const item = this.files[index];
@@ -1206,23 +1206,21 @@ class App {
                                channelCount >= 2 ? `${channelCount} (Poly)` : 
                                channelCount;
         
-        const cells = [
-            createCell('channels', channelDisplay, false),
-            createCell('bitDepth', metadata.bitDepth ? metadata.bitDepth : '', false),
-            createCell('sampleRate', metadata.sampleRate ? (metadata.sampleRate / 1000) + 'k' : '', false),
-            createCell('filename', metadata.filename, false),
-            createCell('format', metadata.format, false),
-            createCell('scene', metadata.scene),
-            createCell('take', metadata.take),
-            createCell('duration', metadata.duration, false),
-            createCell('tcStart', metadata.tcStart, false),
-            createCell('fps', metadata.fps, false),
-            createCell('notes', metadata.notes),
-            createCell('tape', metadata.tape),
-            createCell('project', metadata.project),
-            createCell('date', metadata.date),
-            createCell('fileSize', metadata.fileSize ? ((metadata.fileSize / 1000000).toFixed(2) + ' MB') : '', false)
-        ];
+        const cells = [];
+        cells[0] = createCell('channels', channelDisplay, false);
+        cells[1] = createCell('bitDepth', metadata.bitDepth ? metadata.bitDepth : '', false);
+        cells[2] = createCell('sampleRate', metadata.sampleRate ? (metadata.sampleRate / 1000) + 'k' : '', false);
+        cells[3] = createCell('filename', metadata.filename, false);
+        cells[4] = createCell('format', metadata.format, false);
+        cells[5] = createCell('scene', metadata.scene);
+        cells[6] = createCell('take', metadata.take);
+        cells[7] = createCell('duration', metadata.duration, false);
+        cells[8] = createCell('tcStart', metadata.tcStart, false);
+        cells[9] = createCell('fps', metadata.fps, false);
+        cells[10] = createCell('fileSize', metadata.fileSize ? ((metadata.fileSize / 1000000).toFixed(2) + ' MB') : '', false);
+        cells[11] = createCell('tape', metadata.tape);
+        cells[12] = createCell('project', metadata.project);
+        cells[14] = createCell('notes', metadata.notes);
 
         // Append in current column order
         this.columnOrder.forEach(colIndex => {
@@ -1722,8 +1720,8 @@ class App {
         
         document.getElementById('combine-btn').disabled = (!hasSiblingGroups && !canCombineSelectedMono) || isPolySelected;
         
-        // Enable export TC range button if exactly one file is selected
-        document.getElementById('export-tc-range-btn').disabled = this.selectedIndices.size !== 1;
+        // Enable export TC range button if one or more files are selected
+        document.getElementById('export-tc-range-btn').disabled = this.selectedIndices.size === 0;
         
         // Enable split button if exactly one poly file is selected (not a sibling group)
         document.getElementById('split-btn').disabled = !isPolySelected;
@@ -2343,144 +2341,161 @@ class App {
             return;
         }
 
-        const selectedIndex = Array.from(this.selectedIndices)[0];
-        const selectedFile = this.files[selectedIndex];
+        const selectedIndices = this.exportTCRangeIndices || Array.from(this.selectedIndices);
+        const selectedFiles = selectedIndices.map(idx => this.files[idx]);
 
         this.closeExportTCRangeModal();
         document.body.style.cursor = 'wait';
 
+        let successCount = 0;
+        let failCount = 0;
+        const exportedFiles = [];
+
         try {
-            // Get save file handle
-            const suggestedName = selectedFile.metadata.filename.replace(/\.[^/.]+$/, `_${startTimeStr.replace(/:/g, '')}.${format}`);
-            const handle = await window.showSaveFilePicker({
-                suggestedName: suggestedName,
-                types: [{
-                    description: format === 'wav' ? 'WAV Audio' : 'MP3 Audio',
-                    accept: { [format === 'wav' ? 'audio/wav' : 'audio/mpeg']: [`.${format}`] }
-                }]
+            // Show directory picker once to establish destination for batch export
+            const directoryHandle = await window.showDirectoryPicker({
+                mode: 'readwrite'
             });
 
-            // Calculate actual range within the file
-            const fileStartSeconds = this.parseTimecodeToSeconds(selectedFile.metadata.tcStart || '00:00:00:00');
-            const fileDurationSeconds = this.parseTimecodeToSeconds(selectedFile.metadata.duration);
-            const fileEndSeconds = fileStartSeconds + fileDurationSeconds;
+            for (const selectedFile of selectedFiles) {
+                try {
 
-            // Calculate overlap
-            const rangeStartSeconds = Math.max(startSeconds, fileStartSeconds);
-            const rangeEndSeconds = Math.min(endSeconds, fileEndSeconds);
+                    // Create filename with _region appended
+                    const nameWithoutExt = selectedFile.metadata.filename.replace(/\.[^/.]+$/, '');
+                    const fileName = `${nameWithoutExt}_region.${format}`;
 
-            if (rangeStartSeconds >= rangeEndSeconds) {
-                alert('The specified timecode range does not overlap with this file.');
-                return;
+                    // Get file handle in the directory
+                    const handle = await directoryHandle.getFileHandle(fileName, { create: true });
+
+                    // Calculate actual range within the file
+                    const fileStartSeconds = this.parseTimecodeToSeconds(selectedFile.metadata.tcStart || '00:00:00:00');
+                    const fileDurationSeconds = this.parseTimecodeToSeconds(selectedFile.metadata.duration);
+                    const fileEndSeconds = fileStartSeconds + fileDurationSeconds;
+
+                    // Calculate overlap
+                    const rangeStartSeconds = Math.max(startSeconds, fileStartSeconds);
+                    const rangeEndSeconds = Math.min(endSeconds, fileEndSeconds);
+
+                    if (rangeStartSeconds >= rangeEndSeconds) {
+                        console.warn(`File ${selectedFile.metadata.filename}: specified timecode range does not overlap.`);
+                        failCount++;
+                        continue;
+                    }
+                    const sampleRate = selectedFile.metadata.sampleRate;
+                    const startSampleOffset = Math.round((rangeStartSeconds - fileStartSeconds) * sampleRate);
+                    const endSampleOffset = Math.round((rangeEndSeconds - fileStartSeconds) * sampleRate);
+                    const sampleCount = endSampleOffset - startSampleOffset;
+
+                    // Load file audio
+                    const arrayBuffer = await selectedFile.file.arrayBuffer();
+                    const audioBuffer = await this.audioEngine.audioCtx.decodeAudioData(arrayBuffer.slice(0));
+
+                    // Extract range using OfflineAudioContext
+                    const channels = audioBuffer.numberOfChannels;
+                    const OfflineAudioContext = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+                    const offlineCtx = new OfflineAudioContext(channels, sampleCount, sampleRate);
+
+                    // Create a buffer source with the full decoded audio
+                    const bufferSource = offlineCtx.createBufferSource();
+                    bufferSource.buffer = audioBuffer;
+                    
+                    // Connect to destination and start from the offset
+                    bufferSource.connect(offlineCtx.destination);
+                    bufferSource.start(0, startSampleOffset / sampleRate, sampleCount / sampleRate);
+
+                    // Render the extracted portion
+                    const extractedBuffer = await offlineCtx.startRendering();
+
+                    // Get bitdepth
+                    const bitDepth = format === 'wav' ? parseInt(document.getElementById('export-tc-bitdepth').value) : 16;
+
+                    // Create export metadata with TC Start
+                    const newTCStart = startTimeStr + ':00'; // Add frame count
+                    const exportMetadata = {
+                        ...selectedFile.metadata,
+                        tcStart: newTCStart,
+                        duration: this.secondsToDuration(rangeEndSeconds - rangeStartSeconds)
+                    };
+
+                    // Calculate timeReference from the new TC Start
+                    const fpsExact = selectedFile.metadata.fpsExact || { numerator: 24, denominator: 1 };
+                    exportMetadata.timeReference = this.metadataHandler.tcToSamples(newTCStart, sampleRate, fpsExact);
+
+                    // Create audio file
+                    let blob;
+                    if (format === 'wav') {
+                        const wavBuffer = this.audioProcessor.createWavFile(extractedBuffer, bitDepth, null, exportMetadata);
+                        
+                        // Create bEXT and iXML chunks with timecode information
+                        const bextChunk = this.metadataHandler.createBextChunk(exportMetadata);
+                        const ixmlChunk = this.metadataHandler.createIXMLChunk(exportMetadata);
+                        
+                        // Calculate new file size
+                        const wavView = new DataView(wavBuffer);
+                        const wavArray = new Uint8Array(wavBuffer);
+                        const riffSize = wavView.getUint32(4, true);
+                        const oldFileSize = riffSize + 8;
+                        const newFileSize = oldFileSize + 8 + bextChunk.byteLength + 8 + ixmlChunk.byteLength;
+                        
+                        // Create new buffer with both chunks
+                        const newWavBuffer = new Uint8Array(newFileSize);
+                        newWavBuffer.set(wavArray);
+                        
+                        const chunkView = new DataView(newWavBuffer.buffer);
+                        
+                        // Write bEXT chunk
+                        let chunkOffset = oldFileSize;
+                        newWavBuffer[chunkOffset] = 0x62;     // 'b'
+                        newWavBuffer[chunkOffset + 1] = 0x65; // 'e'
+                        newWavBuffer[chunkOffset + 2] = 0x78; // 'x'
+                        newWavBuffer[chunkOffset + 3] = 0x74; // 't'
+                        chunkView.setUint32(chunkOffset + 4, bextChunk.byteLength, true);
+                        newWavBuffer.set(new Uint8Array(bextChunk), chunkOffset + 8);
+                        
+                        // Write iXML chunk
+                        chunkOffset = oldFileSize + 8 + bextChunk.byteLength;
+                        newWavBuffer[chunkOffset] = 0x69;     // 'i'
+                        newWavBuffer[chunkOffset + 1] = 0x58; // 'X'
+                        newWavBuffer[chunkOffset + 2] = 0x4D; // 'M'
+                        newWavBuffer[chunkOffset + 3] = 0x4C; // 'L'
+                        chunkView.setUint32(chunkOffset + 4, ixmlChunk.byteLength, true);
+                        newWavBuffer.set(new Uint8Array(ixmlChunk), chunkOffset + 8);
+                        
+                        // Update RIFF size
+                        const newRiffSize = newFileSize - 8;
+                        chunkView.setUint32(4, newRiffSize, true);
+                        
+                        blob = new Blob([newWavBuffer.buffer], { type: 'audio/wav' });
+                    } else {
+                        const mp3Bitrate = parseInt(document.getElementById('export-tc-mp3-bitrate').value);
+                        blob = await this.audioProcessor.encodeToMP3(extractedBuffer, mp3Bitrate, exportMetadata);
+                    }
+
+                    // Save file
+                    const writable = await handle.createWritable();
+                    await writable.write(blob);
+                    await writable.close();
+
+                    // Auto-add to file list
+                    const newFile = await handle.getFile();
+                    const metadata = await this.metadataHandler.parseFile(newFile);
+                    this.files.push({
+                        handle: handle,
+                        metadata: metadata,
+                        file: newFile,
+                        isGroup: false
+                    });
+
+                    exportedFiles.push(handle.name);
+                    successCount++;
+
+                } catch (err) {
+                    if (err.name !== 'AbortError') {
+                        console.error(`Export TC Range failed for ${selectedFile.metadata.filename}:`, err);
+                        failCount++;
+                    }
+                }
             }
-
-            // Calculate sample offsets
-            const sampleRate = selectedFile.metadata.sampleRate;
-            const startSampleOffset = Math.round((rangeStartSeconds - fileStartSeconds) * sampleRate);
-            const endSampleOffset = Math.round((rangeEndSeconds - fileStartSeconds) * sampleRate);
-            const sampleCount = endSampleOffset - startSampleOffset;
-
-            // Load file audio
-            const arrayBuffer = await selectedFile.file.arrayBuffer();
-            const audioBuffer = await this.audioEngine.audioCtx.decodeAudioData(arrayBuffer.slice(0));
-
-            // Extract range using OfflineAudioContext
-            const channels = audioBuffer.numberOfChannels;
-            const OfflineAudioContext = window.OfflineAudioContext || window.webkitOfflineAudioContext;
-            const offlineCtx = new OfflineAudioContext(channels, sampleCount, sampleRate);
-
-            // Create a buffer source with the full decoded audio
-            const bufferSource = offlineCtx.createBufferSource();
-            bufferSource.buffer = audioBuffer;
-            
-            // Connect to destination and start from the offset
-            bufferSource.connect(offlineCtx.destination);
-            bufferSource.start(0, startSampleOffset / sampleRate, sampleCount / sampleRate);
-
-            // Render the extracted portion
-            const extractedBuffer = await offlineCtx.startRendering();
-
-            // Get bitdepth
-            const bitDepth = format === 'wav' ? parseInt(document.getElementById('export-tc-bitdepth').value) : 16;
-
-            // Create export metadata with TC Start
-            const newTCStart = startTimeStr + ':00'; // Add frame count
-            const exportMetadata = {
-                ...selectedFile.metadata,
-                tcStart: newTCStart,
-                duration: this.secondsToDuration(rangeEndSeconds - rangeStartSeconds)
-            };
-
-            // Calculate timeReference from the new TC Start
-            const fpsExact = selectedFile.metadata.fpsExact || { numerator: 24, denominator: 1 };
-            exportMetadata.timeReference = this.metadataHandler.tcToSamples(newTCStart, sampleRate, fpsExact);
-
-            // Create audio file
-            let blob;
-            if (format === 'wav') {
-                const wavBuffer = this.audioProcessor.createWavFile(extractedBuffer, bitDepth, null, exportMetadata);
-                
-                // Create bEXT and iXML chunks with timecode information
-                const bextChunk = this.metadataHandler.createBextChunk(exportMetadata);
-                const ixmlChunk = this.metadataHandler.createIXMLChunk(exportMetadata);
-                
-                // Calculate new file size
-                const wavView = new DataView(wavBuffer);
-                const wavArray = new Uint8Array(wavBuffer);
-                const riffSize = wavView.getUint32(4, true);
-                const oldFileSize = riffSize + 8;
-                const newFileSize = oldFileSize + 8 + bextChunk.byteLength + 8 + ixmlChunk.byteLength; // 8 bytes for each chunk header
-                
-                // Create new buffer with both chunks
-                const newWavBuffer = new Uint8Array(newFileSize);
-                newWavBuffer.set(wavArray);
-                
-                const chunkView = new DataView(newWavBuffer.buffer);
-                
-                // Write bEXT chunk
-                let chunkOffset = oldFileSize;
-                newWavBuffer[chunkOffset] = 0x62;     // 'b'
-                newWavBuffer[chunkOffset + 1] = 0x65; // 'e'
-                newWavBuffer[chunkOffset + 2] = 0x78; // 'x'
-                newWavBuffer[chunkOffset + 3] = 0x74; // 't'
-                chunkView.setUint32(chunkOffset + 4, bextChunk.byteLength, true);
-                newWavBuffer.set(new Uint8Array(bextChunk), chunkOffset + 8);
-                
-                // Write iXML chunk
-                chunkOffset = oldFileSize + 8 + bextChunk.byteLength;
-                newWavBuffer[chunkOffset] = 0x69;     // 'i'
-                newWavBuffer[chunkOffset + 1] = 0x58; // 'X'
-                newWavBuffer[chunkOffset + 2] = 0x4D; // 'M'
-                newWavBuffer[chunkOffset + 3] = 0x4C; // 'L'
-                chunkView.setUint32(chunkOffset + 4, ixmlChunk.byteLength, true);
-                newWavBuffer.set(new Uint8Array(ixmlChunk), chunkOffset + 8);
-                
-                // Update RIFF size
-                const newRiffSize = newFileSize - 8;
-                chunkView.setUint32(4, newRiffSize, true);
-                
-                blob = new Blob([newWavBuffer.buffer], { type: 'audio/wav' });
-            } else {
-                const mp3Bitrate = parseInt(document.getElementById('export-tc-mp3-bitrate').value);
-                blob = await this.audioProcessor.encodeToMP3(extractedBuffer, mp3Bitrate, exportMetadata);
-            }
-
-            // Save file
-            const writable = await handle.createWritable();
-            await writable.write(blob);
-            await writable.close();
-
-            alert(`Successfully exported ${format.toUpperCase()} file: ${handle.name}`);
-
-            // Auto-add to file list
-            const newFile = await handle.getFile();
-            const metadata = await this.metadataHandler.parseFile(newFile);
-            this.files.push({
-                handle: handle,
-                metadata: metadata,
-                file: newFile,
-                isGroup: false
-            });
 
             // Refresh UI
             const tbody = document.getElementById('file-list-body');
@@ -2488,11 +2503,18 @@ class App {
             this.files.forEach((file, i) => this.addTableRow(i, file.metadata));
             this.updateSelectionUI();
 
-        } catch (err) {
-            if (err.name !== 'AbortError') {
-                console.error('Export TC Range failed:', err);
-                alert(`Export failed: ${err.message}`);
+            // Show summary
+            if (successCount > 0 && failCount > 0) {
+                alert(`Exported ${successCount} file(s) successfully.\n${failCount} file(s) failed.`);
+            } else if (successCount > 0) {
+                alert(`Successfully exported ${successCount} ${format.toUpperCase()} file(s).`);
+            } else {
+                alert('No files were exported.');
             }
+
+        } catch (err) {
+            console.error('Export TC Range failed:', err);
+            alert(`Export failed: ${err.message}`);
         } finally {
             document.body.style.cursor = 'default';
         }
@@ -2793,17 +2815,17 @@ class App {
     }
 
     openExportTCRangeModal() {
-        if (this.selectedIndices.size !== 1) {
-            alert('Please select exactly one file to export a timecode range.');
+        if (this.selectedIndices.size === 0) {
+            alert('Please select one or more files to export a timecode range.');
             return;
         }
 
-        const selectedIndex = Array.from(this.selectedIndices)[0];
-        const selectedFile = this.files[selectedIndex];
+        const selectedIndices = Array.from(this.selectedIndices);
+        const firstFile = this.files[selectedIndices[0]];
         
-        // Pre-populate with file's TC Start and estimated end time
-        const tcStart = selectedFile.metadata.tcStart || '00:00:00:00';
-        const durationSeconds = this.parseTimecodeToSeconds(selectedFile.metadata.duration);
+        // Pre-populate with first file's TC Start and estimated end time
+        const tcStart = firstFile.metadata.tcStart || '00:00:00:00';
+        const durationSeconds = this.parseTimecodeToSeconds(firstFile.metadata.duration);
         
         // Convert TC Start to HH:MM:SS format (remove frames)
         const tcStartHMS = tcStart ? tcStart.split('.')[0].substring(0, 8) : '00:00:00';
@@ -2811,11 +2833,16 @@ class App {
         
         document.getElementById('export-tc-start').value = tcStartHMS;
         document.getElementById('export-tc-end').value = endTC;
+        
+        // Store selected file indices for batch processing
+        this.exportTCRangeIndices = selectedIndices;
+        
         document.getElementById('export-tc-range-modal').classList.add('active');
     }
 
     closeExportTCRangeModal() {
         document.getElementById('export-tc-range-modal').classList.remove('active');
+        this.exportTCRangeIndices = null;
     }
 
     async handleExport() {

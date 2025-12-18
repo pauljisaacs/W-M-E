@@ -285,7 +285,7 @@ td:nth-child(2) {
 th[data-column="11"],
 td:nth-child(3) {
     width: 100px;
-    max-width: 120px;
+    max-width: 110px;
 }
 
 /* Channels Column (4th) */
@@ -353,11 +353,20 @@ td:nth-child(12) {
     padding: 0.1rem 0.1rem;
 }
 
-/* Date Column (14th - Notes is 13th) */
-th[data-column="13"],
+/* File Size column (13th) */
+th[data-column="10"],
+td:nth-child(13) {
+    width: 90px;
+    max-width: 90px;
+    padding: 0.1rem 0.1rem;
+}
+
+/* Notes column (14th) */
+th[data-column="14"],
 td:nth-child(14) {
-    width: 100px;
-    max-width: 100px;
+    width: 250px;
+    max-width: 400px;
+    padding: 0.1rem 0.1rem;
 }
 
 .fps-select:focus,
