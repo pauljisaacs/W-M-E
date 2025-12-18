@@ -1,3 +1,21 @@
+    <!-- About Modal -->
+    <div id="about-modal" class="modal">
+        <div class="modal-content small-modal">
+            <div class="modal-header">
+                <h3>About Wave Agent X</h3>
+                <button class="close-modal" id="about-close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p><strong>Wave Agent X</strong></p>
+                <p>Version: <span id="about-version">...</span></p>
+                <p>&copy; 2025 Pauli. All rights reserved.</p>
+                <p>This app is a professional audio metadata and file management tool for production sound workflows.</p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn secondary" id="about-ok-btn">OK</button>
+            </div>
+        </div>
+    </div>
 
 <!DOCTYPE html>
 <html lang="en">
@@ -54,8 +72,9 @@
                             <th draggable="true" data-column="7">Duration</th>
                             <th draggable="true" data-column="8">TC Start</th>
                             <th draggable="true" data-column="9">FPS</th>
-                            <th draggable="true" data-column="10">Notes</th>
-                            <th draggable="true" data-column="13">Date</th>
+                            <th draggable="true" data-column="10">File Size</th>
+                            <th draggable="true" data-column="11">Notes</th>
+                            <th draggable="true" data-column="14">Date</th>
                         </tr>
                     </thead>
                     <tbody id="file-list-body">
@@ -71,6 +90,7 @@
             <button id="view-bext-btn" class="btn secondary" disabled>View bEXT</button>
             <button id="rename-btn" class="btn secondary" disabled>Rename</button>
             <button id="report-btn" class="btn secondary">Report</button>
+            <button id="export-tc-range-btn" class="btn secondary" disabled>Export TC Range</button>
         </div>
 
         <!-- Player & Waveform -->
@@ -382,6 +402,59 @@
     </div>
 
     <!-- Cue Marker Edit Modal -->
+    <!-- Export TC Range Modal -->
+    <div id="export-tc-range-modal" class="modal">
+        <div class="modal-content small-modal">
+            <div class="modal-header">
+                <h3>Export Timecode Range</h3>
+                <button class="close-modal" id="export-tc-range-close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="input-group">
+                    <label for="export-tc-start">Start Time (HH:MM:SS):</label>
+                    <input type="text" id="export-tc-start" placeholder="HH:MM:SS" value="00:00:00">
+                </div>
+                <div class="input-group">
+                    <label for="export-tc-end">End Time (HH:MM:SS):</label>
+                    <input type="text" id="export-tc-end" placeholder="HH:MM:SS" value="00:01:00">
+                </div>
+                <div class="input-group">
+                    <label for="export-tc-format">Format:</label>
+                    <select id="export-tc-format">
+                        <option value="wav">WAV</option>
+                        <option value="mp3">MP3</option>
+                    </select>
+                </div>
+                <div id="export-tc-wav-options" class="format-options">
+                    <div class="input-group">
+                        <label for="export-tc-bitdepth">Bit Depth:</label>
+                        <select id="export-tc-bitdepth">
+                            <option value="16">16-bit PCM</option>
+                            <option value="24" selected>24-bit PCM</option>
+                            <option value="32">32-bit Float</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="export-tc-mp3-options" class="format-options" style="display: none;">
+                    <div class="input-group">
+                        <label for="export-tc-mp3-bitrate">Bitrate:</label>
+                        <select id="export-tc-mp3-bitrate">
+                            <option value="320">320 kbps</option>
+                            <option value="256">256 kbps</option>
+                            <option value="192" selected>192 kbps</option>
+                            <option value="128">128 kbps</option>
+                            <option value="64">64 kbps</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="cancel-export-tc-range-btn" class="btn secondary">Cancel</button>
+                <button id="confirm-export-tc-range-btn" class="btn primary">Export Range</button>
+            </div>
+        </div>
+    </div>
+
     <div id="cue-marker-modal" class="modal">
         <div class="modal-content">
             <div class="modal-header">

@@ -1,3 +1,49 @@
+// --- About Modal Logic ---
+document.addEventListener('DOMContentLoaded', () => {
+    // Add About menu item if not present
+    let helpMenu = document.getElementById('help-menu');
+    if (!helpMenu) {
+        // If no help menu, add About button to header
+        const header = document.querySelector('.app-header .header-controls');
+        if (header) {
+            const aboutBtn = document.createElement('button');
+            aboutBtn.id = 'about-btn';
+            aboutBtn.className = 'btn secondary';
+            aboutBtn.textContent = 'About';
+            aboutBtn.style.marginLeft = '1em';
+            header.appendChild(aboutBtn);
+            aboutBtn.addEventListener('click', () => {
+                document.getElementById('about-modal').classList.add('active');
+            });
+        }
+    } else {
+        // If help menu exists, add About item
+        const aboutItem = document.createElement('li');
+        aboutItem.textContent = 'About Wave Agent X';
+        aboutItem.addEventListener('click', () => {
+            document.getElementById('about-modal').classList.add('active');
+        });
+        helpMenu.appendChild(aboutItem);
+    }
+
+    // Close About modal
+    document.getElementById('about-close-btn').addEventListener('click', () => {
+        document.getElementById('about-modal').classList.remove('active');
+    });
+    document.getElementById('about-ok-btn').addEventListener('click', () => {
+        document.getElementById('about-modal').classList.remove('active');
+    });
+
+    // Dynamically load version from manifest.json
+    fetch('manifest.json')
+        .then(response => response.json())
+        .then(manifest => {
+            document.getElementById('about-version').textContent = manifest.version || 'N/A';
+        })
+        .catch(() => {
+            document.getElementById('about-version').textContent = 'N/A';
+        });
+});
 import { MetadataHandler } from './metadata-handler.js?v=2';
 import { AudioEngine } from './audio-engine.js?v=3';
 import { Mixer } from './mixer.js?v=4';
@@ -33,7 +79,7 @@ class App {
         this.selectedIndices = new Set();
         this.lastSelectedIndex = -1; // For shift-click range selection
         this.currentlyLoadedFileIndex = -1; // Track which file is currently loaded
-        this.columnOrder = [3, 12, 11, 0, 1, 2, 4, 5, 6, 7, 8, 9, 10, 13]; // Default order: Filename, Project, Tape...
+        this.columnOrder = [3, 12, 11, 0, 1, 2, 4, 5, 6, 7, 8, 9, 14, 10, 15]; // Default order: Filename, Project, Tape...
         this.sortColumn = null;
         this.sortDirection = 'asc';
         this.currentFileMetadata = null; // Store current file's metadata for timecode
@@ -176,6 +222,25 @@ class App {
             const format = e.target.value;
             document.getElementById('wav-options').style.display = format === 'wav' ? 'block' : 'none';
             document.getElementById('mp3-options').style.display = format === 'mp3' ? 'block' : 'none';
+        });
+
+        // Export TC Range controls
+        document.getElementById('export-tc-range-btn').addEventListener('click', () => this.openExportTCRangeModal());
+        document.getElementById('cancel-export-tc-range-btn').addEventListener('click', () => this.closeExportTCRangeModal());
+        document.getElementById('confirm-export-tc-range-btn').addEventListener('click', () => this.handleExportTCRange());
+
+        const exportTCRangeModal = document.getElementById('export-tc-range-modal');
+        exportTCRangeModal.querySelector('.close-modal').addEventListener('click', () => this.closeExportTCRangeModal());
+        exportTCRangeModal.addEventListener('click', (e) => {
+            if (e.target.id === 'export-tc-range-modal') {
+                this.closeExportTCRangeModal();
+            }
+        });
+
+        document.getElementById('export-tc-format').addEventListener('change', (e) => {
+            const format = e.target.value;
+            document.getElementById('export-tc-wav-options').style.display = format === 'wav' ? 'block' : 'none';
+            document.getElementById('export-tc-mp3-options').style.display = format === 'mp3' ? 'block' : 'none';
         });
 
         // Auto-save toggle
@@ -1155,7 +1220,8 @@ class App {
             createCell('notes', metadata.notes),
             createCell('tape', metadata.tape),
             createCell('project', metadata.project),
-            createCell('date', metadata.date)
+            createCell('date', metadata.date),
+            createCell('fileSize', metadata.fileSize ? ((metadata.fileSize / 1000000).toFixed(2) + ' MB') : '', false)
         ];
 
         // Append in current column order
@@ -1176,11 +1242,41 @@ class App {
         return pattern.test(tc);
     }
 
+    parseTimecodeToSeconds(timecode) {
+        // Parse HH:MM:SS:FF or HH:MM:SS format to seconds (ignoring frames)
+        if (!timecode) return 0;
+        const parts = timecode.split(':');
+        if (parts.length < 3) return 0;
+        
+        const hours = parseInt(parts[0]) || 0;
+        const minutes = parseInt(parts[1]) || 0;
+        const seconds = parseInt(parts[2]) || 0;
+        
+        return hours * 3600 + minutes * 60 + seconds;
+    }
+
+    addSecondsToTimecode(timecode, seconds) {
+        // Add seconds to HH:MM:SS format timecode
+        const totalSeconds = this.parseTimecodeToSeconds(timecode) + Math.floor(seconds);
+        
+        const hours = Math.floor(totalSeconds / 3600);
+        const minutes = Math.floor((totalSeconds % 3600) / 60);
+        const secs = totalSeconds % 60;
+        
+        return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    }
+
+    validateTimeFormat(timeStr) {
+        // Validate HH:MM:SS format
+        const pattern = /^([0-9]{2}):([0-5][0-9]):([0-5][0-9])$/;
+        return pattern.test(timeStr);
+    }
+
     sortFiles(keyOrIndex) {
         let key;
         if (typeof keyOrIndex === 'number') {
             const keyMap = [
-                'channels', 'bitDepth', 'sampleRate', 'filename', 'format', 'scene', 'take', 'duration', 'tcStart', 'fps', 'notes', 'tape', 'project', 'date'
+                'channels', 'bitDepth', 'sampleRate', 'filename', 'format', 'scene', 'take', 'duration', 'tcStart', 'fps', 'notes', 'tape', 'project', 'date', 'fileSize'
             ];
             key = keyMap[keyOrIndex];
         } else {
@@ -1199,7 +1295,7 @@ class App {
             let valB = b.metadata[key] || '';
 
             // Numeric sort for specific columns
-            if (['take', 'sampleRate', 'channels', 'bitDepth'].includes(key)) {
+            if (['take', 'sampleRate', 'channels', 'bitDepth', 'fileSize'].includes(key)) {
                 valA = parseFloat(valA) || 0;
                 valB = parseFloat(valB) || 0;
             }
@@ -1586,9 +1682,13 @@ class App {
         document.getElementById('save-mix-btn').disabled = this.selectedIndices.size !== 1;
         document.getElementById('load-mix-btn').disabled = this.selectedIndices.size !== 1;
         
-        // Enable combine button if any sibling groups are detected AND no poly file is selected
+        // Enable combine button if:
+        // 1. Any sibling groups are detected AND no poly file is selected, OR
+        // 2. Multiple individual mono files are selected with same TC Start and audio size
         const hasSiblingGroups = this.files.some(item => item.isGroup);
         let isPolySelected = false;
+        let canCombineSelectedMono = false;
+        
         if (this.selectedIndices.size === 1) {
             const selectedIndex = Array.from(this.selectedIndices)[0];
             const selectedFile = this.files[selectedIndex];
@@ -1596,8 +1696,34 @@ class App {
                            selectedFile.metadata && 
                            selectedFile.metadata.channels > 1 && 
                            !selectedFile.isGroup;
+        } else if (this.selectedIndices.size >= 2) {
+            // Check if all selected files are individual mono files with matching TC Start and audio size
+            const selectedFiles = Array.from(this.selectedIndices).map(idx => this.files[idx]);
+            const allMono = selectedFiles.every(f => 
+                f && 
+                !f.isGroup && 
+                f.metadata && 
+                f.metadata.channels === 1
+            );
+            
+            if (allMono) {
+                const firstFile = selectedFiles[0];
+                const tcStart = firstFile.metadata.tcStart;
+                const audioSize = firstFile.metadata.audioDataSize;
+                
+                const allMatch = selectedFiles.every(f => 
+                    f.metadata.tcStart === tcStart && 
+                    f.metadata.audioDataSize === audioSize
+                );
+                
+                canCombineSelectedMono = allMatch;
+            }
         }
-        document.getElementById('combine-btn').disabled = !hasSiblingGroups || isPolySelected;
+        
+        document.getElementById('combine-btn').disabled = (!hasSiblingGroups && !canCombineSelectedMono) || isPolySelected;
+        
+        // Enable export TC range button if exactly one file is selected
+        document.getElementById('export-tc-range-btn').disabled = this.selectedIndices.size !== 1;
         
         // Enable split button if exactly one poly file is selected (not a sibling group)
         document.getElementById('split-btn').disabled = !isPolySelected;
@@ -2198,6 +2324,191 @@ class App {
         }
     }
 
+    async handleExportTCRange() {
+        const startTimeStr = document.getElementById('export-tc-start').value.trim();
+        const endTimeStr = document.getElementById('export-tc-end').value.trim();
+        const format = document.getElementById('export-tc-format').value;
+
+        // Validate time format
+        if (!this.validateTimeFormat(startTimeStr) || !this.validateTimeFormat(endTimeStr)) {
+            alert('Invalid time format. Please use HH:MM:SS (e.g., 01:23:45)');
+            return;
+        }
+
+        const startSeconds = this.parseTimecodeToSeconds(startTimeStr);
+        const endSeconds = this.parseTimecodeToSeconds(endTimeStr);
+
+        if (startSeconds >= endSeconds) {
+            alert('Start time must be before end time.');
+            return;
+        }
+
+        const selectedIndex = Array.from(this.selectedIndices)[0];
+        const selectedFile = this.files[selectedIndex];
+
+        this.closeExportTCRangeModal();
+        document.body.style.cursor = 'wait';
+
+        try {
+            // Get save file handle
+            const suggestedName = selectedFile.metadata.filename.replace(/\.[^/.]+$/, `_${startTimeStr.replace(/:/g, '')}.${format}`);
+            const handle = await window.showSaveFilePicker({
+                suggestedName: suggestedName,
+                types: [{
+                    description: format === 'wav' ? 'WAV Audio' : 'MP3 Audio',
+                    accept: { [format === 'wav' ? 'audio/wav' : 'audio/mpeg']: [`.${format}`] }
+                }]
+            });
+
+            // Calculate actual range within the file
+            const fileStartSeconds = this.parseTimecodeToSeconds(selectedFile.metadata.tcStart || '00:00:00:00');
+            const fileDurationSeconds = this.parseTimecodeToSeconds(selectedFile.metadata.duration);
+            const fileEndSeconds = fileStartSeconds + fileDurationSeconds;
+
+            // Calculate overlap
+            const rangeStartSeconds = Math.max(startSeconds, fileStartSeconds);
+            const rangeEndSeconds = Math.min(endSeconds, fileEndSeconds);
+
+            if (rangeStartSeconds >= rangeEndSeconds) {
+                alert('The specified timecode range does not overlap with this file.');
+                return;
+            }
+
+            // Calculate sample offsets
+            const sampleRate = selectedFile.metadata.sampleRate;
+            const startSampleOffset = Math.round((rangeStartSeconds - fileStartSeconds) * sampleRate);
+            const endSampleOffset = Math.round((rangeEndSeconds - fileStartSeconds) * sampleRate);
+            const sampleCount = endSampleOffset - startSampleOffset;
+
+            // Load file audio
+            const arrayBuffer = await selectedFile.file.arrayBuffer();
+            const audioBuffer = await this.audioEngine.audioCtx.decodeAudioData(arrayBuffer.slice(0));
+
+            // Extract range using OfflineAudioContext
+            const channels = audioBuffer.numberOfChannels;
+            const OfflineAudioContext = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+            const offlineCtx = new OfflineAudioContext(channels, sampleCount, sampleRate);
+
+            // Create a buffer source with the full decoded audio
+            const bufferSource = offlineCtx.createBufferSource();
+            bufferSource.buffer = audioBuffer;
+            
+            // Connect to destination and start from the offset
+            bufferSource.connect(offlineCtx.destination);
+            bufferSource.start(0, startSampleOffset / sampleRate, sampleCount / sampleRate);
+
+            // Render the extracted portion
+            const extractedBuffer = await offlineCtx.startRendering();
+
+            // Get bitdepth
+            const bitDepth = format === 'wav' ? parseInt(document.getElementById('export-tc-bitdepth').value) : 16;
+
+            // Create export metadata with TC Start
+            const newTCStart = startTimeStr + ':00'; // Add frame count
+            const exportMetadata = {
+                ...selectedFile.metadata,
+                tcStart: newTCStart,
+                duration: this.secondsToDuration(rangeEndSeconds - rangeStartSeconds)
+            };
+
+            // Calculate timeReference from the new TC Start
+            const fpsExact = selectedFile.metadata.fpsExact || { numerator: 24, denominator: 1 };
+            exportMetadata.timeReference = this.metadataHandler.tcToSamples(newTCStart, sampleRate, fpsExact);
+
+            // Create audio file
+            let blob;
+            if (format === 'wav') {
+                const wavBuffer = this.audioProcessor.createWavFile(extractedBuffer, bitDepth, null, exportMetadata);
+                
+                // Create bEXT and iXML chunks with timecode information
+                const bextChunk = this.metadataHandler.createBextChunk(exportMetadata);
+                const ixmlChunk = this.metadataHandler.createIXMLChunk(exportMetadata);
+                
+                // Calculate new file size
+                const wavView = new DataView(wavBuffer);
+                const wavArray = new Uint8Array(wavBuffer);
+                const riffSize = wavView.getUint32(4, true);
+                const oldFileSize = riffSize + 8;
+                const newFileSize = oldFileSize + 8 + bextChunk.byteLength + 8 + ixmlChunk.byteLength; // 8 bytes for each chunk header
+                
+                // Create new buffer with both chunks
+                const newWavBuffer = new Uint8Array(newFileSize);
+                newWavBuffer.set(wavArray);
+                
+                const chunkView = new DataView(newWavBuffer.buffer);
+                
+                // Write bEXT chunk
+                let chunkOffset = oldFileSize;
+                newWavBuffer[chunkOffset] = 0x62;     // 'b'
+                newWavBuffer[chunkOffset + 1] = 0x65; // 'e'
+                newWavBuffer[chunkOffset + 2] = 0x78; // 'x'
+                newWavBuffer[chunkOffset + 3] = 0x74; // 't'
+                chunkView.setUint32(chunkOffset + 4, bextChunk.byteLength, true);
+                newWavBuffer.set(new Uint8Array(bextChunk), chunkOffset + 8);
+                
+                // Write iXML chunk
+                chunkOffset = oldFileSize + 8 + bextChunk.byteLength;
+                newWavBuffer[chunkOffset] = 0x69;     // 'i'
+                newWavBuffer[chunkOffset + 1] = 0x58; // 'X'
+                newWavBuffer[chunkOffset + 2] = 0x4D; // 'M'
+                newWavBuffer[chunkOffset + 3] = 0x4C; // 'L'
+                chunkView.setUint32(chunkOffset + 4, ixmlChunk.byteLength, true);
+                newWavBuffer.set(new Uint8Array(ixmlChunk), chunkOffset + 8);
+                
+                // Update RIFF size
+                const newRiffSize = newFileSize - 8;
+                chunkView.setUint32(4, newRiffSize, true);
+                
+                blob = new Blob([newWavBuffer.buffer], { type: 'audio/wav' });
+            } else {
+                const mp3Bitrate = parseInt(document.getElementById('export-tc-mp3-bitrate').value);
+                blob = await this.audioProcessor.encodeToMP3(extractedBuffer, mp3Bitrate, exportMetadata);
+            }
+
+            // Save file
+            const writable = await handle.createWritable();
+            await writable.write(blob);
+            await writable.close();
+
+            alert(`Successfully exported ${format.toUpperCase()} file: ${handle.name}`);
+
+            // Auto-add to file list
+            const newFile = await handle.getFile();
+            const metadata = await this.metadataHandler.parseFile(newFile);
+            this.files.push({
+                handle: handle,
+                metadata: metadata,
+                file: newFile,
+                isGroup: false
+            });
+
+            // Refresh UI
+            const tbody = document.getElementById('file-list-body');
+            tbody.innerHTML = '';
+            this.files.forEach((file, i) => this.addTableRow(i, file.metadata));
+            this.updateSelectionUI();
+
+        } catch (err) {
+            if (err.name !== 'AbortError') {
+                console.error('Export TC Range failed:', err);
+                alert(`Export failed: ${err.message}`);
+            }
+        } finally {
+            document.body.style.cursor = 'default';
+        }
+    }
+
+    secondsToDuration(seconds) {
+        // Convert seconds to HH:MM:SS:FF format (assumes 24fps for frames)
+        const totalSeconds = Math.floor(seconds);
+        const hours = Math.floor(totalSeconds / 3600);
+        const minutes = Math.floor((totalSeconds % 3600) / 60);
+        const secs = totalSeconds % 60;
+        const frames = Math.round((seconds - totalSeconds) * 24);
+
+        return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}:${String(frames).padStart(2, '0')}`;
+    }
+
     animate() {
         if (this.audioEngine.isPlaying && !this.isStopped) {
             const time = this.audioEngine.getCurrentTime();
@@ -2479,6 +2790,32 @@ class App {
 
     closeExportModal() {
         document.getElementById('export-modal').classList.remove('active');
+    }
+
+    openExportTCRangeModal() {
+        if (this.selectedIndices.size !== 1) {
+            alert('Please select exactly one file to export a timecode range.');
+            return;
+        }
+
+        const selectedIndex = Array.from(this.selectedIndices)[0];
+        const selectedFile = this.files[selectedIndex];
+        
+        // Pre-populate with file's TC Start and estimated end time
+        const tcStart = selectedFile.metadata.tcStart || '00:00:00:00';
+        const durationSeconds = this.parseTimecodeToSeconds(selectedFile.metadata.duration);
+        
+        // Convert TC Start to HH:MM:SS format (remove frames)
+        const tcStartHMS = tcStart ? tcStart.split('.')[0].substring(0, 8) : '00:00:00';
+        const endTC = this.addSecondsToTimecode(tcStartHMS, durationSeconds);
+        
+        document.getElementById('export-tc-start').value = tcStartHMS;
+        document.getElementById('export-tc-end').value = endTC;
+        document.getElementById('export-tc-range-modal').classList.add('active');
+    }
+
+    closeExportTCRangeModal() {
+        document.getElementById('export-tc-range-modal').classList.remove('active');
     }
 
     async handleExport() {
@@ -3141,35 +3478,83 @@ class App {
      */
     openCombineModal() {
         // Find all sibling groups
-        const siblingGroups = this.files.filter(item => item.isGroup);
+        let siblingGroups = this.files.filter(item => item.isGroup);
         
-        if (siblingGroups.length === 0) {
-            alert('No sibling file groups detected.');
+        // Also check if selected individual mono files can be combined
+        let selectedMonoFiles = [];
+        if (this.selectedIndices.size >= 2) {
+            const selectedFiles = Array.from(this.selectedIndices).map(idx => this.files[idx]);
+            const allMono = selectedFiles.every(f => 
+                f && 
+                !f.isGroup && 
+                f.metadata && 
+                f.metadata.channels === 1
+            );
+            
+            if (allMono) {
+                const firstFile = selectedFiles[0];
+                const tcStart = firstFile.metadata.tcStart;
+                const audioSize = firstFile.metadata.audioDataSize;
+                
+                const allMatch = selectedFiles.every(f => 
+                    f.metadata.tcStart === tcStart && 
+                    f.metadata.audioDataSize === audioSize
+                );
+                
+                if (allMatch) {
+                    selectedMonoFiles = selectedFiles;
+                }
+            }
+        }
+        
+        // If selected mono files, prioritize combining them
+        if (selectedMonoFiles.length >= 2) {
+            // Create a virtual group from selected mono files
+            const fileIndices = Array.from(this.selectedIndices);
+            const baseName = this.getCommonBaseName(selectedMonoFiles.map(f => f.metadata.filename));
+            
+            this.combineGroups = [{
+                groupIndex: 0,
+                baseName: baseName,
+                siblings: selectedMonoFiles.map((file, index) => ({
+                    originalIndex: index,
+                    handle: file.handle,
+                    file: file.file,
+                    metadata: file.metadata,
+                    order: index,
+                    selected: true
+                })),
+                metadata: { ...selectedMonoFiles[0].metadata },
+                destinationHandle: null,
+                fileIndices: fileIndices // Track original indices
+            }];
+        } else if (siblingGroups.length === 0) {
+            alert('No sibling file groups detected, and no compatible selected files to combine.');
             return;
+        } else {
+            // Use existing sibling groups
+            this.combineGroups = siblingGroups.map((group, groupIndex) => {
+                const baseName = group.metadata.filename.replace(/_X\.wav$/, '');
+                
+                return {
+                    groupIndex: groupIndex,
+                    baseName: baseName,
+                    siblings: group.siblings.map((sib, index) => ({
+                        originalIndex: index,
+                        handle: sib.handle,
+                        file: sib.file,
+                        metadata: sib.metadata,
+                        order: index,
+                        selected: true // All selected by default
+                    })),
+                    metadata: { ...group.metadata },
+                    destinationHandle: null // Will store directory handle
+                };
+            });
         }
 
         const container = document.getElementById('combine-groups-container');
         container.innerHTML = '';
-
-        // Store combine state
-        this.combineGroups = siblingGroups.map((group, groupIndex) => {
-            const baseName = group.metadata.filename.replace(/_X\.wav$/, '');
-            
-            return {
-                groupIndex: groupIndex,
-                baseName: baseName,
-                siblings: group.siblings.map((sib, index) => ({
-                    originalIndex: index,
-                    handle: sib.handle,
-                    file: sib.file,
-                    metadata: sib.metadata,
-                    order: index,
-                    selected: true // All selected by default
-                })),
-                metadata: { ...group.metadata },
-                destinationHandle: null // Will store directory handle
-            };
-        });
 
         // Render each group
         this.combineGroups.forEach((group, groupIndex) => {
@@ -3316,6 +3701,30 @@ class App {
     }
 
     /**
+     * Get common base name from file list
+     */
+    getCommonBaseName(filenames) {
+        if (filenames.length === 0) return 'combined';
+        
+        // Remove file extensions
+        const names = filenames.map(f => f.replace(/\.[^/.]+$/, ''));
+        
+        // Find common prefix before any underscore or suffix pattern
+        let commonBase = names[0];
+        
+        for (const name of names.slice(1)) {
+            while (commonBase.length > 0 && !name.startsWith(commonBase)) {
+                commonBase = commonBase.slice(0, -1);
+            }
+        }
+        
+        // Remove trailing underscore if present
+        commonBase = commonBase.replace(/_+$/, '');
+        
+        return commonBase || 'combined';
+    }
+
+    /**
      * Close combine modal
      */
     closeCombineModal() {
@@ -3334,11 +3743,27 @@ class App {
             return;
         }
 
-        // Validate that all groups still exist in this.files
+        // Validate that groups still exist (either as sibling groups or as valid individual files)
         const currentSiblingGroups = this.files.filter(item => item.isGroup);
-        if (currentSiblingGroups.length === 0) {
-            console.error('No sibling groups found in current files');
-            alert('No sibling groups detected. Files may have been modified. Please close and reopen the Combine modal.');
+        const hasValidGroups = this.combineGroups.every(group => {
+            // If group has fileIndices, it's from selected individual mono files - validate they still exist
+            if (group.fileIndices) {
+                return group.fileIndices.every(idx => 
+                    idx < this.files.length && 
+                    this.files[idx] && 
+                    !this.files[idx].isGroup &&
+                    this.files[idx].metadata.channels === 1
+                );
+            }
+            // Otherwise, it's a sibling group - check if it exists
+            return currentSiblingGroups.some(sg => 
+                sg.metadata.filename.replace(/_X\.wav$/, '') === group.baseName
+            );
+        });
+        
+        if (!hasValidGroups) {
+            console.error('One or more combine groups are no longer valid');
+            alert('Files may have been modified. Please close and reopen the Combine modal.');
             return;
         }
 
