@@ -261,8 +261,8 @@ export class MetadataHandler {
             }
 
             offset += 8 + chunkSize;
-            // Pad to even byte
-            if (offset % 2 !== 0) offset++;
+            // Pad to even byte boundary if chunk size is odd
+            if (chunkSize % 2 !== 0) offset++;
         }
 
         // Calculate timecode after all chunks parsed (need both timeReference and fps)

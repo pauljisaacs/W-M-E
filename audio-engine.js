@@ -96,7 +96,8 @@ export class AudioEngine {
             }
 
             offset += 8 + chunkSize;
-            if (offset % 2 !== 0) offset++;
+            // Pad to even byte boundary if chunk size is odd
+            if (chunkSize % 2 !== 0) offset++;
         }
 
         if (!fmt || dataOffset === -1) {

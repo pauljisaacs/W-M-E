@@ -85,12 +85,10 @@
 
         <!-- File Operations Toolbar -->
         <div class="file-operations-toolbar">
-            <button id="view-ixml-btn" class="btn secondary" disabled>View iXML</button>
-            <button id="view-bext-btn" class="btn secondary" disabled>View bEXT</button>
+            <button id="diagnostics-btn" class="btn secondary" disabled>Diagnostics</button>
             <button id="rename-btn" class="btn secondary" disabled>Rename</button>
             <button id="report-btn" class="btn secondary">Report</button>
             <button id="export-tc-range-btn" class="btn secondary" disabled>Export TC Range</button>
-            <button id="repair-ixmlbtn" class="btn secondary" disabled title="Repair the iXML metadata in the selected file">Repair iXML</button>
         </div>
 
         <!-- Player & Waveform -->
@@ -217,36 +215,41 @@
             </div>
         </div>
 
-        <!-- iXML Viewer Modal -->
-        <div id="ixml-modal" class="modal">
+        <!-- Diagnostics Modal -->
+        <div id="diagnostics-modal" class="modal">
             <div class="modal-content">
                 <div class="modal-header">
-                    <h2>iXML Data</h2>
-                    <button class="modal-close" id="ixml-close-btn">&times;</button>
+                    <h2>Diagnostics</h2>
+                    <button class="modal-close" id="diagnostics-close-btn">&times;</button>
                 </div>
                 <div class="modal-body">
-                    <pre id="ixml-content"
-                        style="background-color: var(--bg-dark); padding: 1rem; border-radius: 4px; overflow-x: auto; overflow-y: auto; height: 28rem; min-height: 28rem; font-size: 0.85rem; line-height: 1.4; white-space: pre-wrap;"></pre>
+                    <div class="tab-buttons">
+                        <button id="ixml-tab-btn" class="tab-btn active">View iXML</button>
+                        <button id="bext-tab-btn" class="tab-btn">View bEXT</button>
+                        <button id="tools-tab-btn" class="tab-btn">Tools</button>
+                    </div>
+                    <div id="ixml-tab-content" class="tab-content active">
+                        <pre id="ixml-content"
+                            style="background-color: var(--bg-dark); padding: 1rem; border-radius: 4px; overflow-x: auto; overflow-y: auto; height: 28rem; min-height: 28rem; font-size: 0.85rem; line-height: 1.4; white-space: pre-wrap;"></pre>
+                    </div>
+                    <div id="bext-tab-content" class="tab-content">
+                        <pre id="bext-content"
+                            style="background-color: var(--bg-dark); padding: 1rem; border-radius: 4px; overflow-x: auto; overflow-y: auto; height: 28rem; min-height: 28rem; font-size: 0.85rem; line-height: 1.4; white-space: pre-wrap;"></pre>
+                    </div>
+                    <div id="tools-tab-content" class="tab-content">
+                        <div style="padding: 1rem;">
+                            <h3>iXML Testing Tools</h3>
+                            <p>Use these tools to test iXML repair functionality:</p>
+                            <div style="margin-top: 1rem;">
+                                <button id="corrupt-ixml-modal-btn" class="btn secondary" style="background-color: #ff6b6b; color: white; margin-right: 1rem;">Corrupt iXML (Test)</button>
+                                <button id="repair-ixml-modal-btn" class="btn secondary" title="Repair the iXML metadata in the selected file">Repair iXML</button>
+                            </div>
+                            <p style="margin-top: 1rem; font-size: 0.9rem; color: var(--text-secondary);">Note: These tools only work when a single WAV file is selected.</p>
+                        </div>
+                    </div>
                 </div>
                 <div class="modal-footer">
-                    <button id="ixml-modal-close-btn" class="btn secondary">Close</button>
-                </div>
-            </div>
-        </div>
-
-        <!-- bEXT Viewer Modal -->
-        <div id="bext-modal" class="modal">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h2>bEXT Data</h2>
-                    <button class="modal-close" id="bext-close-btn">&times;</button>
-                </div>
-                <div class="modal-body">
-                    <pre id="bext-content"
-                        style="background-color: var(--bg-dark); padding: 1rem; border-radius: 4px; overflow-x: auto; overflow-y: auto; height: 28rem; min-height: 28rem; font-size: 0.85rem; line-height: 1.4; white-space: pre-wrap;"></pre>
-                </div>
-                <div class="modal-footer">
-                    <button id="bext-modal-close-btn" class="btn secondary">Close</button>
+                    <button id="diagnostics-modal-close-btn" class="btn secondary">Close</button>
                 </div>
             </div>
         </div>

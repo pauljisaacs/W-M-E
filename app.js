@@ -133,21 +133,30 @@ class App {
         document.getElementById('batch-remove-btn').addEventListener('click', () => this.removeSelected());
 
         // File Operations
-        document.getElementById('view-ixml-btn').addEventListener('click', () => this.viewIXML());
-        document.getElementById('view-bext-btn').addEventListener('click', () => this.viewBEXT());
+        document.getElementById('diagnostics-btn').addEventListener('click', () => this.openDiagnosticsModal());
 
         // Modal controls
         document.getElementById('modal-close-btn').addEventListener('click', () => this.closeBatchEditModal());
         document.getElementById('batch-cancel-btn').addEventListener('click', () => this.closeBatchEditModal());
         document.getElementById('batch-apply-btn').addEventListener('click', () => this.applyBatchEdit());
 
-        // iXML Modal controls
-        document.getElementById('ixml-close-btn').addEventListener('click', () => this.closeIXMLModal());
-        document.getElementById('ixml-modal-close-btn').addEventListener('click', () => this.closeIXMLModal());
+        // Diagnostics Modal controls
+        document.getElementById('diagnostics-close-btn').addEventListener('click', () => this.closeDiagnosticsModal());
+        document.getElementById('diagnostics-modal-close-btn').addEventListener('click', () => this.closeDiagnosticsModal());
 
-        // bEXT Modal controls
-        document.getElementById('bext-close-btn').addEventListener('click', () => this.closeBEXTModal());
-        document.getElementById('bext-modal-close-btn').addEventListener('click', () => this.closeBEXTModal());
+        // Tab switching
+        document.getElementById('ixml-tab-btn').addEventListener('click', () => this.switchToIXMLTab());
+        document.getElementById('bext-tab-btn').addEventListener('click', () => this.switchToBEXTTab());
+        document.getElementById('tools-tab-btn').addEventListener('click', () => this.switchToToolsTab());
+
+        // Tools tab buttons
+        document.getElementById('corrupt-ixml-modal-btn').addEventListener('click', () => {
+            const corruptionType = prompt('Enter corruption type (missing-closing-tag, missing-xml-declaration, missing-speed-tag, invalid-root, empty, malformed-xml):', 'missing-closing-tag');
+            if (corruptionType) {
+                this.corruptIXMLForTesting(corruptionType);
+            }
+        });
+        document.getElementById('repair-ixml-modal-btn').addEventListener('click', () => this.handleRepairIXML());
 
         // Close modal on outside click
         document.getElementById('batch-edit-modal').addEventListener('click', (e) => {
@@ -156,15 +165,9 @@ class App {
             }
         });
 
-        document.getElementById('ixml-modal').addEventListener('click', (e) => {
-            if (e.target.id === 'ixml-modal') {
-                this.closeIXMLModal();
-            }
-        });
-
-        document.getElementById('bext-modal').addEventListener('click', (e) => {
-            if (e.target.id === 'bext-modal') {
-                this.closeBEXTModal();
+        document.getElementById('diagnostics-modal').addEventListener('click', (e) => {
+            if (e.target.id === 'diagnostics-modal') {
+                this.closeDiagnosticsModal();
             }
         });
 
@@ -228,9 +231,6 @@ class App {
         document.getElementById('export-tc-range-btn').addEventListener('click', () => this.openExportTCRangeModal());
         document.getElementById('cancel-export-tc-range-btn').addEventListener('click', () => this.closeExportTCRangeModal());
         document.getElementById('confirm-export-tc-range-btn').addEventListener('click', () => this.handleExportTCRange());
-
-        // Repair iXML button
-        document.getElementById('repair-ixmlbtn').addEventListener('click', () => this.handleRepairIXML());
 
         const exportTCRangeModal = document.getElementById('export-tc-range-modal');
         exportTCRangeModal.querySelector('.close-modal').addEventListener('click', () => this.closeExportTCRangeModal());
@@ -1185,8 +1185,19 @@ class App {
             // Default handling for other fields
             td.textContent = val || '';
             if (editable) {
-                td.contentEditable = true;
+                // Make editable on double-click
+                td.addEventListener('dblclick', () => {
+                    td.contentEditable = true;
+                    td.focus();
+                    // Select all text for easy replacement
+                    const range = document.createRange();
+                    range.selectNodeContents(td);
+                    const selection = window.getSelection();
+                    selection.removeAllRanges();
+                    selection.addRange(range);
+                });
                 td.addEventListener('blur', (e) => {
+                    td.contentEditable = false;
                     const newValue = e.target.textContent;
                     const oldValue = this.files[index].metadata[key] || '';
                     // Only update if value actually changed
@@ -1528,10 +1539,15 @@ class App {
         this.files.forEach((file, i) => this.addTableRow(i, file.metadata));
         this.updateSelectionUI();
 
-        if (successCount > 0) {
-            alert(`Saved ${successCount} files successfully!`);
-        } else {
-            alert('Failed to save files.');
+        // Update TC counter if the currently loaded file was modified
+        if (this.currentlyLoadedFileIndex !== -1 && this.selectedIndices.has(this.currentlyLoadedFileIndex)) {
+            const loadedFile = this.files[this.currentlyLoadedFileIndex];
+            this.currentFileMetadata = loadedFile.metadata;
+            
+            const currentTimecode = document.getElementById('current-timecode');
+            if (currentTimecode) {
+                currentTimecode.textContent = this.secondsToTimecode(0);
+            }
         }
     }
 
@@ -1688,16 +1704,23 @@ class App {
         });
 
         const hasSelection = this.selectedIndices.size > 0;
-        document.getElementById('batch-edit-btn').disabled = !hasSelection;
+        
+        // Update button states with null checks
+        const safeSetDisabled = (id, disabled) => {
+            const btn = document.getElementById(id);
+            if (btn) btn.disabled = disabled;
+        };
+        
+        safeSetDisabled('batch-edit-btn', !hasSelection);
         this.updateSaveButtonState();
-        document.getElementById('batch-remove-btn').disabled = !hasSelection;
-        document.getElementById('view-ixml-btn').disabled = this.selectedIndices.size !== 1;
-        document.getElementById('view-bext-btn').disabled = this.selectedIndices.size !== 1;
-        document.getElementById('normalize-btn').disabled = !hasSelection;
-        document.getElementById('rename-btn').disabled = !hasSelection;
-        document.getElementById('export-btn').disabled = !hasSelection;
-        document.getElementById('save-mix-btn').disabled = this.selectedIndices.size !== 1;
-        document.getElementById('load-mix-btn').disabled = this.selectedIndices.size !== 1;
+        safeSetDisabled('batch-remove-btn', !hasSelection);
+        safeSetDisabled('diagnostics-btn', this.selectedIndices.size !== 1);
+        safeSetDisabled('corrupt-ixml-modal-btn', this.selectedIndices.size !== 1);
+        safeSetDisabled('normalize-btn', !hasSelection);
+        safeSetDisabled('rename-btn', !hasSelection);
+        safeSetDisabled('export-btn', !hasSelection);
+        safeSetDisabled('save-mix-btn', this.selectedIndices.size !== 1);
+        safeSetDisabled('load-mix-btn', this.selectedIndices.size !== 1);
         
         // Enable combine button if:
         // 1. Any sibling groups are detected AND no poly file is selected, OR
@@ -1737,10 +1760,10 @@ class App {
             }
         }
         
-        document.getElementById('combine-btn').disabled = (!hasSiblingGroups && !canCombineSelectedMono) || isPolySelected;
+        safeSetDisabled('combine-btn', (!hasSiblingGroups && !canCombineSelectedMono) || isPolySelected);
         
         // Enable export TC range button if one or more files are selected
-        document.getElementById('export-tc-range-btn').disabled = this.selectedIndices.size === 0;
+        safeSetDisabled('export-tc-range-btn', this.selectedIndices.size === 0);
         
         // Enable repair button only if exactly one file is selected AND it needs repair
         let needsRepair = false;
@@ -1749,10 +1772,11 @@ class App {
             const selectedFile = this.files[selectedIndex];
             needsRepair = selectedFile && selectedFile.metadata && selectedFile.metadata.needsIXMLRepair;
         }
-        document.getElementById('repair-ixmlbtn').disabled = !needsRepair;
+        safeSetDisabled('repair-ixmlbtn', !needsRepair);
+        safeSetDisabled('repair-ixml-modal-btn', !needsRepair);
         
         // Enable split button if exactly one poly file is selected (not a sibling group)
-        document.getElementById('split-btn').disabled = !isPolySelected;
+        safeSetDisabled('split-btn', !isPolySelected);
     }
 
     updateSaveButtonState() {
@@ -1851,31 +1875,22 @@ class App {
         const index = Array.from(this.selectedIndices)[0];
         const item = this.files[index];
 
-        try {
-            // Refresh file from handle to ensure we read the latest version
-            if (item.handle && item.handle.kind === 'file') {
-                item.file = await item.handle.getFile();
-            }
-            
-            const arrayBuffer = await item.file.arrayBuffer();
-            const ixmlData = this.extractIXML(arrayBuffer);
+        const content = document.getElementById('ixml-content');
 
-            const modal = document.getElementById('ixml-modal');
-            const content = document.getElementById('ixml-content');
+        // Display raw iXML metadata only
+        const metadata = item ? item.metadata : null;
 
-            if (ixmlData) {
-                // Pretty-print the XML for better readability
-                const formattedXML = this.formatXMLForDisplay(ixmlData);
-                content.textContent = formattedXML;
-            } else {
-                content.textContent = 'No iXML data found in this file.';
-            }
+        let displayText = '';
 
-            modal.classList.add('active');
-        } catch (err) {
-            console.error('Error reading iXML:', err);
-            alert('Failed to read iXML data from file.');
+        if (metadata && metadata.ixmlRaw) {
+            displayText = this.formatXMLForDisplay(metadata.ixmlRaw);
+        } else {
+            displayText = 'No iXML data found in this file.';
         }
+
+        content.textContent = displayText;
+
+        // Note: Modal opening is handled by the caller
     }
 
     formatXMLForDisplay(xmlString) {
@@ -1980,9 +1995,53 @@ class App {
         return null; // No iXML chunk found
     }
 
-    closeIXMLModal() {
-        const modal = document.getElementById('ixml-modal');
+    openDiagnosticsModal() {
+        console.log('Opening diagnostics modal');
+        // Default to iXML tab and populate it
+        this.switchToIXMLTab();
+        this.viewIXML();
+        document.getElementById('diagnostics-modal').classList.add('active');
+    }
+
+    closeDiagnosticsModal() {
+        const modal = document.getElementById('diagnostics-modal');
         modal.classList.remove('active');
+    }
+
+    switchToIXMLTab() {
+        document.getElementById('ixml-tab-btn').classList.add('active');
+        document.getElementById('bext-tab-btn').classList.remove('active');
+        document.getElementById('tools-tab-btn').classList.remove('active');
+        document.getElementById('ixml-tab-content').classList.add('active');
+        document.getElementById('bext-tab-content').classList.remove('active');
+        document.getElementById('tools-tab-content').classList.remove('active');
+        // Populate iXML content when switching to this tab (only if modal is already open)
+        if (document.getElementById('diagnostics-modal').classList.contains('active')) {
+            this.viewIXML();
+        }
+    }
+
+    switchToBEXTTab() {
+        document.getElementById('bext-tab-btn').classList.add('active');
+        document.getElementById('ixml-tab-btn').classList.remove('active');
+        document.getElementById('tools-tab-btn').classList.remove('active');
+        document.getElementById('bext-tab-content').classList.add('active');
+        document.getElementById('ixml-tab-content').classList.remove('active');
+        document.getElementById('tools-tab-content').classList.remove('active');
+        // Populate bEXT content when switching to this tab (only if modal is already open)
+        if (document.getElementById('diagnostics-modal').classList.contains('active')) {
+            this.viewBEXT();
+        }
+    }
+
+    switchToToolsTab() {
+        document.getElementById('tools-tab-btn').classList.add('active');
+        document.getElementById('ixml-tab-btn').classList.remove('active');
+        document.getElementById('bext-tab-btn').classList.remove('active');
+        document.getElementById('tools-tab-content').classList.add('active');
+        document.getElementById('ixml-tab-content').classList.remove('active');
+        document.getElementById('bext-tab-content').classList.remove('active');
+        // No content to populate for tools tab
     }
 
     async viewBEXT() {
@@ -1995,7 +2054,6 @@ class App {
             const arrayBuffer = await item.file.arrayBuffer();
             const bextData = this.extractBEXT(arrayBuffer);
 
-            const modal = document.getElementById('bext-modal');
             const content = document.getElementById('bext-content');
 
             if (bextData) {
@@ -2004,7 +2062,7 @@ class App {
                 content.textContent = 'No bEXT data found in this file.';
             }
 
-            modal.classList.add('active');
+            // Note: Tab switching and modal opening is handled by the caller
         } catch (err) {
             console.error('Error reading bEXT:', err);
             alert('Failed to read bEXT data from file.');
@@ -2079,24 +2137,142 @@ class App {
         return null;
     }
 
-    closeBEXTModal() {
-        const modal = document.getElementById('bext-modal');
-        modal.classList.remove('active');
+
+
+    // Debug function to corrupt iXML for testing repair functionality
+    async corruptIXMLForTesting(corruptionType = 'missing-closing-tag') {
+        if (this.selectedIndices.size !== 1) {
+            alert('Please select exactly one file to corrupt.');
+            return;
+        }
+
+        const selectedIndex = Array.from(this.selectedIndices)[0];
+        const selectedFile = this.files[selectedIndex];
+
+        if (!selectedFile.handle) {
+            alert('File handle not available. Please re-import the file.');
+            return;
+        }
+
+        try {
+            const file = selectedFile.file;
+            const arrayBuffer = await file.arrayBuffer();
+            const corruptedBuffer = await this.corruptIXMLBuffer(arrayBuffer, corruptionType);
+
+            // Write the corrupted file
+            const writable = await selectedFile.handle.createWritable();
+            await writable.write(corruptedBuffer);
+            await writable.close();
+
+            alert(`File corrupted with ${corruptionType}. Please re-import to test repair.`);
+
+        } catch (err) {
+            console.error('Corruption failed:', err);
+            alert(`Corruption failed: ${err.message}`);
+        }
+    }
+
+    async corruptIXMLBuffer(originalBuffer, corruptionType) {
+        const view = new DataView(originalBuffer);
+        let offset = 12; // Skip RIFF header
+        let ixmlOffset = -1;
+        let ixmlSize = 0;
+
+        // Find iXML chunk
+        while (offset < view.byteLength - 8) {
+            const chunkId = String.fromCharCode(
+                view.getUint8(offset),
+                view.getUint8(offset + 1),
+                view.getUint8(offset + 2),
+                view.getUint8(offset + 3)
+            );
+            const chunkSize = view.getUint32(offset + 4, true);
+
+            if (chunkId === 'iXML') {
+                ixmlOffset = offset + 8;
+                ixmlSize = chunkSize;
+                break;
+            }
+
+            offset += 8 + chunkSize;
+            if (chunkSize % 2 !== 0) offset++; // Pad byte
+        }
+
+        if (ixmlOffset === -1) {
+            throw new Error('No iXML chunk found in file');
+        }
+
+        // Get current iXML content
+        const ixmlBytes = new Uint8Array(originalBuffer, ixmlOffset, ixmlSize);
+        let ixmlString = new TextDecoder('utf-8').decode(ixmlBytes).replace(/\0+$/, '');
+
+        console.log('Original iXML:', ixmlString);
+
+        // Apply corruption based on type
+        let corruptedIXML;
+        switch (corruptionType) {
+            case 'missing-closing-tag':
+                corruptedIXML = ixmlString.replace('</BWFXML>', '');
+                break;
+            case 'missing-xml-declaration':
+                corruptedIXML = ixmlString.replace('<?xml version="1.0" encoding="UTF-8"?>\n', '');
+                break;
+            case 'missing-speed-tag':
+                corruptedIXML = ixmlString.replace(/<SPEED[^>]*>[\s\S]*?<\/SPEED>\s*/g, '');
+                break;
+            case 'invalid-root':
+                corruptedIXML = ixmlString.replace('<BWFXML>', '<INVALID>');
+                break;
+            case 'empty':
+                corruptedIXML = '';
+                break;
+            case 'malformed-xml':
+                corruptedIXML = ixmlString.replace('>', '> <unclosed');
+                break;
+            default:
+                throw new Error(`Unknown corruption type: ${corruptionType}`);
+        }
+
+        console.log('Corrupted iXML:', corruptedIXML);
+
+        // Create corrupted buffer
+        const corruptedBytes = new TextEncoder().encode(corruptedIXML);
+        const newBuffer = new Uint8Array(originalBuffer.byteLength - ixmlSize + corruptedBytes.length);
+        const newView = new DataView(newBuffer.buffer);
+
+        // Copy everything before iXML
+        newBuffer.set(new Uint8Array(originalBuffer, 0, ixmlOffset), 0);
+
+        // Copy corrupted iXML
+        newBuffer.set(corruptedBytes, ixmlOffset);
+
+        // Copy everything after iXML
+        const afterIXML = originalBuffer.byteLength - (ixmlOffset + ixmlSize);
+        if (afterIXML > 0) {
+            newBuffer.set(new Uint8Array(originalBuffer, ixmlOffset + ixmlSize, afterIXML), ixmlOffset + corruptedBytes.length);
+        }
+
+        // Update iXML chunk size in header
+        const chunkHeaderOffset = ixmlOffset - 8;
+        newView.setUint32(chunkHeaderOffset + 4, corruptedBytes.length, true);
+
+        // Update RIFF size if needed
+        const sizeDiff = corruptedBytes.length - ixmlSize;
+        if (sizeDiff !== 0) {
+            const currentRiffSize = newView.getUint32(4, true);
+            newView.setUint32(4, currentRiffSize + sizeDiff, true);
+        }
+
+        return newBuffer.buffer;
     }
 
     async loadAudioForFile(index) {
-        // Stop current playback and reset UI
-        this.stop();
-
         const item = this.files[index];
+        const targetFiles = item.isGroup ? [item, ...item.siblings] : [item];
         const isGroup = item.isGroup;
-        const targetFiles = isGroup ? item.siblings : [item];
-
-        // Calculate total size for progress
         const totalSize = targetFiles.reduce((acc, f) => acc + f.file.size, 0);
-        const totalSizeMB = (totalSize / 1024 / 1024).toFixed(2);
+        const totalSizeMB = (totalSize / (1024 * 1024)).toFixed(1);
 
-        // Show loading overlay for large files
         const loadingOverlay = document.getElementById('loading-overlay');
         const progressFill = document.getElementById('progress-fill');
         const progressText = document.getElementById('progress-text');
@@ -3383,14 +3559,6 @@ class App {
             return '00:00:00:00';
         }
 
-        // Get FPS
-        let fps = 24; // default
-        if (this.currentFileMetadata.fpsExact) {
-            fps = this.currentFileMetadata.fpsExact.numerator / this.currentFileMetadata.fpsExact.denominator;
-        } else if (this.currentFileMetadata.fps) {
-            fps = parseFloat(this.currentFileMetadata.fps) || 24;
-        }
-
         // Convert seconds to samples
         const samples = Math.floor(seconds * this.currentFileMetadata.sampleRate);
 
@@ -3398,16 +3566,39 @@ class App {
         const tcStartSamples = this.currentFileMetadata.timeReference || 0;
         const totalSamples = samples + tcStartSamples;
 
-        // Convert to timecode
-        const totalFrames = Math.floor(totalSamples / this.currentFileMetadata.sampleRate * fps);
+        // Get exact FPS fraction or fall back to parsed fps
+        let fpsExact = this.currentFileMetadata.fpsExact;
+        
+        if (!fpsExact) {
+            // Create fpsExact from fps string (e.g., "23.976" -> {numerator: 24000, denominator: 1001})
+            const fps = parseFloat(this.currentFileMetadata.fps) || 24;
+            // Simple approximation for common frame rates
+            if (Math.abs(fps - 23.976) < 0.01) {
+                fpsExact = { numerator: 24000, denominator: 1001 };
+            } else if (Math.abs(fps - 29.97) < 0.01) {
+                fpsExact = { numerator: 30000, denominator: 1001 };
+            } else if (Math.abs(fps - 59.94) < 0.01) {
+                fpsExact = { numerator: 60000, denominator: 1001 };
+            } else {
+                fpsExact = { numerator: Math.round(fps), denominator: 1 };
+            }
+        }
 
-        const frames = totalFrames % Math.floor(fps);
-        const totalSeconds = Math.floor(totalFrames / fps);
-        const s = totalSeconds % 60;
-        const m = Math.floor(totalSeconds / 60) % 60;
-        const h = Math.floor(totalSeconds / 3600);
+        // Convert samples to total frames using exact fraction (matching samplesToTC logic)
+        const totalSeconds = totalSamples / this.currentFileMetadata.sampleRate;
+        const totalFrames = Math.floor(totalSeconds * fpsExact.numerator / fpsExact.denominator);
 
-        return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}:${frames.toString().padStart(2, '0')}`;
+        // Calculate timecode components
+        const framesPerSecond = Math.round(fpsExact.numerator / fpsExact.denominator);
+        const framesPerMinute = framesPerSecond * 60;
+        const framesPerHour = framesPerMinute * 60;
+
+        const h = Math.floor(totalFrames / framesPerHour);
+        const m = Math.floor((totalFrames % framesPerHour) / framesPerMinute);
+        const s = Math.floor((totalFrames % framesPerMinute) / framesPerSecond);
+        const f = totalFrames % framesPerSecond;
+
+        return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}:${String(f).padStart(2, '0')}`;
     }
 
     // ===== Cue Marker Methods =====
