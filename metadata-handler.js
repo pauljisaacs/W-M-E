@@ -108,6 +108,9 @@ export class MetadataHandler {
 
         console.log(`Starting trailing chunk parse at offset ${offset} (buffer size: ${view.byteLength})`);
 
+        let invalidChunkCount = 0;
+        const MAX_INVALID_CHUNKS = 100; // Stop after 100 consecutive invalid chunks to prevent infinite loops
+
         while (offset < view.byteLength - 8) {
             try {
                 const chunkId = this.getChunkId(view, offset);
@@ -115,12 +118,26 @@ export class MetadataHandler {
 
                 console.log(`Found chunk candidate at ${offset}: ${chunkId} (${chunkSize} bytes)`);
 
+                // Safety check: if chunkSize is 0 or unreasonably large, this is likely corrupt data
+                if (chunkSize === 0 || chunkSize > view.byteLength) {
+                    console.log(`Invalid chunk size ${chunkSize}, stopping trailing chunk parse`);
+                    break;
+                }
+
                 // Validate chunk ID (must be ASCII alphanumeric/space)
                 if (!/^[a-zA-Z0-9 ]{4}$/.test(chunkId)) {
-                    console.log('Invalid chunk ID, skipping byte');
+                    invalidChunkCount++;
+                    if (invalidChunkCount > MAX_INVALID_CHUNKS) {
+                        console.log(`Too many invalid chunks (${invalidChunkCount}), stopping parse to prevent infinite loop`);
+                        break;
+                    }
+                    console.log(`Invalid chunk ID, skipping byte (${invalidChunkCount}/${MAX_INVALID_CHUNKS})`);
                     offset++;
                     continue;
                 }
+
+                // Reset invalid chunk counter when we find a valid one
+                invalidChunkCount = 0;
 
                 if (chunkId === 'bext') {
                     console.log(`Found bext chunk at end of file, size: ${chunkSize}`);
@@ -135,6 +152,11 @@ export class MetadataHandler {
                 if (chunkSize % 2 !== 0) offset++;
             } catch (e) {
                 console.warn('Error parsing trailing chunk:', e);
+                invalidChunkCount++;
+                if (invalidChunkCount > MAX_INVALID_CHUNKS) {
+                    console.log(`Too many errors (${invalidChunkCount}), stopping parse to prevent infinite loop`);
+                    break;
+                }
                 // If we can't parse a chunk, move forward by 1 byte and try again
                 offset++;
             }
@@ -314,7 +336,19 @@ export class MetadataHandler {
         const chunkData = new Uint8Array(view.buffer, view.byteOffset + offset, size);
         const decoder = new TextDecoder('utf-8');
         // Remove null terminators if any
-        const xmlStr = decoder.decode(chunkData).replace(/\0+$/, '');
+        let xmlStr = decoder.decode(chunkData).replace(/\0+$/, '');
+
+        // Validate iXML - detect if repair is needed but don't repair yet
+        // Pass metadata so we can include proper SPEED tag in repair
+        const validation = this.validateAndFixIXML(xmlStr, metadata);
+        
+        if (validation.needsRepair) {
+            console.log('[parseIXML] File needs repair, marking for later');
+            metadata.needsIXMLRepair = true;
+            metadata.ixmlRepairData = validation.fixed; // Store the repaired version for later
+        } else {
+            metadata.needsIXMLRepair = false;
+        }
 
         // Store the original iXML for preservation
         metadata.ixmlRaw = xmlStr;
@@ -322,10 +356,8 @@ export class MetadataHandler {
         const parser = new DOMParser();
         const xmlDoc = parser.parseFromString(xmlStr, "text/xml");
 
-        // Warn if SPEED tag is missing
-        if (!xmlDoc.querySelector('SPEED')) {
-            alert('Warning: Imported file is missing iXML SPEED tag. TC Start and timecode calculations may be unreliable.');
-        }
+        // Note: SPEED tag is now automatically added during iXML repair if missing,
+        // so we no longer need to warn the user about it
 
         // check for parse errors
         const parseError = xmlDoc.querySelector('parsererror');
@@ -387,6 +419,375 @@ export class MetadataHandler {
             if (name) trackNames.push(name);
         });
         metadata.trackNames = trackNames;
+    }
+
+    /**
+     * Validate and fix incomplete/invalid iXML chunks
+     * @param {string} xmlStr - The iXML string to validate
+     * @param {object} metadata - Metadata object with audio info (sampleRate, fps, etc)
+     * @returns {object} - {isValid, needsRepair, fixed} where fixed is the corrected iXML
+     */
+    validateAndFixIXML(xmlStr, metadata = {}) {
+        if (!xmlStr || xmlStr.trim() === '') {
+            console.warn('[validateAndFixIXML] Empty iXML chunk detected');
+            return {
+                isValid: false,
+                needsRepair: true,
+                fixed: this.createMinimalIXML(metadata)
+            };
+        }
+
+        let fixed = xmlStr;
+        let needsRepair = false;
+
+        // Check for missing XML declaration
+        if (!fixed.trim().startsWith('<?xml')) {
+            console.warn('[validateAndFixIXML] Missing XML declaration');
+            needsRepair = true;
+            fixed = '<?xml version="1.0" encoding="UTF-8"?>\n' + fixed;
+        }
+
+        // Check if closing BWFXML tag exists
+        if (!fixed.includes('</BWFXML>')) {
+            console.warn('[validateAndFixIXML] Missing closing </BWFXML> tag');
+            needsRepair = true;
+            
+            // Remove any incomplete closing tags at the end
+            fixed = fixed.replace(/<BWFXML[^>]*>[\s\S]*$/, match => {
+                // Find the opening BWFXML tag and keep everything up to it
+                const lastOpenTag = fixed.lastIndexOf('<BWFXML');
+                if (lastOpenTag !== -1) {
+                    const afterOpen = fixed.indexOf('>', lastOpenTag);
+                    return fixed.substring(0, afterOpen + 1);
+                }
+                return match;
+            });
+            
+            // Add closing tag
+            fixed = fixed.trimEnd() + '\n</BWFXML>';
+        }
+
+        // Try to parse and validate
+        try {
+            const parser = new DOMParser();
+            const xmlDoc = parser.parseFromString(fixed, 'text/xml');
+            
+            // Check for parsing errors
+            const parseError = xmlDoc.querySelector('parsererror');
+            if (parseError) {
+                console.warn('[validateAndFixIXML] XML parsing error detected');
+                needsRepair = true;
+                
+                // Attempt to rebuild from extracted fields
+                const minimized = this.rebuildIXMLFromText(fixed, metadata);
+                return {
+                    isValid: false,
+                    needsRepair: true,
+                    fixed: minimized
+                };
+            }
+            
+            // Validate required root element
+            const rootElement = xmlDoc.documentElement;
+            if (!rootElement || rootElement.tagName !== 'BWFXML') {
+                console.warn('[validateAndFixIXML] Invalid root element');
+                return {
+                    isValid: false,
+                    needsRepair: true,
+                    fixed: this.createMinimalIXML(metadata)
+                };
+            }
+
+            // Check if SPEED tag exists
+            if (!xmlDoc.querySelector('SPEED')) {
+                console.warn('[validateAndFixIXML] Missing SPEED tag, adding it');
+                needsRepair = true;
+                // Add SPEED tag before closing BWFXML
+                const speedTag = this.createSpeedTag(metadata);
+                fixed = fixed.replace('</BWFXML>', `${speedTag}</BWFXML>`);
+            }
+            
+            return {
+                isValid: !needsRepair,
+                needsRepair: needsRepair,
+                fixed: fixed
+            };
+        } catch (err) {
+            console.error('[validateAndFixIXML] Exception during validation:', err);
+            return {
+                isValid: false,
+                needsRepair: true,
+                fixed: this.createMinimalIXML(metadata)
+            };
+        }
+    }
+
+    /**
+     * Rebuild iXML structure from potentially corrupted text
+     * @param {string} xmlStr - Corrupted XML string
+     * @param {object} metadata - Metadata with audio info
+     * @returns {string} - Rebuilt valid iXML
+     */
+    rebuildIXMLFromText(xmlStr, metadata = {}) {
+        // Try to extract key fields using regex as fallback
+        try {
+            const extracted = {};
+            
+            const fields = ['PROJECT', 'SCENE', 'TAKE', 'TAPE', 'NOTE'];
+            for (const field of fields) {
+                const regex = new RegExp(`<${field}[^>]*>([^<]*)<\/${field}>`, 'i');
+                const match = xmlStr.match(regex);
+                if (match && match[1]) {
+                    extracted[field] = match[1].trim();
+                }
+            }
+            
+            // Also try to extract BWF_TIME_REFERENCE and track info
+            const timeRefMatch = xmlStr.match(/<BWF_TIME_REFERENCE>(\d+)<\/BWF_TIME_REFERENCE>/i);
+            if (timeRefMatch) {
+                extracted.timeReference = parseInt(timeRefMatch[1]);
+            }
+            
+            // Extract SYNC_POINT_LIST if present
+            const syncPointMatch = xmlStr.match(/<SYNC_POINT_LIST>[\s\S]*?<\/SYNC_POINT_LIST>/i);
+            if (syncPointMatch) {
+                extracted.syncPoints = syncPointMatch[0];
+            }
+            
+            // Extract MIXER_SETTINGS if present
+            const mixerMatch = xmlStr.match(/<MIXER_SETTINGS>[\s\S]*?<\/MIXER_SETTINGS>/i);
+            if (mixerMatch) {
+                extracted.mixerSettings = mixerMatch[0];
+            }
+            
+            if (Object.keys(extracted).length > 0 || metadata.sampleRate) {
+                console.log('[rebuildIXMLFromText] Recovered fields:', Object.keys(extracted));
+                
+                // Rebuild with recovered fields and proper standard structure
+                let rebuilt = '<?xml version="1.0" encoding="UTF-8"?>\n<BWFXML>\n';
+                rebuilt += '\t<IXML_VERSION>1.5</IXML_VERSION>\n';
+                
+                if (extracted.PROJECT) rebuilt += `\t<PROJECT>${this.escapeXML(extracted.PROJECT)}</PROJECT>\n`;
+                if (extracted.SCENE) rebuilt += `\t<SCENE>${this.escapeXML(extracted.SCENE)}</SCENE>\n`;
+                if (extracted.TAKE) rebuilt += `\t<TAKE>${this.escapeXML(extracted.TAKE)}</TAKE>\n`;
+                if (extracted.TAPE) rebuilt += `\t<TAPE>${this.escapeXML(extracted.TAPE)}</TAPE>\n`;
+                if (extracted.NOTE) rebuilt += `\t<NOTE>${this.escapeXML(extracted.NOTE)}</NOTE>\n`;
+                
+                // Add SPEED tag with proper structure
+                rebuilt += '\t<SPEED>\n';
+                rebuilt += '\t\t<NOTE></NOTE>\n';
+                
+                if (metadata.fps) {
+                    const fpsMap = {
+                        '23.98': '24000/1001', '24': '24/1', '25': '25/1', 
+                        '29.97': '30000/1001', '29.97df': '30000/1001', '30': '30/1',
+                        '48': '48/1', '50': '50/1', '59.94': '60000/1001', '60': '60/1'
+                    };
+                    const fpsVal = fpsMap[metadata.fps] || '25/1';
+                    rebuilt += `\t\t<MASTER_SPEED>${fpsVal}</MASTER_SPEED>\n`;
+                    rebuilt += `\t\t<CURRENT_SPEED>${fpsVal}</CURRENT_SPEED>\n`;
+                    rebuilt += '\t\t<TIMECODE_FLAG>NDF</TIMECODE_FLAG>\n';
+                    rebuilt += `\t\t<TIMECODE_RATE>${fpsVal}</TIMECODE_RATE>\n`;
+                } else {
+                    rebuilt += '\t\t<MASTER_SPEED>25/1</MASTER_SPEED>\n';
+                    rebuilt += '\t\t<CURRENT_SPEED>25/1</CURRENT_SPEED>\n';
+                    rebuilt += '\t\t<TIMECODE_FLAG>NDF</TIMECODE_FLAG>\n';
+                    rebuilt += '\t\t<TIMECODE_RATE>25/1</TIMECODE_RATE>\n';
+                }
+                
+                rebuilt += `\t\t<FILE_SAMPLE_RATE>${metadata.sampleRate || 48000}</FILE_SAMPLE_RATE>\n`;
+                rebuilt += `\t\t<AUDIO_BIT_DEPTH>${metadata.bitDepth || 24}</AUDIO_BIT_DEPTH>\n`;
+                rebuilt += `\t\t<DIGITIZER_SAMPLE_RATE>${metadata.sampleRate || 48000}</DIGITIZER_SAMPLE_RATE>\n`;
+                rebuilt += `\t\t<TIMESTAMP_SAMPLE_RATE>${metadata.sampleRate || 48000}</TIMESTAMP_SAMPLE_RATE>\n`;
+                rebuilt += '\t\t<TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_HI>0</TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_HI>\n';
+                rebuilt += `\t\t<TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_LO>${extracted.timeReference || metadata.timeReference || 0}</TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_LO>\n`;
+                rebuilt += '\t</SPEED>\n';
+                
+                // Add TRACK_LIST with channel information
+                const channels = metadata.channels || 1;
+                if (channels > 0) {
+                    rebuilt += '\t<TRACK_LIST>\n';
+                    rebuilt += `\t\t<TRACK_COUNT>${channels}</TRACK_COUNT>\n`;
+                    for (let i = 0; i < channels; i++) {
+                        const trackName = (metadata.trackNames && metadata.trackNames[i]) 
+                            ? this.escapeXML(metadata.trackNames[i])
+                            : `Track ${i + 1}`;
+                        rebuilt += '\t\t<TRACK>\n';
+                        rebuilt += `\t\t\t<CHANNEL_INDEX>${i + 1}</CHANNEL_INDEX>\n`;
+                        rebuilt += `\t\t\t<INTERLEAVE_INDEX>${i + 1}</INTERLEAVE_INDEX>\n`;
+                        rebuilt += `\t\t\t<NAME>${trackName}</NAME>\n`;
+                        rebuilt += '\t\t</TRACK>\n';
+                    }
+                    rebuilt += '\t</TRACK_LIST>\n';
+                }
+                
+                // Add back SYNC_POINT_LIST if it existed
+                if (extracted.syncPoints) {
+                    rebuilt += '\t' + extracted.syncPoints + '\n';
+                }
+                
+                // Add back MIXER_SETTINGS if it existed
+                if (extracted.mixerSettings) {
+                    rebuilt += '\t' + extracted.mixerSettings + '\n';
+                }
+                
+                rebuilt += '</BWFXML>';
+                return rebuilt;
+            }
+        } catch (err) {
+            console.error('[rebuildIXMLFromText] Error during field extraction:', err);
+        }
+        
+        // Fallback to minimal structure with metadata
+        return this.createMinimalIXML(metadata);
+    }
+
+    /**
+     * Create a proper SPEED tag from metadata
+     * @param {object} metadata - Metadata with sampleRate and fps
+     * @returns {string} - SPEED tag XML
+     */
+    createSpeedTag(metadata = {}) {
+        let speedTag = '  <SPEED>\n';
+        speedTag += '    <NOTE></NOTE>\n';
+        
+        // MASTER_SPEED and CURRENT_SPEED in fractional format
+        if (metadata.fps) {
+            const fpsMap = {
+                '23.98': '24000/1001', '24': '24/1', '25': '25/1', 
+                '29.97': '30000/1001', '29.97df': '30000/1001', '30': '30/1',
+                '48': '48/1', '50': '50/1', '59.94': '60000/1001', '60': '60/1'
+            };
+            const fpsVal = fpsMap[metadata.fps] || '30/1';
+            speedTag += `    <MASTER_SPEED>${fpsVal}</MASTER_SPEED>\n`;
+            speedTag += `    <CURRENT_SPEED>${fpsVal}</CURRENT_SPEED>\n`;
+            speedTag += '    <TIMECODE_FLAG>NDF</TIMECODE_FLAG>\n';
+            speedTag += `    <TIMECODE_RATE>${fpsVal}</TIMECODE_RATE>\n`;
+        } else {
+            speedTag += '    <MASTER_SPEED>25/1</MASTER_SPEED>\n';
+            speedTag += '    <CURRENT_SPEED>25/1</CURRENT_SPEED>\n';
+            speedTag += '    <TIMECODE_FLAG>NDF</TIMECODE_FLAG>\n';
+            speedTag += '    <TIMECODE_RATE>25/1</TIMECODE_RATE>\n';
+        }
+        
+        // Sample rate information
+        if (metadata.sampleRate) {
+            speedTag += `    <FILE_SAMPLE_RATE>${metadata.sampleRate}</FILE_SAMPLE_RATE>\n`;
+        } else {
+            speedTag += '    <FILE_SAMPLE_RATE>48000</FILE_SAMPLE_RATE>\n';
+        }
+        
+        // Bit depth
+        if (metadata.bitDepth) {
+            speedTag += `    <AUDIO_BIT_DEPTH>${metadata.bitDepth}</AUDIO_BIT_DEPTH>\n`;
+        } else {
+            speedTag += '    <AUDIO_BIT_DEPTH>24</AUDIO_BIT_DEPTH>\n';
+        }
+        
+        // Digitizer information (same as sample rate typically)
+        if (metadata.sampleRate) {
+            speedTag += `    <DIGITIZER_SAMPLE_RATE>${metadata.sampleRate}</DIGITIZER_SAMPLE_RATE>\n`;
+            speedTag += `    <TIMESTAMP_SAMPLE_RATE>${metadata.sampleRate}</TIMESTAMP_SAMPLE_RATE>\n`;
+        } else {
+            speedTag += '    <DIGITIZER_SAMPLE_RATE>48000</DIGITIZER_SAMPLE_RATE>\n';
+            speedTag += '    <TIMESTAMP_SAMPLE_RATE>48000</TIMESTAMP_SAMPLE_RATE>\n';
+        }
+        
+        // Timestamp information
+        speedTag += '    <TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_HI>0</TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_HI>\n';
+        if (metadata.timeReference !== undefined) {
+            speedTag += `    <TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_LO>${metadata.timeReference}</TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_LO>\n`;
+        } else {
+            speedTag += '    <TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_LO>0</TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_LO>\n';
+        }
+        
+        speedTag += '  </SPEED>\n';
+        return speedTag;
+    }
+
+    /**
+     * Create minimal valid iXML structure with proper standard formatting
+     * @param {object} metadata - Metadata with audio info
+     * @returns {string} - Minimal valid iXML matching iXML 1.5 standard
+     */
+    createMinimalIXML(metadata = {}) {
+        let ixmlStr = '<?xml version="1.0" encoding="UTF-8"?>\n<BWFXML>\n';
+        
+        // Standard iXML version
+        ixmlStr += '\t<IXML_VERSION>1.5</IXML_VERSION>\n';
+        
+        // Basic metadata
+        if (metadata.project) ixmlStr += `\t<PROJECT>${this.escapeXML(metadata.project)}</PROJECT>\n`;
+        if (metadata.scene) ixmlStr += `\t<SCENE>${this.escapeXML(metadata.scene)}</SCENE>\n`;
+        if (metadata.take) ixmlStr += `\t<TAKE>${this.escapeXML(metadata.take)}</TAKE>\n`;
+        if (metadata.tape) ixmlStr += `\t<TAPE>${this.escapeXML(metadata.tape)}</TAPE>\n`;
+        if (metadata.notes) ixmlStr += `\t<NOTE>${this.escapeXML(metadata.notes)}</NOTE>\n`;
+        
+        // SPEED tag with complete structure
+        ixmlStr += '\t<SPEED>\n';
+        ixmlStr += '\t\t<NOTE></NOTE>\n';
+        
+        if (metadata.fps) {
+            const fpsMap = {
+                '23.98': '24000/1001', '24': '24/1', '25': '25/1', 
+                '29.97': '30000/1001', '29.97df': '30000/1001', '30': '30/1',
+                '48': '48/1', '50': '50/1', '59.94': '60000/1001', '60': '60/1'
+            };
+            const fpsVal = fpsMap[metadata.fps] || '25/1';
+            ixmlStr += `\t\t<MASTER_SPEED>${fpsVal}</MASTER_SPEED>\n`;
+            ixmlStr += `\t\t<CURRENT_SPEED>${fpsVal}</CURRENT_SPEED>\n`;
+            ixmlStr += '\t\t<TIMECODE_FLAG>NDF</TIMECODE_FLAG>\n';
+            ixmlStr += `\t\t<TIMECODE_RATE>${fpsVal}</TIMECODE_RATE>\n`;
+        } else {
+            ixmlStr += '\t\t<MASTER_SPEED>25/1</MASTER_SPEED>\n';
+            ixmlStr += '\t\t<CURRENT_SPEED>25/1</CURRENT_SPEED>\n';
+            ixmlStr += '\t\t<TIMECODE_FLAG>NDF</TIMECODE_FLAG>\n';
+            ixmlStr += '\t\t<TIMECODE_RATE>25/1</TIMECODE_RATE>\n';
+        }
+        
+        ixmlStr += `\t\t<FILE_SAMPLE_RATE>${metadata.sampleRate || 48000}</FILE_SAMPLE_RATE>\n`;
+        ixmlStr += `\t\t<AUDIO_BIT_DEPTH>${metadata.bitDepth || 24}</AUDIO_BIT_DEPTH>\n`;
+        ixmlStr += `\t\t<DIGITIZER_SAMPLE_RATE>${metadata.sampleRate || 48000}</DIGITIZER_SAMPLE_RATE>\n`;
+        ixmlStr += `\t\t<TIMESTAMP_SAMPLE_RATE>${metadata.sampleRate || 48000}</TIMESTAMP_SAMPLE_RATE>\n`;
+        ixmlStr += '\t\t<TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_HI>0</TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_HI>\n';
+        ixmlStr += `\t\t<TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_LO>${metadata.timeReference || 0}</TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_LO>\n`;
+        ixmlStr += '\t</SPEED>\n';
+        
+        // TRACK_LIST with channel information
+        const channels = metadata.channels || 1;
+        if (channels > 0) {
+            ixmlStr += '\t<TRACK_LIST>\n';
+            ixmlStr += `\t\t<TRACK_COUNT>${channels}</TRACK_COUNT>\n`;
+            for (let i = 0; i < channels; i++) {
+                const trackName = (metadata.trackNames && metadata.trackNames[i]) 
+                    ? this.escapeXML(metadata.trackNames[i])
+                    : `Track ${i + 1}`;
+                ixmlStr += '\t\t<TRACK>\n';
+                ixmlStr += `\t\t\t<CHANNEL_INDEX>${i + 1}</CHANNEL_INDEX>\n`;
+                ixmlStr += `\t\t\t<INTERLEAVE_INDEX>${i + 1}</INTERLEAVE_INDEX>\n`;
+                ixmlStr += `\t\t\t<NAME>${trackName}</NAME>\n`;
+                ixmlStr += '\t\t</TRACK>\n';
+            }
+            ixmlStr += '\t</TRACK_LIST>\n';
+        }
+        
+        ixmlStr += '</BWFXML>';
+        return ixmlStr;
+    }
+
+    /**
+     * Escape special XML characters
+     * @param {string} str - String to escape
+     * @returns {string} - Escaped string
+     */
+    escapeXML(str) {
+        if (!str) return '';
+        return str
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&apos;');
     }
 
     readString(view, offset, length) {
@@ -970,6 +1371,7 @@ export class MetadataHandler {
         // Write to file
         const writable = await fileHandle.createWritable();
         await writable.write(newBuffer);
+        await writable.truncate(newFileSize);
         await writable.close();
     }
 
@@ -1270,6 +1672,23 @@ export class MetadataHandler {
         await writable.close();
         
         console.log('Successfully updated cue markers in WAV file');
+    }
+
+    /**
+     * Repair iXML metadata in a file
+     * @param {FileSystemFileHandle} fileHandle - File handle to write to
+     * @param {ArrayBuffer} originalBuffer - Original WAV file buffer
+     * @param {string} repairedIXML - The repaired iXML content
+     */
+    async repairIXMLInFile(fileHandle, originalBuffer, repairedIXML) {
+        console.log('[repairIXMLInFile] Starting repair');
+        console.log('[repairIXMLInFile] Repaired iXML length:', repairedIXML.length);
+        console.log('[repairIXMLInFile] Original buffer size:', originalBuffer.byteLength);
+        
+        // Use the existing updateIXMLChunk method to write the repaired iXML
+        await this.updateIXMLChunk(fileHandle, originalBuffer, repairedIXML);
+        
+        console.log('[repairIXMLInFile] Successfully wrote repaired iXML to file');
     }
 }
 

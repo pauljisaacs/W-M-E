@@ -229,6 +229,9 @@ class App {
         document.getElementById('cancel-export-tc-range-btn').addEventListener('click', () => this.closeExportTCRangeModal());
         document.getElementById('confirm-export-tc-range-btn').addEventListener('click', () => this.handleExportTCRange());
 
+        // Repair iXML button
+        document.getElementById('repair-ixmlbtn').addEventListener('click', () => this.handleRepairIXML());
+
         const exportTCRangeModal = document.getElementById('export-tc-range-modal');
         exportTCRangeModal.querySelector('.close-modal').addEventListener('click', () => this.closeExportTCRangeModal());
         exportTCRangeModal.addEventListener('click', (e) => {
@@ -507,6 +510,7 @@ class App {
             }
 
             if (isDragging) {
+                isDragging = false; // Set this FIRST to prevent mouseleave from also firing
                 const result = updatePlayheadPosition(e);
                 if (result) {
                     if (wasPlaying) {
@@ -516,7 +520,6 @@ class App {
                         this.audioEngine.seek(result.time);
                     }
                 }
-                isDragging = false;
             }
         });
 
@@ -530,6 +533,7 @@ class App {
             }
 
             if (isDragging) {
+                isDragging = false; // Set this FIRST to prevent duplicate handling
                 const result = updatePlayheadPosition(e);
                 if (result) {
                     if (wasPlaying) {
@@ -539,7 +543,6 @@ class App {
                         this.audioEngine.seek(result.time);
                     }
                 }
-                isDragging = false;
             }
         });
 
@@ -987,6 +990,16 @@ class App {
                 this.selectFile(0);
             }, 50);
         }
+
+        // Check if any files need iXML repair and notify user
+        const filesNeedingRepair = this.files.filter(item => 
+            (item.isGroup ? item.siblings.some(s => s.metadata.needsIXMLRepair) : item.metadata.needsIXMLRepair)
+        );
+        
+        if (filesNeedingRepair.length > 0) {
+            const count = filesNeedingRepair.length;
+            alert(`⚠️ Import Complete\n\n${count} file(s) have incomplete or corrupted iXML metadata.\n\nFiles needing repair are highlighted in red in the file list.\n\nSelect a file and click "Repair iXML" to fix it.`);
+        }
     }
 
     groupFiles(items) {
@@ -1228,6 +1241,12 @@ class App {
                 tr.appendChild(cells[colIndex]);
             }
         });
+
+        // Highlight files that need iXML repair
+        if (metadata.needsIXMLRepair) {
+            tr.style.color = '#ff6b6b'; // Red text for files needing repair
+            tr.title = 'This file has an incomplete or corrupted iXML chunk and needs repair';
+        }
 
         tr.addEventListener('click', (e) => this.selectFile(index, e));
         tbody.appendChild(tr);
@@ -1723,6 +1742,15 @@ class App {
         // Enable export TC range button if one or more files are selected
         document.getElementById('export-tc-range-btn').disabled = this.selectedIndices.size === 0;
         
+        // Enable repair button only if exactly one file is selected AND it needs repair
+        let needsRepair = false;
+        if (this.selectedIndices.size === 1) {
+            const selectedIndex = Array.from(this.selectedIndices)[0];
+            const selectedFile = this.files[selectedIndex];
+            needsRepair = selectedFile && selectedFile.metadata && selectedFile.metadata.needsIXMLRepair;
+        }
+        document.getElementById('repair-ixmlbtn').disabled = !needsRepair;
+        
         // Enable split button if exactly one poly file is selected (not a sibling group)
         document.getElementById('split-btn').disabled = !isPolySelected;
     }
@@ -1836,7 +1864,9 @@ class App {
             const content = document.getElementById('ixml-content');
 
             if (ixmlData) {
-                content.textContent = ixmlData;
+                // Pretty-print the XML for better readability
+                const formattedXML = this.formatXMLForDisplay(ixmlData);
+                content.textContent = formattedXML;
             } else {
                 content.textContent = 'No iXML data found in this file.';
             }
@@ -1846,6 +1876,67 @@ class App {
             console.error('Error reading iXML:', err);
             alert('Failed to read iXML data from file.');
         }
+    }
+
+    formatXMLForDisplay(xmlString) {
+        // Pretty-print XML with proper indentation
+        // Tags with only text content stay on one line: <TAG>content</TAG>
+        // Container tags with nested elements break across lines
+        
+        let formatted = '';
+        let indentLevel = 0;
+        const indentStr = '  '; // 2 spaces per indent level
+
+        // Split by tags while preserving them
+        const regex = /(<[^>]+>)|([^<]+)/g;
+        let match;
+        let tokens = [];
+        
+        while ((match = regex.exec(xmlString)) !== null) {
+            tokens.push(match[0]);
+        }
+
+        // Process tokens and format
+        for (let i = 0; i < tokens.length; i++) {
+            const token = tokens[i];
+            
+            if (token.startsWith('<')) {
+                if (token.startsWith('<?')) {
+                    // XML declaration
+                    formatted += token + '\n';
+                } else if (token.startsWith('</')) {
+                    // Closing tag - decrease indent
+                    indentLevel = Math.max(0, indentLevel - 1);
+                    formatted += indentStr.repeat(indentLevel) + token + '\n';
+                } else if (token.endsWith('/>')) {
+                    // Self-closing tag
+                    formatted += indentStr.repeat(indentLevel) + token + '\n';
+                } else {
+                    // Opening tag
+                    // Check if next token is just text content (not another tag)
+                    if (i + 1 < tokens.length && !tokens[i + 1].startsWith('<')) {
+                        const textContent = tokens[i + 1].trim();
+                        if (i + 2 < tokens.length && tokens[i + 2].startsWith('</')) {
+                            // This is a simple text element: <TAG>text</TAG>
+                            const closingTag = tokens[i + 2];
+                            formatted += indentStr.repeat(indentLevel) + token + textContent + closingTag + '\n';
+                            // Skip the next two tokens since we've already processed them
+                            i += 2;
+                        } else {
+                            // Text content but more elements follow
+                            formatted += indentStr.repeat(indentLevel) + token + '\n';
+                            indentLevel++;
+                        }
+                    } else {
+                        // Container tag with nested elements
+                        formatted += indentStr.repeat(indentLevel) + token + '\n';
+                        indentLevel++;
+                    }
+                }
+            }
+        }
+
+        return formatted.trim();
     }
 
     extractIXML(arrayBuffer) {
@@ -2520,6 +2611,88 @@ class App {
         }
     }
 
+    async handleRepairIXML() {
+        // Get the selected file
+        if (this.selectedIndices.size !== 1) {
+            alert('Please select exactly one file to repair.');
+            return;
+        }
+
+        const selectedIndex = Array.from(this.selectedIndices)[0];
+        const selectedFile = this.files[selectedIndex];
+        const metadata = selectedFile.metadata;
+
+        // Check if file needs repair
+        if (!metadata.needsIXMLRepair || !metadata.ixmlRepairData) {
+            console.error('[handleRepairIXML] File does not need repair or repair data missing:', {
+                needsIXMLRepair: metadata.needsIXMLRepair,
+                hasRepairData: !!metadata.ixmlRepairData
+            });
+            alert('This file does not need repair or repair data is not available.');
+            return;
+        }
+
+        try {
+            document.body.style.cursor = 'wait';
+            console.log(`[handleRepairIXML] Repairing ${metadata.filename}`);
+            console.log('[handleRepairIXML] Original iXML:', metadata.ixmlRaw?.substring(0, 200));
+            console.log('[handleRepairIXML] Repair data:', metadata.ixmlRepairData?.substring(0, 200));
+
+            // Get the file handle for writing
+            if (!selectedFile.handle) {
+                alert('Cannot repair: file handle not available. Please re-import the file.');
+                return;
+            }
+
+            // Read the original file to get the full buffer
+            const file = selectedFile.file;
+            const originalBuffer = await file.arrayBuffer();
+
+            // Repair the iXML in the file
+            await this.metadataHandler.repairIXMLInFile(
+                selectedFile.handle,
+                originalBuffer,
+                metadata.ixmlRepairData
+            );
+
+            console.log('[handleRepairIXML] File write completed, re-reading to verify...');
+
+            // Re-read the file from disk to verify repair worked
+            const repairedFile = await selectedFile.handle.getFile();
+            const repairedBuffer = await repairedFile.arrayBuffer();
+            const repairedIXML = this.metadataHandler.getIXMLChunk(repairedBuffer);
+            
+            console.log('[handleRepairIXML] Re-read iXML:', repairedIXML?.substring(0, 200));
+            
+            // Validate that the repair worked
+            const revalidation = this.metadataHandler.validateAndFixIXML(repairedIXML || '');
+            if (revalidation.needsRepair) {
+                console.warn('[handleRepairIXML] File still needs repair after write!');
+                alert('Warning: File was written but may not have been properly repaired. Please try again.');
+                return;
+            }
+
+            // Update metadata to mark as repaired
+            metadata.needsIXMLRepair = false;
+            metadata.ixmlRaw = repairedIXML;
+
+            // Refresh the table to remove red highlighting
+            const tbody = document.getElementById('file-list-body');
+            tbody.innerHTML = '';
+            this.files.forEach((file, i) => this.addTableRow(i, file.metadata));
+            this.updateSelectionUI();
+
+            alert(`✅ Successfully repaired ${metadata.filename}`);
+            console.log(`[handleRepairIXML] Successfully repaired and verified ${metadata.filename}`);
+
+        } catch (err) {
+            console.error('iXML repair failed:', err);
+            alert(`Repair failed: ${err.message}`);
+        } finally {
+            document.body.style.cursor = 'default';
+        }
+    }
+
     secondsToDuration(seconds) {
         // Convert seconds to HH:MM:SS:FF format (assumes 24fps for frames)
         const totalSeconds = Math.floor(seconds);
@@ -2532,14 +2705,16 @@ class App {
     }
 
     animate() {
-        if (this.audioEngine.isPlaying && !this.isStopped) {
+        const isPlaying = this.audioEngine.isPlaying;
+        const isStopped = this.isStopped;
+        
+        if (isPlaying && !isStopped) {
             const time = this.audioEngine.getCurrentTime();
+            const duration = this.audioEngine.buffer ? this.audioEngine.buffer.duration : 1;
+            const percent = time / duration;
 
             // Update automation
             this.mixer.updateAutomation(time);
-
-            const duration = this.audioEngine.buffer ? this.audioEngine.buffer.duration : 1;
-            const percent = time / duration;
 
             // Check if we've reached the end of a region
             if (this.region.start !== null && this.region.end !== null) {
@@ -2579,6 +2754,13 @@ class App {
             const currentTimecode = document.getElementById('current-timecode');
             if (currentTimecode) {
                 currentTimecode.textContent = this.secondsToTimecode(time);
+            }
+        } else if (!isPlaying && !isStopped) {
+            // When not playing, cursor is frozen at pauseTime - don't update
+            // But log state changes
+            if (this._lastIsPlaying !== false) {
+                console.log(`[animate] isPlaying changed to false`);
+                this._lastIsPlaying = false;
             }
         }
 

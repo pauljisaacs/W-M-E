@@ -208,35 +208,53 @@ export class AudioEngine {
     }
 
     play(startOffset = 0) {
-        if (this.isPlaying) this.stop();
         if (!this.buffer) return;
 
+        // Stop any existing source ONLY (don't disconnect - let it be GC'd)
+        if (this.source) {
+            try {
+                this.source.onended = null;
+                this.source.stop();
+                // Intentionally NO disconnect() - causes timing issues
+            } catch (e) {
+                // Already stopped, ignore
+            }
+        }
+
+        // Clamp offset to buffer duration
+        const clampedOffset = Math.max(0, Math.min(startOffset, this.buffer.duration - 0.001));
+
+        // Create new source
         this.source = this.audioCtx.createBufferSource();
         this.source.buffer = this.buffer;
 
-        // Connect Source -> Splitter (or Destination)
+        // Connect to splitter (keeps audio graph active)
         if (this.splitter) {
             this.source.connect(this.splitter);
         } else {
             this.source.connect(this.audioCtx.destination);
         }
 
-        this.startTime = this.audioCtx.currentTime - startOffset;
-        this.source.start(0, startOffset);
-        this.isPlaying = true;
-
+        // Set onended handler
         this.source.onended = () => {
             this.isPlaying = false;
         };
+
+        // Calculate start time and start playback
+        this.startTime = this.audioCtx.currentTime - clampedOffset;
+        this.source.start(0, clampedOffset);
+        
+        this.isPlaying = true;
+        this.pauseTime = 0;
     }
 
     stop() {
         if (this.source) {
             try {
                 this.source.stop();
-                this.source.disconnect(); // Important!
-            } catch (e) { /* ignore */ }
-            this.source = null;
+            } catch (e) {
+                // Already stopped, ignore
+            }
         }
         this.isPlaying = false;
         this.pauseTime = this.audioCtx.currentTime - this.startTime;
@@ -245,15 +263,15 @@ export class AudioEngine {
     seek(time) {
         const wasPlaying = this.isPlaying;
         if (wasPlaying) {
-            // Don't fully stop, just restart source
+            // Stop current playback (but don't disconnect)
             if (this.source) {
                 try {
-                    this.source.onended = null; // Prevent onended from firing
+                    this.source.onended = null;
                     this.source.stop();
-                    this.source.disconnect();
+                    // NO disconnect() - keeps audio graph active
                 } catch (e) { }
             }
-            this.isPlaying = true; // Keep playing state
+            this.isPlaying = true;
             this.play(time);
         } else {
             this.pauseTime = time;
