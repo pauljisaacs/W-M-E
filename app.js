@@ -1106,6 +1106,12 @@ class App {
         const tr = document.createElement('tr');
         tr.dataset.index = index;
 
+        // Highlight red if file is missing iXML chunk
+        if (!metadata.ixmlRaw) {
+            tr.style.color = '#ff6b6b'; // Red text for files missing iXML
+            tr.title = 'Missing iXML chunk - use Repair iXML to add it';
+        }
+
         const createCell = (key, val, editable = true) => {
             const td = document.createElement('td');
 
@@ -1765,12 +1771,13 @@ class App {
         // Enable export TC range button if one or more files are selected
         safeSetDisabled('export-tc-range-btn', this.selectedIndices.size === 0);
         
-        // Enable repair button only if exactly one file is selected AND it needs repair
+        // Enable repair button if exactly one file is selected AND it needs repair OR is missing iXML
         let needsRepair = false;
         if (this.selectedIndices.size === 1) {
             const selectedIndex = Array.from(this.selectedIndices)[0];
             const selectedFile = this.files[selectedIndex];
-            needsRepair = selectedFile && selectedFile.metadata && selectedFile.metadata.needsIXMLRepair;
+            const metadata = selectedFile && selectedFile.metadata;
+            needsRepair = metadata && (metadata.needsIXMLRepair || !metadata.ixmlRaw);
         }
         safeSetDisabled('repair-ixmlbtn', !needsRepair);
         safeSetDisabled('repair-ixml-modal-btn', !needsRepair);
@@ -2051,6 +2058,16 @@ class App {
         const item = this.files[index];
 
         try {
+            // Refresh file object from handle if available (in case file was modified)
+            if (item.handle) {
+                try {
+                    item.file = await item.handle.getFile();
+                } catch (err) {
+                    console.warn('Could not refresh file from handle:', err);
+                    // Continue with existing file reference
+                }
+            }
+
             const arrayBuffer = await item.file.arrayBuffer();
             const bextData = this.extractBEXT(arrayBuffer);
 
@@ -2678,14 +2695,37 @@ class App {
 
                     // Create export metadata with TC Start
                     const newTCStart = startTimeStr + ':00'; // Add frame count
+                    
+                    // Determine fpsExact from file's fps or fpsExact
+                    let fpsExact = selectedFile.metadata.fpsExact;
+                    if (!fpsExact && selectedFile.metadata.fps) {
+                        // Convert fps string to fpsExact fraction
+                        if (selectedFile.metadata.fps === '23.98') {
+                            fpsExact = { numerator: 24000, denominator: 1001 };
+                        } else if (selectedFile.metadata.fps === '29.97') {
+                            fpsExact = { numerator: 30000, denominator: 1001 };
+                        } else {
+                            const fpsNum = parseFloat(selectedFile.metadata.fps);
+                            fpsExact = { numerator: fpsNum, denominator: 1 };
+                        }
+                    } else {
+                        fpsExact = fpsExact || { numerator: 24, denominator: 1 };
+                    }
+                    
                     const exportMetadata = {
                         ...selectedFile.metadata,
                         tcStart: newTCStart,
-                        duration: this.secondsToDuration(rangeEndSeconds - rangeStartSeconds)
+                        duration: this.secondsToDuration(rangeEndSeconds - rangeStartSeconds),
+                        fpsExact: fpsExact,
+                        bitDepth: bitDepth,
+                        sampleRate: sampleRate,
+                        fps: selectedFile.metadata.fps,
+                        // Don't copy ixmlRaw and bextRaw so we create fresh chunks with correct metadata
+                        ixmlRaw: undefined,
+                        bextRaw: undefined
                     };
 
                     // Calculate timeReference from the new TC Start
-                    const fpsExact = selectedFile.metadata.fpsExact || { numerator: 24, denominator: 1 };
                     exportMetadata.timeReference = this.metadataHandler.tcToSamples(newTCStart, sampleRate, fpsExact);
 
                     // Create audio file
@@ -2697,12 +2737,18 @@ class App {
                         const bextChunk = this.metadataHandler.createBextChunk(exportMetadata);
                         const ixmlChunk = this.metadataHandler.createIXMLChunk(exportMetadata);
                         
+                        // Calculate padding and sizes
+                        const bextPadding = bextChunk.byteLength % 2 !== 0 ? 1 : 0;
+                        const ixmlPadding = ixmlChunk.byteLength % 2 !== 0 ? 1 : 0;
+                        const bextTotalSize = 8 + bextChunk.byteLength + bextPadding;
+                        const ixmlTotalSize = 8 + ixmlChunk.byteLength + ixmlPadding;
+                        
                         // Calculate new file size
                         const wavView = new DataView(wavBuffer);
                         const wavArray = new Uint8Array(wavBuffer);
                         const riffSize = wavView.getUint32(4, true);
                         const oldFileSize = riffSize + 8;
-                        const newFileSize = oldFileSize + 8 + bextChunk.byteLength + 8 + ixmlChunk.byteLength;
+                        const newFileSize = oldFileSize + bextTotalSize + ixmlTotalSize;
                         
                         // Create new buffer with both chunks
                         const newWavBuffer = new Uint8Array(newFileSize);
@@ -2718,15 +2764,17 @@ class App {
                         newWavBuffer[chunkOffset + 3] = 0x74; // 't'
                         chunkView.setUint32(chunkOffset + 4, bextChunk.byteLength, true);
                         newWavBuffer.set(new Uint8Array(bextChunk), chunkOffset + 8);
+                        // Padding byte is already zero, no need to explicitly write
                         
                         // Write iXML chunk
-                        chunkOffset = oldFileSize + 8 + bextChunk.byteLength;
+                        chunkOffset = oldFileSize + bextTotalSize;
                         newWavBuffer[chunkOffset] = 0x69;     // 'i'
                         newWavBuffer[chunkOffset + 1] = 0x58; // 'X'
                         newWavBuffer[chunkOffset + 2] = 0x4D; // 'M'
                         newWavBuffer[chunkOffset + 3] = 0x4C; // 'L'
                         chunkView.setUint32(chunkOffset + 4, ixmlChunk.byteLength, true);
                         newWavBuffer.set(new Uint8Array(ixmlChunk), chunkOffset + 8);
+                        // Padding byte is already zero, no need to explicitly write
                         
                         // Update RIFF size
                         const newRiffSize = newFileSize - 8;
@@ -2798,12 +2846,11 @@ class App {
         const selectedFile = this.files[selectedIndex];
         const metadata = selectedFile.metadata;
 
-        // Check if file needs repair
-        if (!metadata.needsIXMLRepair || !metadata.ixmlRepairData) {
-            console.error('[handleRepairIXML] File does not need repair or repair data missing:', {
-                needsIXMLRepair: metadata.needsIXMLRepair,
-                hasRepairData: !!metadata.ixmlRepairData
-            });
+        // Check if file needs repair or is missing iXML entirely
+        const isMissingIXML = !metadata.ixmlRaw;
+        const needsIXMLRepair = metadata.needsIXMLRepair && metadata.ixmlRepairData;
+
+        if (!isMissingIXML && !needsIXMLRepair) {
             alert('This file does not need repair or repair data is not available.');
             return;
         }
@@ -2811,9 +2858,7 @@ class App {
         try {
             document.body.style.cursor = 'wait';
             console.log(`[handleRepairIXML] Repairing ${metadata.filename}`);
-            console.log('[handleRepairIXML] Original iXML:', metadata.ixmlRaw?.substring(0, 200));
-            console.log('[handleRepairIXML] Repair data:', metadata.ixmlRepairData?.substring(0, 200));
-
+            
             // Get the file handle for writing
             if (!selectedFile.handle) {
                 alert('Cannot repair: file handle not available. Please re-import the file.');
@@ -2824,11 +2869,34 @@ class App {
             const file = selectedFile.file;
             const originalBuffer = await file.arrayBuffer();
 
+            let repairData;
+            if (isMissingIXML) {
+                // Create a complete new iXML chunk from metadata
+                console.log('[handleRepairIXML] No iXML found, creating complete new iXML chunk');
+                console.log('[handleRepairIXML] Metadata for iXML creation:', {
+                    fpsExact: metadata.fpsExact,
+                    fps: metadata.fps,
+                    sampleRate: metadata.sampleRate,
+                    bitDepth: metadata.bitDepth,
+                    timeReference: metadata.timeReference,
+                    project: metadata.project,
+                    scene: metadata.scene,
+                    take: metadata.take
+                });
+                repairData = this.metadataHandler.createIXMLChunk(metadata);
+                console.log('[handleRepairIXML] Created new iXML:', new TextDecoder().decode(repairData).substring(0, 300));
+            } else {
+                // Repair the incomplete/corrupted iXML
+                console.log('[handleRepairIXML] Original iXML:', metadata.ixmlRaw?.substring(0, 200));
+                console.log('[handleRepairIXML] Repair data:', metadata.ixmlRepairData?.substring(0, 200));
+                repairData = metadata.ixmlRepairData;
+            }
+
             // Repair the iXML in the file
             await this.metadataHandler.repairIXMLInFile(
                 selectedFile.handle,
                 originalBuffer,
-                metadata.ixmlRepairData
+                repairData
             );
 
             console.log('[handleRepairIXML] File write completed, re-reading to verify...');
@@ -2841,11 +2909,13 @@ class App {
             console.log('[handleRepairIXML] Re-read iXML:', repairedIXML?.substring(0, 200));
             
             // Validate that the repair worked
-            const revalidation = this.metadataHandler.validateAndFixIXML(repairedIXML || '');
-            if (revalidation.needsRepair) {
-                console.warn('[handleRepairIXML] File still needs repair after write!');
-                alert('Warning: File was written but may not have been properly repaired. Please try again.');
-                return;
+            if (repairedIXML) {
+                const revalidation = this.metadataHandler.validateAndFixIXML(repairedIXML);
+                if (revalidation.needsRepair) {
+                    console.warn('[handleRepairIXML] File still needs repair after write!');
+                    alert('Warning: File was written but may not have been properly repaired. Please try again.');
+                    return;
+                }
             }
 
             // Update metadata to mark as repaired
@@ -2858,8 +2928,9 @@ class App {
             this.files.forEach((file, i) => this.addTableRow(i, file.metadata));
             this.updateSelectionUI();
 
-            alert(`✅ Successfully repaired ${metadata.filename}`);
-            console.log(`[handleRepairIXML] Successfully repaired and verified ${metadata.filename}`);
+            const actionMsg = isMissingIXML ? 'added' : 'repaired';
+            alert(`✅ Successfully ${actionMsg} iXML for ${metadata.filename}`);
+            console.log(`[handleRepairIXML] Successfully ${actionMsg} iXML for ${metadata.filename}`);
 
         } catch (err) {
             console.error('iXML repair failed:', err);
@@ -3179,18 +3250,41 @@ class App {
         }
 
         const selectedIndices = Array.from(this.selectedIndices);
-        const firstFile = this.files[selectedIndices[0]];
         
-        // Pre-populate with first file's TC Start and estimated end time
-        const tcStart = firstFile.metadata.tcStart || '00:00:00:00';
-        const durationSeconds = this.parseTimecodeToSeconds(firstFile.metadata.duration);
+        // Find the highest (latest) TC Start and earliest end TC across all selected files
+        let highestTCStart = null;
+        let earliestEndTC = null;
+        let highestTCSeconds = -Infinity;
+        let earliestEndTCSeconds = Infinity;
+
+        for (const index of selectedIndices) {
+            const file = this.files[index];
+            const tcStart = file.metadata.tcStart || '00:00:00:00';
+            const durationSeconds = this.parseTimecodeToSeconds(file.metadata.duration);
+            
+            // Convert TC to seconds for comparison
+            const tcStartSeconds = this.parseTimecodeToSeconds(tcStart);
+            const endTCSeconds = tcStartSeconds + durationSeconds;
+            
+            if (tcStartSeconds > highestTCSeconds) {
+                highestTCSeconds = tcStartSeconds;
+                highestTCStart = tcStart;
+            }
+            
+            if (endTCSeconds < earliestEndTCSeconds) {
+                earliestEndTCSeconds = endTCSeconds;
+                // Calculate end TC from the start of this file
+                const tcStartHMS = tcStart ? tcStart.split(':').slice(0, 3).join(':') : '00:00:00';
+                earliestEndTC = this.addSecondsToTimecode(tcStartHMS, durationSeconds);
+            }
+        }
+
+        // Convert to HH:MM:SS format (remove frames if present)
+        const startTCHMS = highestTCStart ? highestTCStart.split(':').slice(0, 3).join(':') : '00:00:00';
+        const endTCHMS = earliestEndTC || '00:00:00';
         
-        // Convert TC Start to HH:MM:SS format (remove frames)
-        const tcStartHMS = tcStart ? tcStart.split('.')[0].substring(0, 8) : '00:00:00';
-        const endTC = this.addSecondsToTimecode(tcStartHMS, durationSeconds);
-        
-        document.getElementById('export-tc-start').value = tcStartHMS;
-        document.getElementById('export-tc-end').value = endTC;
+        document.getElementById('export-tc-start').value = startTCHMS;
+        document.getElementById('export-tc-end').value = endTCHMS;
         
         // Store selected file indices for batch processing
         this.exportTCRangeIndices = selectedIndices;

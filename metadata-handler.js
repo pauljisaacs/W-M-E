@@ -165,8 +165,14 @@ export class MetadataHandler {
         // Recalculate timecode after parsing trailing chunks
         if (metadata.timeReference !== undefined && metadata.sampleRate) {
             const fpsExact = metadata.fpsExact || { numerator: 24, denominator: 1 };
+            console.log(`[parseTrailingChunks] tcStart calculation:`, {
+                timeReference: metadata.timeReference,
+                sampleRate: metadata.sampleRate,
+                fpsExact: fpsExact,
+                fps_decimal: fpsExact.numerator / fpsExact.denominator
+            });
             metadata.tcStart = this.samplesToTC(metadata.timeReference, metadata.sampleRate, fpsExact);
-            console.log(`Recalculated TC Start: ${metadata.tcStart}`);
+            console.log(`[parseTrailingChunks] Recalculated TC Start: ${metadata.tcStart}`);
         }
     }
 
@@ -267,7 +273,7 @@ export class MetadataHandler {
 
         // Calculate timecode after all chunks parsed (need both timeReference and fps)
         if (metadata.timeReference !== undefined && metadata.sampleRate) {
-            // Use exact FPS fraction if available from iXML, otherwise default to 24/1
+            // Use exact FPS fraction if available (from bEXT or iXML), otherwise default to 24/1
             const fpsExact = metadata.fpsExact || { numerator: 24, denominator: 1 };
             metadata.tcStart = this.samplesToTC(metadata.timeReference, metadata.sampleRate, fpsExact);
         }
@@ -328,6 +334,11 @@ export class MetadataHandler {
         }
 
         console.log('[parseBext] Final metadata after extraction:', { scene: metadata.scene, take: metadata.take, notes: metadata.notes, tape: metadata.tape });
+
+        // Extract speed from sSPEED tag in description if available
+        if (!metadata.fpsExact && metadata.description) {
+            metadata.fpsExact = this.parseSpeedFromDescription(metadata.description);
+        }
     }
 
     parseIXML(view, offset, size, metadata) {
@@ -371,15 +382,8 @@ export class MetadataHandler {
         metadata.project = this.getXmlVal(xmlDoc, "PROJECT");
         metadata.notes = this.getXmlVal(xmlDoc, "NOTE");
 
-        // --- TC Start Import Logic ---
-        // 1. BWF_TIME_REFERENCE (samples)
-        let bwfTimeRef = this.getXmlVal(xmlDoc, "BWF_TIME_REFERENCE");
-        // 2. Fallback: use bEXT (handled elsewhere)
-
-        if (bwfTimeRef && !isNaN(Number(bwfTimeRef)) && metadata.sampleRate && metadata.fpsExact) {
-            metadata.tcStart = this.samplesToTC(Number(bwfTimeRef), metadata.sampleRate, metadata.fpsExact);
-            metadata.timeReference = Number(bwfTimeRef);
-        }
+        // Note: timeReference comes from bEXT chunk, not iXML
+        // iXML should only provide fps information via SPEED tag
 
         // FPS/Speed parsing (unchanged)
         let speedVal = this.getXmlVal(xmlDoc, "SPEED MASTER_SPEED") ||
@@ -388,7 +392,9 @@ export class MetadataHandler {
         if (!speedVal) {
             speedVal = this.getXmlVal(xmlDoc, "SPEED") || this.getXmlVal(xmlDoc, "FRAME_RATE");
         }
-        if (speedVal) {
+        
+        // Only parse FPS from iXML if not already set from bEXT
+        if (!metadata.fpsExact && speedVal) {
             const firstValue = speedVal.trim().split(/\s+/)[0];
             if (firstValue.includes('/')) {
                 const [num, den] = firstValue.split('/').map(Number);
@@ -408,6 +414,18 @@ export class MetadataHandler {
                 const value = parseFloat(firstValue);
                 metadata.fpsExact = { numerator: value, denominator: 1 };
                 metadata.fps = value.toString();
+            }
+        }
+
+        // Fallback: Read TIMESTAMP_SAMPLES_SINCE_MIDNIGHT from iXML only if bEXT timeReference is missing
+        if (!metadata.timeReference) {
+            const hiStr = this.getXmlVal(xmlDoc, "SPEED TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_HI");
+            const loStr = this.getXmlVal(xmlDoc, "SPEED TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_LO");
+            if (hiStr && loStr) {
+                const hi = BigInt(hiStr);
+                const lo = BigInt(loStr);
+                const timeRef = (hi << 32n) | lo;
+                metadata.timeReference = Number(timeRef);
             }
         }
 
@@ -1102,13 +1120,6 @@ export class MetadataHandler {
             this.updateXmlVal(xmlDoc, "TAPE", metadata.tape);
             this.updateXmlVal(xmlDoc, "NOTE", metadata.notes);
 
-            // --- TC Start Save Logic ---
-            // No longer write TIMECODE_START (non-standard)
-            // Write BWF_TIME_REFERENCE (samples)
-            if (metadata.timeReference !== undefined) {
-                this.updateXmlVal(xmlDoc, "BWF_TIME_REFERENCE", metadata.timeReference.toString());
-            }
-
             // Always write a complete SPEED tag
             let speedEl = xmlDoc.querySelector("SPEED");
             if (!speedEl) {
@@ -1142,7 +1153,7 @@ export class MetadataHandler {
             setSpeedChild('DIGITIZER_SAMPLE_RATE', metadata.sampleRate || '');
             // TIMESTAMP_SAMPLE_RATE
             setSpeedChild('TIMESTAMP_SAMPLE_RATE', metadata.sampleRate || '');
-            // TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_HI/LO
+            // TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_HI/LO (fallback for timeReference if bEXT missing)
             let hi = '0', lo = '0';
             if (metadata.timeReference !== undefined) {
                 const timeRef = BigInt(metadata.timeReference);
@@ -1191,6 +1202,7 @@ export class MetadataHandler {
             xml = serializer.serializeToString(xmlDoc);
         } else {
             // No original iXML, create new
+            console.log('[createIXMLChunk] Creating new iXML from scratch, fpsExact:', metadata.fpsExact, 'fps:', metadata.fps);
             xml = '<?xml version="1.0" encoding="UTF-8"?>\n';
             xml += '<BWFXML>\n';
             xml += '  <PROJECT>' + (metadata.project || '') + '</PROJECT>\n';
@@ -1201,24 +1213,48 @@ export class MetadataHandler {
             if (metadata.tcStart) {
                 // Do not write TIMECODE_START (non-standard)
             }
+            
+            // Build complete SPEED tag with all fields
+            xml += '  <SPEED>\n';
+            xml += '    <NOTE></NOTE>\n';
+            
+            // MASTER_SPEED and CURRENT_SPEED (FPS as fraction)
+            if (metadata.fpsExact) {
+                const fpsFrac = `${metadata.fpsExact.numerator}/${metadata.fpsExact.denominator}`;
+                console.log('[createIXMLChunk] Using fpsExact:', fpsFrac);
+                xml += '    <MASTER_SPEED>' + fpsFrac + '</MASTER_SPEED>\n';
+                xml += '    <CURRENT_SPEED>' + fpsFrac + '</CURRENT_SPEED>\n';
+                xml += '    <TIMECODE_RATE>' + fpsFrac + '</TIMECODE_RATE>\n';
+            } else if (metadata.fps) {
+                const fpsMap = {
+                    '23.98': '24000/1001', '24': '24/1', '25': '25/1', 
+                    '29.97': '30000/1001', '29.97df': '30000/1001', '29.97nd': '30000/1001', '30': '30/1',
+                    '48': '48/1', '50': '50/1', '59.94': '60000/1001', '60': '60/1'
+                };
+                const fpsFrac = fpsMap[metadata.fps] || '24/1';
+                console.log('[createIXMLChunk] Using fps fallback:', fpsFrac, 'from metadata.fps:', metadata.fps);
+                xml += '    <MASTER_SPEED>' + fpsFrac + '</MASTER_SPEED>\n';
+                xml += '    <CURRENT_SPEED>' + fpsFrac + '</CURRENT_SPEED>\n';
+                xml += '    <TIMECODE_RATE>' + fpsFrac + '</TIMECODE_RATE>\n';
+            }
+            
+            xml += '    <TIMECODE_FLAG>NDF</TIMECODE_FLAG>\n';
+            xml += '    <FILE_SAMPLE_RATE>' + (metadata.sampleRate || '') + '</FILE_SAMPLE_RATE>\n';
+            xml += '    <AUDIO_BIT_DEPTH>' + (metadata.bitDepth || '24') + '</AUDIO_BIT_DEPTH>\n';
+            xml += '    <DIGITIZER_SAMPLE_RATE>' + (metadata.sampleRate || '') + '</DIGITIZER_SAMPLE_RATE>\n';
+            xml += '    <TIMESTAMP_SAMPLE_RATE>' + (metadata.sampleRate || '') + '</TIMESTAMP_SAMPLE_RATE>\n';
+            
+            // TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_HI/LO (fallback for timeReference if bEXT missing)
+            let hi = '0', lo = '0';
             if (metadata.timeReference !== undefined) {
-                xml += '  <BWF_TIME_REFERENCE>' + metadata.timeReference + '</BWF_TIME_REFERENCE>\n';
+                const timeRef = BigInt(metadata.timeReference);
+                hi = (timeRef >> 32n).toString();
+                lo = (timeRef & 0xFFFFFFFFn).toString();
             }
-            if (metadata.sampleRate) {
-                xml += '  <SPEED>\n';
-                xml += '    <MASTER_SPEED>' + metadata.sampleRate + '</MASTER_SPEED>\n';
-                xml += '    <CURRENT_SPEED>' + metadata.sampleRate + '</CURRENT_SPEED>\n';
-                if (metadata.fps) {
-                    const fpsMap = {
-                        '23.98': '24', '24': '24', '25': '25', 
-                        '29.97': '30', '29.97df': '30DF', '30': '30',
-                        '48': '48', '50': '50', '59.94': '60', '60': '60'
-                    };
-                    xml += '    <TIMECODE_RATE>' + (fpsMap[metadata.fps] || '30') + '</TIMECODE_RATE>\n';
-                    xml += '    <TIMECODE_FLAG>NDF</TIMECODE_FLAG>\n';
-                }
-                xml += '  </SPEED>\n';
-            }
+            xml += '    <TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_HI>' + hi + '</TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_HI>\n';
+            xml += '    <TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_LO>' + lo + '</TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_LO>\n';
+            
+            xml += '  </SPEED>\n';
             const numChannels = metadata.channels || 1;
             if (numChannels > 0) {
                 xml += '  <TRACK_LIST>\n';
@@ -1266,6 +1302,31 @@ export class MetadataHandler {
         return n.toString().padStart(2, '0');
     }
 
+    parseSpeedFromDescription(description) {
+        // Parse Sound Devices sSPEED tag from bEXT description
+        // Format: sSPEED=HHH.HHH-XX (e.g., "023.976-ND" for 23.976 fps non-drop)
+        const speedRegex = /sSPEED=(\d+\.\d+)-(\w+)/;
+        const match = description.match(speedRegex);
+        
+        if (match) {
+            const fpsValue = parseFloat(match[1]);
+            
+            // Convert decimal fps to exact fraction
+            if (Math.abs(fpsValue - 23.976) < 0.01) {
+                return { numerator: 24000, denominator: 1001 };
+            } else if (Math.abs(fpsValue - 29.97) < 0.01) {
+                return { numerator: 30000, denominator: 1001 };
+            } else if (Math.abs(fpsValue - 59.94) < 0.01) {
+                return { numerator: 60000, denominator: 1001 };
+            } else {
+                // For other values, treat as integer fps
+                return { numerator: Math.round(fpsValue), denominator: 1 };
+            }
+        }
+        
+        return null;
+    }
+
     /**
      * Extract raw iXML chunk from WAV file
      * @param {ArrayBuffer} arrayBuffer - WAV file buffer
@@ -1306,7 +1367,7 @@ export class MetadataHandler {
      * @param {ArrayBuffer} originalBuffer - Original WAV file buffer
      * @param {string} newIXMLString - New iXML content
      */
-    async updateIXMLChunk(fileHandle, originalBuffer, newIXMLString) {
+    async updateIXMLChunk(fileHandle, originalBuffer, newIXMLData) {
         const view = new DataView(originalBuffer);
         const chunks = [];
         let offset = 12;
@@ -1327,7 +1388,16 @@ export class MetadataHandler {
         }
 
         // Add new iXML chunk
-        const ixmlBytes = new TextEncoder().encode(newIXMLString);
+        // Handle both string and ArrayBuffer inputs
+        let ixmlBytes;
+        if (newIXMLData instanceof ArrayBuffer) {
+            ixmlBytes = new Uint8Array(newIXMLData);
+        } else if (typeof newIXMLData === 'string') {
+            ixmlBytes = new TextEncoder().encode(newIXMLData);
+        } else {
+            throw new Error('newIXMLData must be a string or ArrayBuffer');
+        }
+        
         const ixmlChunkSize = ixmlBytes.length;
         const ixmlChunk = new Uint8Array(8 + ixmlChunkSize + (ixmlChunkSize % 2));
         const ixmlView = new DataView(ixmlChunk.buffer);
@@ -1682,8 +1752,16 @@ export class MetadataHandler {
      */
     async repairIXMLInFile(fileHandle, originalBuffer, repairedIXML) {
         console.log('[repairIXMLInFile] Starting repair');
-        console.log('[repairIXMLInFile] Repaired iXML length:', repairedIXML.length);
+        console.log('[repairIXMLInFile] Repaired iXML type:', repairedIXML instanceof ArrayBuffer ? 'ArrayBuffer' : typeof repairedIXML);
+        console.log('[repairIXMLInFile] Repaired iXML length:', repairedIXML.length || repairedIXML.byteLength);
         console.log('[repairIXMLInFile] Original buffer size:', originalBuffer.byteLength);
+        
+        // Convert ArrayBuffer to string if needed for logging
+        let iXMLForLogging = repairedIXML;
+        if (repairedIXML instanceof ArrayBuffer) {
+            iXMLForLogging = new TextDecoder().decode(repairedIXML);
+        }
+        console.log('[repairIXMLInFile] iXML preview:', iXMLForLogging.substring(0, 100));
         
         // Use the existing updateIXMLChunk method to write the repaired iXML
         await this.updateIXMLChunk(fileHandle, originalBuffer, repairedIXML);
