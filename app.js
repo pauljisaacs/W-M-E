@@ -1300,6 +1300,27 @@ class App {
         return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
     }
 
+    tcToSeconds(timecode, fpsExact) {
+        // Convert HH:MM:SS:FF to seconds, accounting for frame rate
+        // This is frame-accurate, unlike parseTimecodeToSeconds which drops frames
+        if (!timecode) return 0;
+        const parts = timecode.split(':');
+        if (parts.length < 3) return 0;
+        
+        const hours = parseInt(parts[0]) || 0;
+        const minutes = parseInt(parts[1]) || 0;
+        const seconds = parseInt(parts[2]) || 0;
+        const frames = parseInt(parts[3]) || 0;
+        
+        // Get frame rate as decimal
+        const frameRate = fpsExact.numerator / fpsExact.denominator;
+        
+        // Convert frames to seconds
+        const frameSeconds = frames / frameRate;
+        
+        return hours * 3600 + minutes * 60 + seconds + frameSeconds;
+    }
+
     validateTimeFormat(timeStr) {
         // Validate HH:MM:SS format
         const pattern = /^([0-9]{2}):([0-5][0-9]):([0-5][0-9])$/;
@@ -2652,8 +2673,25 @@ class App {
                     const handle = await directoryHandle.getFileHandle(fileName, { create: true });
 
                     // Calculate actual range within the file
-                    const fileStartSeconds = this.parseTimecodeToSeconds(selectedFile.metadata.tcStart || '00:00:00:00');
-                    const fileDurationSeconds = this.parseTimecodeToSeconds(selectedFile.metadata.duration);
+                    // Get FPS first to convert frames to seconds accurately
+                    let fpsExact = selectedFile.metadata.fpsExact;
+                    if (!fpsExact && selectedFile.metadata.fps) {
+                        // Convert fps string to fpsExact fraction
+                        if (selectedFile.metadata.fps === '23.98') {
+                            fpsExact = { numerator: 24000, denominator: 1001 };
+                        } else if (selectedFile.metadata.fps === '29.97') {
+                            fpsExact = { numerator: 30000, denominator: 1001 };
+                        } else {
+                            const fpsNum = parseFloat(selectedFile.metadata.fps);
+                            fpsExact = { numerator: fpsNum, denominator: 1 };
+                        }
+                    } else {
+                        fpsExact = fpsExact || { numerator: 24, denominator: 1 };
+                    }
+                    
+                    // Parse timecodes including frames using tcToSeconds which accounts for FPS
+                    const fileStartSeconds = this.tcToSeconds(selectedFile.metadata.tcStart || '00:00:00:00', fpsExact);
+                    const fileDurationSeconds = this.tcToSeconds(selectedFile.metadata.duration, fpsExact);
                     const fileEndSeconds = fileStartSeconds + fileDurationSeconds;
 
                     // Calculate overlap
@@ -2696,22 +2734,6 @@ class App {
                     // Create export metadata with TC Start
                     const newTCStart = startTimeStr + ':00'; // Add frame count
                     
-                    // Determine fpsExact from file's fps or fpsExact
-                    let fpsExact = selectedFile.metadata.fpsExact;
-                    if (!fpsExact && selectedFile.metadata.fps) {
-                        // Convert fps string to fpsExact fraction
-                        if (selectedFile.metadata.fps === '23.98') {
-                            fpsExact = { numerator: 24000, denominator: 1001 };
-                        } else if (selectedFile.metadata.fps === '29.97') {
-                            fpsExact = { numerator: 30000, denominator: 1001 };
-                        } else {
-                            const fpsNum = parseFloat(selectedFile.metadata.fps);
-                            fpsExact = { numerator: fpsNum, denominator: 1 };
-                        }
-                    } else {
-                        fpsExact = fpsExact || { numerator: 24, denominator: 1 };
-                    }
-                    
                     const exportMetadata = {
                         ...selectedFile.metadata,
                         tcStart: newTCStart,
@@ -2725,7 +2747,8 @@ class App {
                         bextRaw: undefined
                     };
 
-                    // Calculate timeReference from the new TC Start
+                    // Calculate timeReference from the new TC Start using tcToSamples
+                    // This ensures the output file's TC matches the user's specified time
                     exportMetadata.timeReference = this.metadataHandler.tcToSamples(newTCStart, sampleRate, fpsExact);
 
                     // Create audio file
@@ -2917,6 +2940,10 @@ class App {
                     return;
                 }
             }
+
+            // Update the file object in the files array with the freshly read file
+            // This is critical on macOS where file handles can become stale after write operations
+            selectedFile.file = repairedFile;
 
             // Update metadata to mark as repaired
             metadata.needsIXMLRepair = false;
