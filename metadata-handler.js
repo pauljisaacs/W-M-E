@@ -1768,5 +1768,34 @@ export class MetadataHandler {
         
         console.log('[repairIXMLInFile] Successfully wrote repaired iXML to file');
     }
+
+    /**
+     * Extract track names from bEXT description field
+     * Looks for patterns like sTRK1=value, aTRK2=value, zTRK3=value, etc.
+     * Returns array of track names, or empty array if none found
+     * @param {string} description - bEXT Description field content
+     * @returns {Array<string>} Array of track names indexed by channel (e.g., index 0 = Channel 1)
+     */
+    extractTrackNamesFromBext(description) {
+        const trackNames = [];
+        if (!description) return trackNames;
+
+        // Match patterns like *TRK1=value where * is any character
+        // Patterns: sTRK1=, aTRK1=, zTRK1=, etc.
+        const trackPattern = /[a-zA-Z]TRK(\d+)=([^\r\n]*)/g;
+        let match;
+
+        while ((match = trackPattern.exec(description)) !== null) {
+            const trackNum = parseInt(match[1]);
+            const trackValue = match[2].trim();
+            
+            if (trackNum > 0 && trackValue) {
+                // Store at index (trackNum - 1) so TRK1 goes to index 0
+                trackNames[trackNum - 1] = trackValue;
+            }
+        }
+
+        return trackNames;
+    }
 }
 

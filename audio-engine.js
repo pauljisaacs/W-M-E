@@ -37,9 +37,17 @@ export class AudioEngine {
                 const bufferClone = arrayBuffer.slice(0);
 
                 try {
-                    return await this.audioCtx.decodeAudioData(arrayBuffer);
+
+                    const decoded = await this.audioCtx.decodeAudioData(arrayBuffer);
+
+                    // Log first samples from each channel
+                    for (let i = 0; i < Math.min(2, decoded.numberOfChannels); i++) {
+                        const data = decoded.getChannelData(i);
+
+                    }
+                    return decoded;
                 } catch (nativeErr) {
-                    console.warn('Native decoding failed, trying manual WAV decoding...', nativeErr);
+                    console.warn('[decodeFile] Native decoding failed, trying manual WAV decoding...', nativeErr);
                     return this.decodeWavManually(bufferClone);
                 }
             }
@@ -478,6 +486,25 @@ export class AudioEngine {
             gainNode.connect(panNode);
             panNode.connect(offlineCtx.destination);
         });
+
+        // For mono source, duplicate left to right channel as fallback (after explicitly mixed channels)
+        // This ensures stereo output even if mixer configuration doesn't fill both channels
+        if (sourceBuffer.numberOfChannels === 1 && mixerChannels.length > 0) {
+            // If we only have 1 source channel and explicit mixer channels, they should have handled panning
+            // But as a safety net for the fallback case where no explicit channels are mixed:
+            const monoChannel = 0;
+            if (mixerChannels[monoChannel]) {
+                // Already handled above in the forEach loop
+            } else {
+                // No mixer channel for mono source - this shouldn't happen, but duplicate to both channels
+                const gainNode = offlineCtx.createGain();
+                gainNode.gain.value = 1.0;
+                const splitterForFallback = offlineCtx.createChannelSplitter(1);
+                source.connect(splitterForFallback);
+                splitterForFallback.connect(gainNode, 0);
+                gainNode.connect(offlineCtx.destination);
+            }
+        }
 
         source.start(0);
         return await offlineCtx.startRendering();

@@ -548,6 +548,14 @@
                 <p class="modal-info">Split <span id="split-filename"></span> into individual monophonic files.</p>
                 <p class="modal-info">Each output file will retain all original metadata with the correct track name.</p>
                 <div class="form-row" style="display: flex; align-items: center; gap: 1.5em; margin-top: 1.5em;">
+                    <label style="margin: 0; min-width: 100px;">Bit Depth:</label>
+                    <select id="split-bitdepth" style="padding: 0.5em; border-radius: 4px; border: 1px solid var(--input-border); min-width: 180px;">
+                        <option value="preserve">Preserve original</option>
+                        <option value="16">16-bit</option>
+                        <option value="24">24-bit</option>
+                    </select>
+                </div>
+                <div class="form-row" style="display: flex; align-items: center; gap: 1.5em; margin-top: 1.5em;">
                     <label style="margin: 0; min-width: 70px;">Save to:</label>
                     <button id="split-folder-btn" class="btn secondary" style="min-width: 220px;">Select Destination Folder</button>
                     <span id="split-folder-path" style="color: var(--text-muted); font-size: 0.95em; margin-left: 0.5em;">Same as source files</span>

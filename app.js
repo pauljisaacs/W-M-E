@@ -2896,6 +2896,22 @@ class App {
             if (isMissingIXML) {
                 // Create a complete new iXML chunk from metadata
                 console.log('[handleRepairIXML] No iXML found, creating complete new iXML chunk');
+                
+                // Extract track names from bEXT description field (if present)
+                const bextTrackNames = this.metadataHandler.extractTrackNamesFromBext(metadata.description);
+                console.log('[handleRepairIXML] Track names from bEXT:', bextTrackNames);
+                
+                // If we found track names in bEXT, add them to metadata for iXML creation
+                if (bextTrackNames.length > 0) {
+                    // Create trackNames array for iXML, filling in from bEXT
+                    const trackNames = [];
+                    for (let i = 0; i < metadata.channels; i++) {
+                        trackNames[i] = bextTrackNames[i] || `Track ${i + 1}`;
+                    }
+                    metadata.trackNames = trackNames;
+                    console.log('[handleRepairIXML] Using track names from bEXT:', trackNames);
+                }
+                
                 console.log('[handleRepairIXML] Metadata for iXML creation:', {
                     fpsExact: metadata.fpsExact,
                     fps: metadata.fps,
@@ -2904,7 +2920,8 @@ class App {
                     timeReference: metadata.timeReference,
                     project: metadata.project,
                     scene: metadata.scene,
-                    take: metadata.take
+                    take: metadata.take,
+                    trackNames: metadata.trackNames
                 });
                 repairData = this.metadataHandler.createIXMLChunk(metadata);
                 console.log('[handleRepairIXML] Created new iXML:', new TextDecoder().decode(repairData).substring(0, 300));
@@ -4552,6 +4569,23 @@ class App {
         document.getElementById('split-folder-path').textContent = 'Same as source files';
         document.getElementById('split-confirm-btn').disabled = true;
 
+        // Update bit depth selector to show source file's bit depth
+        const bitDepthSelect = document.getElementById('split-bitdepth');
+        if (selectedFile.metadata.bitDepth) {
+            // Check if source bit depth is an option
+            let hasMatch = false;
+            for (const option of bitDepthSelect.options) {
+                if (option.value === selectedFile.metadata.bitDepth.toString()) {
+                    hasMatch = true;
+                    break;
+                }
+            }
+            // If not matched, keep on "Preserve Original"
+            bitDepthSelect.value = hasMatch ? selectedFile.metadata.bitDepth.toString() : 'preserve';
+        } else {
+            bitDepthSelect.value = 'preserve';
+        }
+
         // Show modal
         const modal = document.getElementById('split-modal');
         modal.classList.add('active');
@@ -4604,11 +4638,20 @@ class App {
             const { file, handle, metadata, destinationHandle } = this.splitFileData;
             const channels = metadata.channels;
 
+            // Get selected bit depth from modal
+            const bitDepthSelect = document.getElementById('split-bitdepth');
+            let bitDepth = 16; // Default fallback
+            if (bitDepthSelect.value === 'preserve') {
+                bitDepth = metadata.bitDepth || 16;
+            } else {
+                bitDepth = parseInt(bitDepthSelect.value);
+            }
+
             // Read the original file
             const arrayBuffer = await file.arrayBuffer();
             
             // Get track names from iXML BEFORE decoding (decoding detaches the buffer)
-            const trackNames = [];
+            let trackNames = [];
             const ixmlString = this.metadataHandler.getIXMLChunk(arrayBuffer);
             if (ixmlString) {
                 const parser = new DOMParser();
@@ -4620,12 +4663,27 @@ class App {
                 });
             }
             
+
+            
+            // If iXML track names are missing or all the same, try bEXT as fallback
+            const allTrackNamesSame = trackNames.length > 0 && trackNames.every(name => name === trackNames[0]);
+            if (trackNames.length === 0 || allTrackNamesSame) {
+                console.log('[Split] Track names are missing or identical, checking bEXT for identifiers');
+                const bextTrackNames = this.metadataHandler.extractTrackNamesFromBext(metadata.description);
+                if (bextTrackNames.length > 0) {
+                    trackNames = bextTrackNames;
+                    console.log('[Split] Using track names from bEXT:', trackNames);
+                }
+            }
+            
             // Decode audio using AudioEngine (handles both native and manual WAV decoding)
             // Note: This may detach the arrayBuffer
             const audioBuffer = await this.audioEngine.decodeFile(arrayBuffer);
 
             // Split each channel into a separate file
             const baseName = metadata.filename.replace(/\.wav$/i, '');
+            
+
             
             for (let ch = 0; ch < channels; ch++) {
                 // Create mono audio buffer for this channel
@@ -4636,21 +4694,60 @@ class App {
                 );
                 
                 const channelData = audioBuffer.getChannelData(ch);
+
+                
                 monoBuffer.copyToChannel(channelData, 0);
+                
+                const monoChannelData = monoBuffer.getChannelData(0);
+
+                
+                // Check if data is all zeros (silence)
+                const hasAudio = channelData.some(s => Math.abs(s) > 0.0001);
+
 
                 // Generate filename with track name or channel number
-                const trackName = trackNames[ch] || `Ch${ch + 1}`;
+                // Ensure we have a unique name for each channel
+                let trackName = trackNames[ch];
+                if (!trackName) {
+                    // No track name in iXML for this channel, use Ch# format
+                    trackName = `Ch${ch + 1}`;
+                }
                 const sanitizedTrackName = trackName.replace(/[^a-zA-Z0-9_-]/g, '_');
-                const outputFilename = `${baseName}_${sanitizedTrackName}.wav`;
+                let outputFilename = `${baseName}_${sanitizedTrackName}.wav`;
+                
+                // If we get a collision (same name for multiple channels), append channel number
+                const filenameExists = true; // We can't really check this in browser, so always add counter if needed
+                if (trackNames.length < channels && ch > 0) {
+                    // We're falling back to Ch# naming, add the channel number to be safe
+                    if (!trackName.includes(ch.toString())) {
+                        outputFilename = `${baseName}_${sanitizedTrackName}_Ch${ch + 1}.wav`;
+                    }
+                }
+                
+                // Calculate stats before encoding (avoid spread operator on large arrays to prevent stack overflow)
+                let minVal = Infinity, maxVal = -Infinity, sumSquares = 0;
+                for (let i = 0; i < monoChannelData.length; i++) {
+                    const sample = monoChannelData[i];
+                    minVal = Math.min(minVal, sample);
+                    maxVal = Math.max(maxVal, sample);
+                    sumSquares += sample * sample;
+                }
+                const monoStats = {
+                    length: monoChannelData.length,
+                    min: minVal,
+                    max: maxVal,
+                    rms: Math.sqrt(sumSquares / monoChannelData.length)
+                };
+                // Encode as WAV with selected bit depth
+                const wavBlob = await this.encodeWAV(monoBuffer, bitDepth);
 
-                // Encode as WAV
-                const wavBlob = await this.encodeWAV(monoBuffer);
                 let wavArrayBuffer = await wavBlob.arrayBuffer();
 
                 // Add iXML metadata with correct track name
                 if (ixmlString) {
                     const updatedIXML = this.updateIXMLForMonoTrack(ixmlString, ch, trackName);
                     wavArrayBuffer = this.injectIXMLChunk(wavArrayBuffer, updatedIXML);
+
                 }
 
                 // Add bEXT metadata with track name
@@ -4663,6 +4760,7 @@ class App {
                     timeReference: metadata.timeReference || 0
                 };
                 wavArrayBuffer = this.injectBextChunk(wavArrayBuffer, bextData);
+
 
                 // Write file to destination
                 const fileHandle = await destinationHandle.getFileHandle(outputFilename, { create: true });
@@ -4732,11 +4830,10 @@ class App {
     /**
      * Encode AudioBuffer to WAV blob
      */
-    async encodeWAV(audioBuffer) {
+    async encodeWAV(audioBuffer, bitDepth = 16) {
         const numberOfChannels = audioBuffer.numberOfChannels;
         const sampleRate = audioBuffer.sampleRate;
         const format = 1; // PCM
-        const bitDepth = 16;
 
         const bytesPerSample = bitDepth / 8;
         const blockAlign = numberOfChannels * bytesPerSample;
@@ -4745,6 +4842,8 @@ class App {
         const dataLength = samples.length * blockAlign;
         const buffer = new ArrayBuffer(44 + dataLength);
         const view = new DataView(buffer);
+
+
 
         // WAV header
         const writeString = (offset, string) => {
@@ -4767,17 +4866,45 @@ class App {
         writeString(36, 'data');
         view.setUint32(40, dataLength, true);
 
-        // Write audio data
+        // Write audio data with bit-depth appropriate scaling
         const offset = 44;
+        const maxSample = Math.pow(2, bitDepth - 1) - 1;
+        
+        let minWritten = Infinity, maxWritten = -Infinity, samplesWritten = 0;
+        
         for (let i = 0; i < samples.length; i++) {
             const sample = Math.max(-1, Math.min(1, samples[i]));
-            const intSample = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
-            view.setInt16(offset + (i * 2), intSample, true);
+            const intSample = Math.round(sample < 0 ? sample * (maxSample + 1) : sample * maxSample);
+            
+            minWritten = Math.min(minWritten, intSample);
+            maxWritten = Math.max(maxWritten, intSample);
+            samplesWritten++;
+            
+            if (bitDepth === 16) {
+                view.setInt16(offset + (i * 2), intSample, true);
+            } else if (bitDepth === 24) {
+                // 24-bit samples are written as 3 bytes in little-endian
+                const byte1 = intSample & 0xFF;
+                const byte2 = (intSample >> 8) & 0xFF;
+                const byte3 = (intSample >> 16) & 0xFF;
+                view.setUint8(offset + (i * 3), byte1);
+                view.setUint8(offset + (i * 3) + 1, byte2);
+                view.setUint8(offset + (i * 3) + 2, byte3);
+            } else if (bitDepth === 32) {
+                // 32-bit samples as signed integers
+                view.setInt32(offset + (i * 4), intSample, true);
+            } else {
+                console.warn(`[encodeWAV] Unsupported bit depth: ${bitDepth}, falling back to 16-bit`);
+                view.setInt16(offset + (i * 2), intSample, true);
+            }
         }
-
+        
         return new Blob([buffer], { type: 'audio/wav' });
     }
 
+    /**
+     * Inject bEXT chunk into WAV buffer (returns new buffer)
+     */
     /**
      * Inject iXML chunk into WAV buffer (returns new buffer)
      */
@@ -4805,7 +4932,7 @@ class App {
             if (chunkSize % 2 !== 0) offset++;
         }
 
-        // Add new iXML chunk
+        // Create new iXML chunk
         const ixmlBytes = new TextEncoder().encode(ixmlString);
         const ixmlChunkSize = ixmlBytes.length;
         const ixmlChunk = new Uint8Array(8 + ixmlChunkSize + (ixmlChunkSize % 2));
