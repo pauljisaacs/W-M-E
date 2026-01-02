@@ -345,25 +345,33 @@ td:nth-child(11) {
     padding: 0.25rem 0.25rem;
 }
 
-/* FPS column (12th) */
-th[data-column="9"],
+/* End TC column (12th) */
+th[data-column="13"],
 td:nth-child(12) {
-    width: 90px;
-    max-width: 90px;
-    padding: 0.1rem 0.1rem;
+    width: 100px;
+    max-width: 100px;
+    padding: 0.25rem 0.25rem;
 }
 
-/* File Size column (13th) */
-th[data-column="10"],
+/* FPS column (13th) */
+th[data-column="9"],
 td:nth-child(13) {
     width: 90px;
     max-width: 90px;
     padding: 0.1rem 0.1rem;
 }
 
-/* Notes column (14th) */
-th[data-column="14"],
+/* File Size column (14th) */
+th[data-column="10"],
 td:nth-child(14) {
+    width: 90px;
+    max-width: 90px;
+    padding: 0.1rem 0.1rem;
+}
+
+/* Notes column (15th) */
+th[data-column="14"],
+td:nth-child(15) {
     width: 250px;
     max-width: 400px;
     padding: 0.1rem 0.1rem;

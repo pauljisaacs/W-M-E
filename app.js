@@ -79,7 +79,7 @@ class App {
         this.selectedIndices = new Set();
         this.lastSelectedIndex = -1; // For shift-click range selection
         this.currentlyLoadedFileIndex = -1; // Track which file is currently loaded
-        this.columnOrder = [3, 12, 11, 0, 1, 2, 4, 5, 6, 7, 8, 9, 10, 14]; // Default order: Filename, Project, Tape...
+        this.columnOrder = [3, 12, 11, 0, 1, 2, 4, 5, 6, 7, 8, 13, 9, 10, 14]; // Default order: Filename, Project, Tape, Channels, BitDepth, SampleRate, Format, Scene, Take, Duration, TC Start, End TC, FPS, FileSize, Notes
         this.sortColumn = null;
         this.sortDirection = 'asc';
         this.currentFileMetadata = null; // Store current file's metadata for timecode
@@ -1222,7 +1222,7 @@ class App {
         };
 
         // Create all cells in original order (Draggable)
-        // Indices: 0: Channels, 1: BitDepth, 2: SampleRate, 3: Filename, 4: Format, 5: Scene, 6: Take, 7: Duration, 8: TCStart, 9: FPS, 10: FileSize, 11: Tape, 12: Project, 14: Notes
+        // Indices: 0: Channels, 1: BitDepth, 2: SampleRate, 3: Filename, 4: Format, 5: Scene, 6: Take, 7: Duration, 8: TCStart, 9: FPS, 10: FileSize, 11: Tape, 12: Project, 13: EndTC, 14: Notes
         
         // Format channel display with Mono/Poly indicator
         const item = this.files[index];
@@ -1250,6 +1250,7 @@ class App {
         cells[10] = createCell('fileSize', metadata.fileSize ? ((metadata.fileSize / 1000000).toFixed(2) + ' MB') : '', false);
         cells[11] = createCell('tape', metadata.tape);
         cells[12] = createCell('project', metadata.project);
+        cells[13] = createCell('endTC', this.calculateEndTC(metadata), false);
         cells[14] = createCell('notes', metadata.notes);
 
         // Append in current column order
@@ -1287,6 +1288,33 @@ class App {
         const seconds = parseInt(parts[2]) || 0;
         
         return hours * 3600 + minutes * 60 + seconds;
+    }
+
+    calculateEndTC(metadata) {
+        // Calculate End TC from Start TC and duration
+        // Returns HH:MM:SS:FF format
+        if (!metadata.tcStart || !metadata.durationSec || !metadata.sampleRate) {
+            return '00:00:00:00';
+        }
+
+        // Get FPS exact fraction
+        const fpsExact = metadata.fpsExact || { numerator: 24, denominator: 1 };
+
+        // Convert Start TC to samples
+        const startSamples = this.metadataHandler.tcToSamples(
+            metadata.tcStart,
+            metadata.sampleRate,
+            fpsExact
+        );
+
+        // Add duration in samples
+        const durationSamples = Math.round(metadata.durationSec * metadata.sampleRate);
+        const endSamples = startSamples + durationSamples;
+
+        // Convert back to timecode
+        const endTC = this.metadataHandler.samplesToTC(endSamples, metadata.sampleRate, fpsExact);
+
+        return endTC;
     }
 
     addSecondsToTimecode(timecode, seconds) {
