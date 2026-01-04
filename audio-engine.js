@@ -407,10 +407,47 @@ export class AudioEngine {
         });
     }
 
-    async renderStereoMix(sourceBuffer, mixerChannels, mode = 'current') {
+    async renderStereoMix(sourceBuffer, mixerChannels, mode = 'current', masterFaderLevel = 1.0) {
         if (!sourceBuffer) throw new Error("No buffer to render");
 
         const offlineCtx = new OfflineAudioContext(2, sourceBuffer.length, sourceBuffer.sampleRate);
+
+        // Helper function to convert master fader level to gain
+        const getMasterGain = (faderLevel) => {
+            const dBCurve = [
+                [1.00, 10],
+                [0.75, 0],
+                [0.50, -10],
+                [0.40, -20],
+                [0.30, -30],
+                [0.20, -40],
+                [0.10, -55],
+                [0.05, -70],
+                [0.02, -80],
+                [0.00, -Infinity]
+            ];
+            
+            const sliderToDb = (slider) => {
+                if (slider <= 0) return -Infinity;
+                for (let j = 1; j < dBCurve.length; ++j) {
+                    if (slider >= dBCurve[j][0]) {
+                        const [x1, y1] = dBCurve[j-1];
+                        const [x2, y2] = dBCurve[j];
+                        return y1 + (y2 - y1) * (slider - x1) / (x2 - x1);
+                    }
+                }
+                return dBCurve[dBCurve.length-1][1];
+            };
+            
+            const dbToGain = (db) => {
+                if (!isFinite(db)) return 0;
+                return Math.pow(10, db / 20);
+            };
+            
+            return dbToGain(sliderToDb(faderLevel));
+        };
+
+        const masterGain = getMasterGain(masterFaderLevel);
 
         // Mode: bypass - use default settings
         if (mode === 'bypass') {
@@ -419,17 +456,33 @@ export class AudioEngine {
             const splitter = offlineCtx.createChannelSplitter(sourceBuffer.numberOfChannels);
             source.connect(splitter);
 
-            // Unity gain, alternating pan (odd left, even right)
-            for (let i = 0; i < sourceBuffer.numberOfChannels; i++) {
+            // Create master gain node to apply master fader
+            const masterGainNode = offlineCtx.createGain();
+            masterGainNode.gain.value = masterGain;
+            masterGainNode.connect(offlineCtx.destination);
+
+            // For bypass mode:
+            // - Mono sources: output mono to stereo with 0.707 gain per channel (maintains total power)
+            // - Multi-channel: pan odd channels left, even right
+            if (sourceBuffer.numberOfChannels === 1) {
+                // Mono source: output to both channels at 0.707 (-3dB) to maintain power
                 const gainNode = offlineCtx.createGain();
-                gainNode.gain.value = 1.0; // Unity gain
+                gainNode.gain.value = 0.707; // -3dB to compensate for stereo expansion
+                splitter.connect(gainNode, 0);
+                gainNode.connect(masterGainNode);
+            } else {
+                // Multi-channel: alternate panning
+                for (let i = 0; i < sourceBuffer.numberOfChannels; i++) {
+                    const gainNode = offlineCtx.createGain();
+                    gainNode.gain.value = 1.0;
 
-                const panNode = offlineCtx.createStereoPanner();
-                panNode.pan.value = (i % 2 === 0) ? -1 : 1; // Odd left, even right
+                    const panNode = offlineCtx.createStereoPanner();
+                    panNode.pan.value = (i % 2 === 0) ? -1 : 1;
 
-                splitter.connect(gainNode, i);
-                gainNode.connect(panNode);
-                panNode.connect(offlineCtx.destination);
+                    splitter.connect(gainNode, i);
+                    gainNode.connect(panNode);
+                    panNode.connect(masterGainNode);
+                }
             }
 
             source.start(0);
@@ -449,7 +502,7 @@ export class AudioEngine {
                 mode = 'current';
             } else {
                 // Process with automation
-                return await this.renderWithAutomation(sourceBuffer, mixerChannels, offlineCtx);
+                return await this.renderWithAutomation(sourceBuffer, mixerChannels, offlineCtx, masterGain);
             }
         }
 
@@ -459,14 +512,23 @@ export class AudioEngine {
         const splitter = offlineCtx.createChannelSplitter(sourceBuffer.numberOfChannels);
         source.connect(splitter);
 
+        // Create master gain node to apply master fader
+        const masterGainNode = offlineCtx.createGain();
+        masterGainNode.gain.value = masterGain;
+        masterGainNode.connect(offlineCtx.destination);
+
         // Check Solo state
         const isAnySolo = mixerChannels.some(ch => ch.isSoloed);
+
+        // For mono sources, we need to compensate for equal-power panning gain increase
+        const isMono = sourceBuffer.numberOfChannels === 1;
+        const monoCompensation = isMono ? 0.707 : 1.0; // -3dB for mono to stereo conversion
 
         mixerChannels.forEach(ch => {
             if (ch.index >= sourceBuffer.numberOfChannels) return;
 
             // Gain Logic
-            let gainValue = ch.volume;
+            let gainValue = ch.volume * monoCompensation;
             if (isAnySolo) {
                 if (!ch.isSoloed) gainValue = 0;
             } else {
@@ -481,10 +543,10 @@ export class AudioEngine {
             const currentPan = ch.panNode ? ch.panNode.pan.value : 0;
             panNode.pan.value = currentPan;
 
-            // Connect: Splitter -> Gain -> Pan -> Destination
+            // Connect: Splitter -> Gain -> Pan -> Master Gain -> Destination
             splitter.connect(gainNode, ch.index);
             gainNode.connect(panNode);
-            panNode.connect(offlineCtx.destination);
+            panNode.connect(masterGainNode);
         });
 
         // For mono source, duplicate left to right channel as fallback (after explicitly mixed channels)
@@ -498,11 +560,11 @@ export class AudioEngine {
             } else {
                 // No mixer channel for mono source - this shouldn't happen, but duplicate to both channels
                 const gainNode = offlineCtx.createGain();
-                gainNode.gain.value = 1.0;
+                gainNode.gain.value = monoCompensation;
                 const splitterForFallback = offlineCtx.createChannelSplitter(1);
                 source.connect(splitterForFallback);
                 splitterForFallback.connect(gainNode, 0);
-                gainNode.connect(offlineCtx.destination);
+                gainNode.connect(masterGainNode);
             }
         }
 
@@ -510,7 +572,7 @@ export class AudioEngine {
         return await offlineCtx.startRendering();
     }
 
-    async renderWithAutomation(sourceBuffer, mixerChannels, offlineCtx) {
+    async renderWithAutomation(sourceBuffer, mixerChannels, offlineCtx, masterGain = 1.0) {
         // This is a simplified version - for proper automation rendering,
         // we'd need to manually process samples or use AudioParam automation
         const source = offlineCtx.createBufferSource();
@@ -519,6 +581,15 @@ export class AudioEngine {
         source.connect(splitter);
 
         const duration = sourceBuffer.duration;
+
+        // Create master gain node to apply master fader
+        const masterGainNode = offlineCtx.createGain();
+        masterGainNode.gain.value = masterGain;
+        masterGainNode.connect(offlineCtx.destination);
+
+        // For mono sources, we need to compensate for equal-power panning gain increase
+        const isMono = sourceBuffer.numberOfChannels === 1;
+        const monoCompensation = isMono ? 0.707 : 1.0; // -3dB for mono to stereo conversion
 
         mixerChannels.forEach(ch => {
             if (ch.index >= sourceBuffer.numberOfChannels) return;
@@ -530,16 +601,16 @@ export class AudioEngine {
             if (ch.automation && ch.automation.volume && ch.automation.volume.length > 0) {
                 // Set initial value
                 const firstPoint = ch.automation.volume[0];
-                gainNode.gain.setValueAtTime(firstPoint.value, 0);
+                gainNode.gain.setValueAtTime(firstPoint.value * monoCompensation, 0);
 
                 // Add automation points
                 ch.automation.volume.forEach(point => {
                     if (point.time <= duration) {
-                        gainNode.gain.linearRampToValueAtTime(point.value, point.time);
+                        gainNode.gain.linearRampToValueAtTime(point.value * monoCompensation, point.time);
                     }
                 });
             } else {
-                gainNode.gain.value = ch.volume;
+                gainNode.gain.value = ch.volume * monoCompensation;
             }
 
             // Pan (currently no automation, use current value)
@@ -548,7 +619,7 @@ export class AudioEngine {
 
             splitter.connect(gainNode, ch.index);
             gainNode.connect(panNode);
-            panNode.connect(offlineCtx.destination);
+            panNode.connect(masterGainNode);
         });
 
         source.start(0);

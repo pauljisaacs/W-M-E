@@ -3650,6 +3650,29 @@ class App {
     }
 
     openNormalizeModal() {
+        // Check if any selected files are MP3
+        const selectedIndices = Array.from(this.selectedIndices);
+        let hasMp3 = false;
+
+        for (const index of selectedIndices) {
+            const item = this.files[index];
+            const targets = item.isGroup ? item.siblings : [item];
+
+            for (const target of targets) {
+                const format = target.metadata.format ? target.metadata.format.toLowerCase() : '';
+                if (format.includes('mpeg') || format.includes('mp3')) {
+                    hasMp3 = true;
+                    break;
+                }
+            }
+            if (hasMp3) break;
+        }
+
+        if (hasMp3) {
+            alert('MP3 files cannot be normalized. Only WAV and RF64 files are supported for normalization.');
+            return;
+        }
+
         document.getElementById('normalize-modal').classList.add('active');
     }
 
@@ -4011,7 +4034,7 @@ class App {
                 if (!this.currentFileMetadata || this.currentFileMetadata.filename !== item.metadata.filename) {
                     // For batch export to work properly, we MUST load the audio.
                     const arrayBuffer = await item.file.arrayBuffer();
-                    buffer = await this.audioEngine.decodeAudio(arrayBuffer);
+                    buffer = await this.audioEngine.audioCtx.decodeAudioData(arrayBuffer.slice(0));
                 }
 
                 if (!buffer) {
@@ -4051,7 +4074,8 @@ class App {
                 const renderedBuffer = await this.audioEngine.renderStereoMix(
                     buffer,
                     this.mixer.channels,
-                    mixMode
+                    mixMode,
+                    this.mixer.masterFaderLevel
                 );
 
                 // Encode
