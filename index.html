@@ -70,7 +70,7 @@
                             <th draggable="true" data-column="5">Scene</th>
                             <th draggable="true" data-column="6">Take</th>
                             <th draggable="true" data-column="7">Duration</th>
-                            <th draggable="true" data-column="8">TC Start</th>
+                            <th draggable="true" data-column="8">Start TC</th>
                             <th draggable="true" data-column="13">End TC</th>
                             <th draggable="true" data-column="9">FPS</th>
                             <th draggable="true" data-column="10">File Size</th>
@@ -90,6 +90,7 @@
             <button id="rename-btn" class="btn secondary" disabled>Rename</button>
             <button id="report-btn" class="btn secondary">Report</button>
             <button id="export-tc-range-btn" class="btn secondary" disabled>Export TC Range</button>
+            <button id="conform-csv-btn" class="btn secondary">Conform to CSV</button>
         </div>
 
         <!-- Player & Waveform -->
@@ -115,7 +116,7 @@
             </div>
             <div class="section-content">
                 <div id="region-selector" class="region-selector">
-                    <span class="region-hint">Click and drag here to create region</span>
+                    <span class="region-hint">Click and drag = create region. M = add marker</span>
                     <div id="region-tooltip" class="region-tooltip" style="display:none;"></div>
                 </div>
                 <div class="waveform-wrapper">
@@ -455,6 +456,82 @@
             <div class="modal-footer">
                 <button id="cancel-export-tc-range-btn" class="btn secondary">Cancel</button>
                 <button id="confirm-export-tc-range-btn" class="btn primary">Export Range</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Conform to CSV Modal -->
+    <div id="conform-csv-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Auto-Conform to CSV</h3>
+                <button class="close-modal" id="conform-csv-close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="input-group">
+                    <button id="choose-csv-btn" class="btn secondary">Choose .CSV</button>
+                    <span id="csv-filename-display" style="margin-left: 1rem; color: var(--text-muted);">No file selected</span>
+                </div>
+                <div class="input-group" style="margin-top: 1rem;">
+                    <label for="conform-bitdepth">Output Bit Depth:</label>
+                    <select id="conform-bitdepth">
+                        <option value="16">16-bit PCM</option>
+                        <option value="24" selected>24-bit PCM</option>
+                        <option value="32">32-bit Float</option>
+                    </select>
+                </div>
+                <div class="input-group" style="margin-top: 1rem;">
+                    <label for="conform-prepost-roll">Pre/Post Roll:</label>
+                    <select id="conform-prepost-roll">
+                        <option value="0" selected>0 seconds</option>
+                        <option value="1">1 second</option>
+                        <option value="2">2 seconds</option>
+                        <option value="3">3 seconds</option>
+                        <option value="4">4 seconds</option>
+                        <option value="5">5 seconds</option>
+                        <option value="6">6 seconds</option>
+                        <option value="7">7 seconds</option>
+                        <option value="8">8 seconds</option>
+                        <option value="9">9 seconds</option>
+                        <option value="10">10 seconds</option>
+                    </select>
+                </div>
+                <div class="table-container" style="margin-top: 1rem; max-height: 300px; overflow-y: auto;">
+                    <table id="csv-preview-table" style="display: none;">
+                        <thead>
+                            <tr>
+                                <th>File Name</th>
+                                <th>Scene</th>
+                                <th>Take</th>
+                                <th>Length</th>
+                                <th>Start TC</th>
+                            </tr>
+                        </thead>
+                        <tbody id="csv-preview-body">
+                            <!-- CSV preview rows populated here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="cancel-conform-csv-btn" class="btn secondary">Cancel</button>
+                <button id="conform-csv-button" class="btn primary" disabled>Conform</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Conform Progress Modal -->
+    <div id="conform-progress-modal" class="modal">
+        <div class="modal-content small-modal">
+            <div class="modal-header">
+                <h3>Conforming Files...</h3>
+            </div>
+            <div class="modal-body">
+                <p id="conform-progress-status">Preparing...</p>
+                <div class="progress-bar-container" style="width: 100%; height: 24px; background: var(--bg-secondary); border-radius: 4px; overflow: hidden; margin: 1rem 0;">
+                    <div id="conform-progress-bar" style="height: 100%; background: var(--accent-primary); width: 0%; transition: width 0.3s;"></div>
+                </div>
+                <p id="conform-progress-text" style="text-align: center; color: var(--text-muted);">0%</p>
             </div>
         </div>
     </div>

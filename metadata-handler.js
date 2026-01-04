@@ -339,6 +339,23 @@ export class MetadataHandler {
         if (!metadata.fpsExact && metadata.description) {
             metadata.fpsExact = this.parseSpeedFromDescription(metadata.description);
         }
+
+        // Set fps display field from fpsExact if not already set
+        if (metadata.fpsExact && !metadata.fps) {
+            const fps = metadata.fpsExact.numerator / metadata.fpsExact.denominator;
+            if (Math.abs(fps - 23.976) < 0.01) {
+                metadata.fps = "23.98";
+            } else if (Math.abs(fps - 29.97) < 0.01) {
+                metadata.fps = "29.97";
+            } else if (Math.abs(fps - 59.94) < 0.01) {
+                metadata.fps = "59.94";
+            } else {
+                metadata.fps = fps.toFixed(2);
+                if (metadata.fps.endsWith('.00')) {
+                    metadata.fps = metadata.fps.substring(0, metadata.fps.length - 3);
+                }
+            }
+        }
     }
 
     parseIXML(view, offset, size, metadata) {

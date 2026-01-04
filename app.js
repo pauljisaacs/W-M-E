@@ -103,6 +103,9 @@ class App {
         // Initialize mixer with 8 default channels
         this.mixer.buildUI(8);
 
+        // Initialize UI button states
+        this.updateSelectionUI();
+
         // Animation loop
         this.animate = this.animate.bind(this);
         requestAnimationFrame(this.animate);
@@ -244,6 +247,20 @@ class App {
             const format = e.target.value;
             document.getElementById('export-tc-wav-options').style.display = format === 'wav' ? 'block' : 'none';
             document.getElementById('export-tc-mp3-options').style.display = format === 'mp3' ? 'block' : 'none';
+        });
+
+        // Conform to CSV controls
+        document.getElementById('conform-csv-btn').addEventListener('click', () => this.openConformCSVModal());
+        document.getElementById('cancel-conform-csv-btn').addEventListener('click', () => this.closeConformCSVModal());
+        document.getElementById('conform-csv-button').addEventListener('click', () => this.handleConformToCSV());
+        document.getElementById('choose-csv-btn').addEventListener('click', () => this.handleChooseCSV());
+
+        const conformCSVModal = document.getElementById('conform-csv-modal');
+        conformCSVModal.querySelector('.close-modal').addEventListener('click', () => this.closeConformCSVModal());
+        conformCSVModal.addEventListener('click', (e) => {
+            if (e.target.id === 'conform-csv-modal') {
+                this.closeConformCSVModal();
+            }
         });
 
         // Auto-save toggle
@@ -1820,6 +1837,9 @@ class App {
         // Enable export TC range button if one or more files are selected
         safeSetDisabled('export-tc-range-btn', this.selectedIndices.size === 0);
         
+        // Enable conform to CSV button if one or more files are selected
+        safeSetDisabled('conform-csv-btn', this.selectedIndices.size === 0);
+        
         // Enable repair button if exactly one file is selected AND it needs repair OR is missing iXML
         let needsRepair = false;
         if (this.selectedIndices.size === 1) {
@@ -2655,6 +2675,181 @@ class App {
         }
     }
 
+    /**
+     * Extract audio range from a source file and create WAV/MP3 with metadata
+     * @param {Object} sourceFile - File object with { file, metadata }
+     * @param {string} startTC - Start timecode in HH:MM:SS:FF format
+     * @param {string} endTC - End timecode in HH:MM:SS:FF format
+     * @param {Object} outputMetadata - Metadata for the output file (scene, take, etc.)
+     * @param {string} outputFilename - Name for the output file
+     * @param {Object} directoryHandle - Directory to save to
+     * @param {string} format - 'wav' or 'mp3'
+     * @param {number} bitDepth - Bit depth for WAV (16 or 24)
+     * @returns {Object} { success: boolean, handle: FileHandle, error: string }
+     */
+    async extractAudioRange(sourceFile, startTC, endTC, outputMetadata, outputFilename, directoryHandle, format = 'wav', bitDepth = 24) {
+        try {
+            // Get FPS first to convert frames to seconds accurately
+            let fpsExact = sourceFile.metadata.fpsExact;
+            if (!fpsExact && sourceFile.metadata.fps) {
+                // Convert fps string to fpsExact fraction
+                if (sourceFile.metadata.fps === '23.98') {
+                    fpsExact = { numerator: 24000, denominator: 1001 };
+                } else if (sourceFile.metadata.fps === '29.97') {
+                    fpsExact = { numerator: 30000, denominator: 1001 };
+                } else {
+                    const fpsNum = parseFloat(sourceFile.metadata.fps);
+                    fpsExact = { numerator: fpsNum, denominator: 1 };
+                }
+            } else {
+                fpsExact = fpsExact || { numerator: 24, denominator: 1 };
+            }
+            
+            // Parse timecodes including frames using tcToSeconds which accounts for FPS
+            const fileStartSeconds = this.tcToSeconds(sourceFile.metadata.tcStart || '00:00:00:00', fpsExact);
+            const fileDurationSeconds = this.tcToSeconds(sourceFile.metadata.duration, fpsExact);
+            const fileEndSeconds = fileStartSeconds + fileDurationSeconds;
+
+            // Parse target range
+            const rangeStartSeconds = this.tcToSeconds(startTC, fpsExact);
+            const rangeEndSeconds = this.tcToSeconds(endTC, fpsExact);
+
+            // Calculate overlap
+            const actualStartSeconds = Math.max(rangeStartSeconds, fileStartSeconds);
+            const actualEndSeconds = Math.min(rangeEndSeconds, fileEndSeconds);
+
+            if (actualStartSeconds >= actualEndSeconds) {
+                return { 
+                    success: false, 
+                    error: `Timecode range does not overlap with file ${sourceFile.metadata.filename}` 
+                };
+            }
+
+            const sampleRate = sourceFile.metadata.sampleRate;
+            const startSampleOffset = Math.round((actualStartSeconds - fileStartSeconds) * sampleRate);
+            const endSampleOffset = Math.round((actualEndSeconds - fileStartSeconds) * sampleRate);
+            const sampleCount = endSampleOffset - startSampleOffset;
+
+            // Load file audio
+            const arrayBuffer = await sourceFile.file.arrayBuffer();
+            const audioBuffer = await this.audioEngine.audioCtx.decodeAudioData(arrayBuffer.slice(0));
+
+            // Extract range using OfflineAudioContext
+            const channels = audioBuffer.numberOfChannels;
+            const OfflineAudioContext = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+            const offlineCtx = new OfflineAudioContext(channels, sampleCount, sampleRate);
+
+            // Create a buffer source with the full decoded audio
+            const bufferSource = offlineCtx.createBufferSource();
+            bufferSource.buffer = audioBuffer;
+            
+            // Connect to destination and start from the offset
+            bufferSource.connect(offlineCtx.destination);
+            bufferSource.start(0, startSampleOffset / sampleRate, sampleCount / sampleRate);
+
+            // Render the extracted portion
+            const extractedBuffer = await offlineCtx.startRendering();
+
+            // Calculate the actual start TC of the extracted audio (not the requested start)
+            // Work with samples for frame-accurate timecode (important for 23.98 FPS)
+            const fileStartSamples = this.metadataHandler.tcToSamples(sourceFile.metadata.tcStart || '00:00:00:00', sampleRate, fpsExact);
+            const rangeStartSamples = this.metadataHandler.tcToSamples(startTC, sampleRate, fpsExact);
+            const actualStartSamples = Math.max(rangeStartSamples, fileStartSamples);
+            const actualStartTC = this.metadataHandler.samplesToTC(actualStartSamples, sampleRate, fpsExact);
+
+            // Also calculate actual end for duration
+            const rangeEndSamples = this.metadataHandler.tcToSamples(endTC, sampleRate, fpsExact);
+            const fileEndSamples = fileStartSamples + Math.round(fileDurationSeconds * sampleRate);
+            const actualEndSamples = Math.min(rangeEndSamples, fileEndSamples);
+
+            // Prepare export metadata
+            const exportMetadata = {
+                ...sourceFile.metadata,
+                ...outputMetadata,
+                tcStart: actualStartTC,
+                duration: this.secondsToDuration((actualEndSamples - actualStartSamples) / sampleRate),
+                fpsExact: fpsExact,
+                bitDepth: bitDepth,
+                sampleRate: sampleRate,
+                // Don't copy ixmlRaw and bextRaw so we create fresh chunks with correct metadata
+                ixmlRaw: undefined,
+                bextRaw: undefined
+            };
+
+            // Calculate timeReference from the actual TC Start
+            exportMetadata.timeReference = actualStartSamples;
+
+            // Create audio file
+            let blob;
+            if (format === 'wav') {
+                const wavBuffer = this.audioProcessor.createWavFile(extractedBuffer, bitDepth, null, exportMetadata);
+                
+                // Create bEXT and iXML chunks with timecode information
+                const bextChunk = this.metadataHandler.createBextChunk(exportMetadata);
+                const ixmlChunk = this.metadataHandler.createIXMLChunk(exportMetadata);
+                
+                // Calculate padding and sizes
+                const bextPadding = bextChunk.byteLength % 2 !== 0 ? 1 : 0;
+                const ixmlPadding = ixmlChunk.byteLength % 2 !== 0 ? 1 : 0;
+                const bextTotalSize = 8 + bextChunk.byteLength + bextPadding;
+                const ixmlTotalSize = 8 + ixmlChunk.byteLength + ixmlPadding;
+                
+                // Calculate new file size
+                const wavView = new DataView(wavBuffer);
+                const wavArray = new Uint8Array(wavBuffer);
+                const riffSize = wavView.getUint32(4, true);
+                const oldFileSize = riffSize + 8;
+                const newFileSize = oldFileSize + bextTotalSize + ixmlTotalSize;
+                
+                // Create new buffer with both chunks
+                const newWavBuffer = new Uint8Array(newFileSize);
+                newWavBuffer.set(wavArray);
+                
+                const chunkView = new DataView(newWavBuffer.buffer);
+                
+                // Write bEXT chunk
+                let chunkOffset = oldFileSize;
+                newWavBuffer[chunkOffset] = 0x62;     // 'b'
+                newWavBuffer[chunkOffset + 1] = 0x65; // 'e'
+                newWavBuffer[chunkOffset + 2] = 0x78; // 'x'
+                newWavBuffer[chunkOffset + 3] = 0x74; // 't'
+                chunkView.setUint32(chunkOffset + 4, bextChunk.byteLength, true);
+                newWavBuffer.set(new Uint8Array(bextChunk), chunkOffset + 8);
+                
+                // Write iXML chunk
+                chunkOffset = oldFileSize + bextTotalSize;
+                newWavBuffer[chunkOffset] = 0x69;     // 'i'
+                newWavBuffer[chunkOffset + 1] = 0x58; // 'X'
+                newWavBuffer[chunkOffset + 2] = 0x4D; // 'M'
+                newWavBuffer[chunkOffset + 3] = 0x4C; // 'L'
+                chunkView.setUint32(chunkOffset + 4, ixmlChunk.byteLength, true);
+                newWavBuffer.set(new Uint8Array(ixmlChunk), chunkOffset + 8);
+                
+                // Update RIFF size
+                const newRiffSize = newFileSize - 8;
+                chunkView.setUint32(4, newRiffSize, true);
+                
+                blob = new Blob([newWavBuffer.buffer], { type: 'audio/wav' });
+            } else {
+                const mp3Bitrate = parseInt(document.getElementById('export-tc-mp3-bitrate')?.value || 320);
+                blob = await this.audioProcessor.encodeToMP3(extractedBuffer, mp3Bitrate, exportMetadata);
+            }
+
+            // Get file handle in the directory
+            const handle = await directoryHandle.getFileHandle(outputFilename, { create: true });
+
+            // Save file
+            const writable = await handle.createWritable();
+            await writable.write(blob);
+            await writable.close();
+
+            return { success: true, handle: handle };
+
+        } catch (err) {
+            return { success: false, error: err.message };
+        }
+    }
+
     async handleExportTCRange() {
         const startTimeStr = document.getElementById('export-tc-start').value.trim();
         const endTimeStr = document.getElementById('export-tc-end').value.trim();
@@ -2690,170 +2885,47 @@ class App {
                 mode: 'readwrite'
             });
 
+            // Get bit depth for WAV format
+            const bitDepth = format === 'wav' ? parseInt(document.getElementById('export-tc-bitdepth').value) : 16;
+
             for (const selectedFile of selectedFiles) {
                 try {
-
                     // Create filename with _region appended
                     const nameWithoutExt = selectedFile.metadata.filename.replace(/\.[^/.]+$/, '');
                     const fileName = `${nameWithoutExt}_region.${format}`;
 
-                    // Get file handle in the directory
-                    const handle = await directoryHandle.getFileHandle(fileName, { create: true });
-
-                    // Calculate actual range within the file
-                    // Get FPS first to convert frames to seconds accurately
-                    let fpsExact = selectedFile.metadata.fpsExact;
-                    if (!fpsExact && selectedFile.metadata.fps) {
-                        // Convert fps string to fpsExact fraction
-                        if (selectedFile.metadata.fps === '23.98') {
-                            fpsExact = { numerator: 24000, denominator: 1001 };
-                        } else if (selectedFile.metadata.fps === '29.97') {
-                            fpsExact = { numerator: 30000, denominator: 1001 };
-                        } else {
-                            const fpsNum = parseFloat(selectedFile.metadata.fps);
-                            fpsExact = { numerator: fpsNum, denominator: 1 };
-                        }
-                    } else {
-                        fpsExact = fpsExact || { numerator: 24, denominator: 1 };
-                    }
+                    // Use the refactored extraction method
+                    const startTC = startTimeStr + ':00'; // Add frame count
+                    const endTC = endTimeStr + ':00';
                     
-                    // Parse timecodes including frames using tcToSeconds which accounts for FPS
-                    const fileStartSeconds = this.tcToSeconds(selectedFile.metadata.tcStart || '00:00:00:00', fpsExact);
-                    const fileDurationSeconds = this.tcToSeconds(selectedFile.metadata.duration, fpsExact);
-                    const fileEndSeconds = fileStartSeconds + fileDurationSeconds;
+                    const result = await this.extractAudioRange(
+                        selectedFile,
+                        startTC,
+                        endTC,
+                        {}, // No metadata overrides for export TC range
+                        fileName,
+                        directoryHandle,
+                        format,
+                        bitDepth
+                    );
 
-                    // Calculate overlap
-                    const rangeStartSeconds = Math.max(startSeconds, fileStartSeconds);
-                    const rangeEndSeconds = Math.min(endSeconds, fileEndSeconds);
+                    if (result.success) {
+                        // Auto-add to file list
+                        const newFile = await result.handle.getFile();
+                        const metadata = await this.metadataHandler.parseFile(newFile);
+                        this.files.push({
+                            handle: result.handle,
+                            metadata: metadata,
+                            file: newFile,
+                            isGroup: false
+                        });
 
-                    if (rangeStartSeconds >= rangeEndSeconds) {
-                        console.warn(`File ${selectedFile.metadata.filename}: specified timecode range does not overlap.`);
+                        exportedFiles.push(result.handle.name);
+                        successCount++;
+                    } else {
+                        console.warn(result.error);
                         failCount++;
-                        continue;
                     }
-                    const sampleRate = selectedFile.metadata.sampleRate;
-                    const startSampleOffset = Math.round((rangeStartSeconds - fileStartSeconds) * sampleRate);
-                    const endSampleOffset = Math.round((rangeEndSeconds - fileStartSeconds) * sampleRate);
-                    const sampleCount = endSampleOffset - startSampleOffset;
-
-                    // Load file audio
-                    const arrayBuffer = await selectedFile.file.arrayBuffer();
-                    const audioBuffer = await this.audioEngine.audioCtx.decodeAudioData(arrayBuffer.slice(0));
-
-                    // Extract range using OfflineAudioContext
-                    const channels = audioBuffer.numberOfChannels;
-                    const OfflineAudioContext = window.OfflineAudioContext || window.webkitOfflineAudioContext;
-                    const offlineCtx = new OfflineAudioContext(channels, sampleCount, sampleRate);
-
-                    // Create a buffer source with the full decoded audio
-                    const bufferSource = offlineCtx.createBufferSource();
-                    bufferSource.buffer = audioBuffer;
-                    
-                    // Connect to destination and start from the offset
-                    bufferSource.connect(offlineCtx.destination);
-                    bufferSource.start(0, startSampleOffset / sampleRate, sampleCount / sampleRate);
-
-                    // Render the extracted portion
-                    const extractedBuffer = await offlineCtx.startRendering();
-
-                    // Get bitdepth
-                    const bitDepth = format === 'wav' ? parseInt(document.getElementById('export-tc-bitdepth').value) : 16;
-
-                    // Create export metadata with TC Start
-                    const newTCStart = startTimeStr + ':00'; // Add frame count
-                    
-                    const exportMetadata = {
-                        ...selectedFile.metadata,
-                        tcStart: newTCStart,
-                        duration: this.secondsToDuration(rangeEndSeconds - rangeStartSeconds),
-                        fpsExact: fpsExact,
-                        bitDepth: bitDepth,
-                        sampleRate: sampleRate,
-                        fps: selectedFile.metadata.fps,
-                        // Don't copy ixmlRaw and bextRaw so we create fresh chunks with correct metadata
-                        ixmlRaw: undefined,
-                        bextRaw: undefined
-                    };
-
-                    // Calculate timeReference from the new TC Start using tcToSamples
-                    // This ensures the output file's TC matches the user's specified time
-                    exportMetadata.timeReference = this.metadataHandler.tcToSamples(newTCStart, sampleRate, fpsExact);
-
-                    // Create audio file
-                    let blob;
-                    if (format === 'wav') {
-                        const wavBuffer = this.audioProcessor.createWavFile(extractedBuffer, bitDepth, null, exportMetadata);
-                        
-                        // Create bEXT and iXML chunks with timecode information
-                        const bextChunk = this.metadataHandler.createBextChunk(exportMetadata);
-                        const ixmlChunk = this.metadataHandler.createIXMLChunk(exportMetadata);
-                        
-                        // Calculate padding and sizes
-                        const bextPadding = bextChunk.byteLength % 2 !== 0 ? 1 : 0;
-                        const ixmlPadding = ixmlChunk.byteLength % 2 !== 0 ? 1 : 0;
-                        const bextTotalSize = 8 + bextChunk.byteLength + bextPadding;
-                        const ixmlTotalSize = 8 + ixmlChunk.byteLength + ixmlPadding;
-                        
-                        // Calculate new file size
-                        const wavView = new DataView(wavBuffer);
-                        const wavArray = new Uint8Array(wavBuffer);
-                        const riffSize = wavView.getUint32(4, true);
-                        const oldFileSize = riffSize + 8;
-                        const newFileSize = oldFileSize + bextTotalSize + ixmlTotalSize;
-                        
-                        // Create new buffer with both chunks
-                        const newWavBuffer = new Uint8Array(newFileSize);
-                        newWavBuffer.set(wavArray);
-                        
-                        const chunkView = new DataView(newWavBuffer.buffer);
-                        
-                        // Write bEXT chunk
-                        let chunkOffset = oldFileSize;
-                        newWavBuffer[chunkOffset] = 0x62;     // 'b'
-                        newWavBuffer[chunkOffset + 1] = 0x65; // 'e'
-                        newWavBuffer[chunkOffset + 2] = 0x78; // 'x'
-                        newWavBuffer[chunkOffset + 3] = 0x74; // 't'
-                        chunkView.setUint32(chunkOffset + 4, bextChunk.byteLength, true);
-                        newWavBuffer.set(new Uint8Array(bextChunk), chunkOffset + 8);
-                        // Padding byte is already zero, no need to explicitly write
-                        
-                        // Write iXML chunk
-                        chunkOffset = oldFileSize + bextTotalSize;
-                        newWavBuffer[chunkOffset] = 0x69;     // 'i'
-                        newWavBuffer[chunkOffset + 1] = 0x58; // 'X'
-                        newWavBuffer[chunkOffset + 2] = 0x4D; // 'M'
-                        newWavBuffer[chunkOffset + 3] = 0x4C; // 'L'
-                        chunkView.setUint32(chunkOffset + 4, ixmlChunk.byteLength, true);
-                        newWavBuffer.set(new Uint8Array(ixmlChunk), chunkOffset + 8);
-                        // Padding byte is already zero, no need to explicitly write
-                        
-                        // Update RIFF size
-                        const newRiffSize = newFileSize - 8;
-                        chunkView.setUint32(4, newRiffSize, true);
-                        
-                        blob = new Blob([newWavBuffer.buffer], { type: 'audio/wav' });
-                    } else {
-                        const mp3Bitrate = parseInt(document.getElementById('export-tc-mp3-bitrate').value);
-                        blob = await this.audioProcessor.encodeToMP3(extractedBuffer, mp3Bitrate, exportMetadata);
-                    }
-
-                    // Save file
-                    const writable = await handle.createWritable();
-                    await writable.write(blob);
-                    await writable.close();
-
-                    // Auto-add to file list
-                    const newFile = await handle.getFile();
-                    const metadata = await this.metadataHandler.parseFile(newFile);
-                    this.files.push({
-                        handle: handle,
-                        metadata: metadata,
-                        file: newFile,
-                        isGroup: false
-                    });
-
-                    exportedFiles.push(handle.name);
-                    successCount++;
 
                 } catch (err) {
                     if (err.name !== 'AbortError') {
@@ -3009,6 +3081,492 @@ class App {
             alert(`Repair failed: ${err.message}`);
         } finally {
             document.body.style.cursor = 'default';
+        }
+    }
+
+    secondsToDuration(seconds) {
+        // Convert seconds to HH:MM:SS:FF format (assumes 24fps for frames)
+        const totalSeconds = Math.floor(seconds);
+        const hours = Math.floor(totalSeconds / 3600);
+        const minutes = Math.floor((totalSeconds % 3600) / 60);
+        const secs = totalSeconds % 60;
+        const frames = Math.round((seconds - totalSeconds) * 24);
+
+        return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}:${String(frames).padStart(2, '0')}`;
+    }
+
+    /**
+     * Parse Sound Devices 8-Series CSV file
+     * @param {string} csvText - Raw CSV file content
+     * @returns {Object} { valid: boolean, error: string, entries: Array }
+     */
+    parseCSVFile(csvText) {
+        try {
+            const lines = csvText.split(/\r?\n/).filter(line => line.trim());
+            
+            if (lines.length < 2) {
+                return { valid: false, error: 'CSV file is empty or too short' };
+            }
+
+            // Validate first field contains "SOUND REPORT"
+            const firstLine = lines[0];
+            if (!firstLine.includes('SOUND REPORT')) {
+                return { 
+                    valid: false, 
+                    error: 'CSV file is not valid. Please select a Sound Devices 8-Series CSV Sound Report file.' 
+                };
+            }
+
+            // Find header row - search for the line containing "File Name"
+            let headerLineIndex = -1;
+            let headers = [];
+            for (let i = 0; i < lines.length; i++) {
+                const fields = this.parseCSVLine(lines[i]);
+                if (fields.some(f => f.toLowerCase().includes('file name'))) {
+                    headerLineIndex = i;
+                    headers = fields;
+                    break;
+                }
+            }
+
+            if (headerLineIndex === -1) {
+                return { 
+                    valid: false, 
+                    error: 'CSV file is not valid. Could not find column headers.' 
+                };
+            }
+
+            // Find column indices (order may vary)
+            const fileNameIdx = headers.findIndex(h => h.toLowerCase().includes('file name'));
+            const sceneIdx = headers.findIndex(h => h.toLowerCase() === 'scene');
+            const takeIdx = headers.findIndex(h => h.toLowerCase() === 'take');
+            const lengthIdx = headers.findIndex(h => h.toLowerCase() === 'length');
+            const startTCIdx = headers.findIndex(h => h.toLowerCase().includes('start tc'));
+
+            // Validate required columns exist
+            if (fileNameIdx === -1 || sceneIdx === -1 || takeIdx === -1 || 
+                lengthIdx === -1 || startTCIdx === -1) {
+                return { 
+                    valid: false, 
+                    error: 'CSV file is not valid. Missing required columns: File Name, Scene, Take, Length, Start TC.' 
+                };
+            }
+
+            // Parse data rows (start from the row after header)
+            const entries = [];
+            for (let i = headerLineIndex + 1; i < lines.length; i++) {
+                const fields = this.parseCSVLine(lines[i]);
+                
+                // Skip empty rows
+                if (fields.length === 0 || !fields[fileNameIdx]) continue;
+
+                const fileName = fields[fileNameIdx]?.trim();
+                const scene = fields[sceneIdx]?.trim();
+                const take = fields[takeIdx]?.trim();
+                const length = fields[lengthIdx]?.trim();
+                const startTC = fields[startTCIdx]?.trim();
+
+                if (fileName && startTC && length) {
+                    entries.push({
+                        fileName,
+                        scene: scene || '',
+                        take: take || '',
+                        length,
+                        startTC
+                    });
+                }
+            }
+
+            if (entries.length === 0) {
+                return { valid: false, error: 'No valid data rows found in CSV file' };
+            }
+
+            return { valid: true, entries };
+
+        } catch (err) {
+            return { valid: false, error: `Failed to parse CSV: ${err.message}` };
+        }
+    }
+
+    /**
+     * Parse a single CSV line handling quoted fields
+     */
+    parseCSVLine(line) {
+        const fields = [];
+        let current = '';
+        let inQuotes = false;
+
+        for (let i = 0; i < line.length; i++) {
+            const char = line[i];
+            const nextChar = line[i + 1];
+
+            if (char === '"') {
+                if (inQuotes && nextChar === '"') {
+                    // Escaped quote
+                    current += '"';
+                    i++; // Skip next quote
+                } else {
+                    // Toggle quote mode
+                    inQuotes = !inQuotes;
+                }
+            } else if (char === ',' && !inQuotes) {
+                // Field delimiter
+                fields.push(current);
+                current = '';
+            } else {
+                current += char;
+            }
+        }
+
+        // Add last field
+        fields.push(current);
+
+        return fields;
+    }
+
+    /**
+     * Calculate end TC from start TC and length
+     * @param {string} startTC - Start timecode HH:MM:SS:FF
+     * @param {string} length - Length HH:MM:SS or HH:MM:SS:FF
+     * @param {Object} fpsExact - FPS fraction {numerator, denominator}
+     * @returns {string} End timecode HH:MM:SS:FF
+     */
+    calculateEndTCFromLength(startTC, length, fpsExact) {
+        // Ensure length has frames field (pad with :00 if missing)
+        let lengthWithFrames = length;
+        if (length.split(':').length === 3) {
+            lengthWithFrames = length + ':00';
+        }
+        
+        const startSamples = this.metadataHandler.tcToSamples(startTC, 48000, fpsExact);
+        const lengthSamples = this.metadataHandler.tcToSamples(lengthWithFrames, 48000, fpsExact);
+        const endSamples = startSamples + lengthSamples;
+        return this.metadataHandler.samplesToTC(endSamples, 48000, fpsExact);
+    }
+
+    /**
+     * Find takes that fully contain the CSV time range
+     * @param {string} csvStartTC - CSV entry start timecode
+     * @param {string} csvEndTC - CSV entry end timecode
+     * @param {Set} fileIndicesToSearch - Optional set of file indices to search (defaults to all files)
+     * @returns {Array} Array of matching take indices
+     */
+    findMatchingTakes(csvStartTC, csvEndTC, fileIndicesToSearch = null) {
+        const matches = [];
+
+        // Use provided indices or search all files
+        const indicesToCheck = fileIndicesToSearch ? Array.from(fileIndicesToSearch) : Array.from({length: this.files.length}, (_, i) => i);
+
+        for (const i of indicesToCheck) {
+            const file = this.files[i];
+            const metadata = file.metadata;
+
+            // Skip if no timecode info
+            if (!metadata.tcStart || !metadata.durationSec) continue;
+
+            // Calculate file's end TC
+            const fileEndTC = this.calculateEndTC(metadata);
+
+            // Get FPS for comparison
+            let fpsExact = metadata.fpsExact || { numerator: 24, denominator: 1 };
+            if (!metadata.fpsExact && metadata.fps) {
+                if (metadata.fps === '23.98') {
+                    fpsExact = { numerator: 24000, denominator: 1001 };
+                } else if (metadata.fps === '29.97') {
+                    fpsExact = { numerator: 30000, denominator: 1001 };
+                } else {
+                    const fpsNum = parseFloat(metadata.fps);
+                    fpsExact = { numerator: fpsNum, denominator: 1 };
+                }
+            }
+
+            // Convert to seconds for comparison
+            const fileStartSec = this.tcToSeconds(metadata.tcStart, fpsExact);
+            const fileEndSec = this.tcToSeconds(fileEndTC, fpsExact);
+            const csvStartSec = this.tcToSeconds(csvStartTC, fpsExact);
+            const csvEndSec = this.tcToSeconds(csvEndTC, fpsExact);
+
+            // Check if file fully contains CSV range
+            if (fileStartSec <= csvStartSec && fileEndSec >= csvEndSec) {
+                matches.push(i);
+            }
+        }
+
+        return matches;
+    }
+
+    /**
+     * Generate disambiguated filename by inserting letter before take number
+     * @param {string} csvFileName - Original CSV filename (e.g., "123AT01")
+     * @param {number} matchIndex - Index of match (0, 1, 2, ...)
+     * @returns {string} Disambiguated filename (e.g., "123ATa01.wav")
+     */
+    generateDisambiguatedFilename(csvFileName, matchIndex) {
+        // Insert lowercase letter before the last digit sequence
+        const letter = String.fromCharCode(97 + matchIndex); // a, b, c, ...
+        
+        // Find last digit sequence
+        const match = csvFileName.match(/^(.*?)(\d+)$/);
+        if (match) {
+            return `${match[1]}${letter}${match[2]}.wav`;
+        }
+        
+        // Fallback: append letter at end
+        return `${csvFileName}${letter}.wav`;
+    }
+
+    async handleConformToCSV() {
+        const csvEntries = this.conformCSVEntries;
+        if (!csvEntries || csvEntries.length === 0) {
+            alert('No CSV entries to process.');
+            return;
+        }
+
+        this.closeConformCSVModal();
+        document.body.style.cursor = 'wait';
+
+        try {
+            // Prompt for output directory
+            const directoryHandle = await window.showDirectoryPicker({
+                mode: 'readwrite'
+            });
+
+            // Get selected bit depth and pre/post roll
+            const bitDepth = parseInt(document.getElementById('conform-bitdepth').value);
+            const prePostRoll = parseInt(document.getElementById('conform-prepost-roll').value);
+
+            let totalRows = csvEntries.length;
+            let filesCreated = 0;
+            let rowsSkipped = 0;
+            const createdFiles = [];
+
+            // Show progress
+            const progressModal = document.getElementById('conform-progress-modal');
+            const progressBar = document.getElementById('conform-progress-bar');
+            const progressText = document.getElementById('conform-progress-text');
+            const progressStatus = document.getElementById('conform-progress-status');
+            
+            if (progressModal) {
+                progressModal.classList.add('active');
+            }
+
+            for (let i = 0; i < csvEntries.length; i++) {
+                const entry = csvEntries[i];
+                
+                // Update progress
+                if (progressStatus) {
+                    progressStatus.textContent = `Processing ${i + 1} of ${totalRows}: ${entry.fileName}`;
+                }
+                if (progressBar) {
+                    const percent = Math.round(((i + 1) / totalRows) * 100);
+                    progressBar.style.width = `${percent}%`;
+                }
+                if (progressText) {
+                    progressText.textContent = `${Math.round(((i + 1) / totalRows) * 100)}%`;
+                }
+
+                // Infer FPS from first matched take
+                let fpsExact = { numerator: 24, denominator: 1 };
+                
+                // Calculate end TC
+                const csvEndTC = this.calculateEndTCFromLength(entry.startTC, entry.length, fpsExact);
+
+                // Find matching takes (only in selected files)
+                const matchIndices = this.findMatchingTakes(entry.startTC, csvEndTC, this.selectedIndices);
+
+                if (matchIndices.length === 0) {
+                    console.log(`Skipping CSV entry "${entry.fileName}": no matching takes found in selected files`);
+                    rowsSkipped++;
+                    continue;
+                }
+
+                // Use FPS from first matched take
+                const firstMatch = this.files[matchIndices[0]];
+                if (firstMatch.metadata.fpsExact) {
+                    fpsExact = firstMatch.metadata.fpsExact;
+                } else if (firstMatch.metadata.fps) {
+                    if (firstMatch.metadata.fps === '23.98') {
+                        fpsExact = { numerator: 24000, denominator: 1001 };
+                    } else if (firstMatch.metadata.fps === '29.97') {
+                        fpsExact = { numerator: 30000, denominator: 1001 };
+                    } else {
+                        const fpsNum = parseFloat(firstMatch.metadata.fps);
+                        fpsExact = { numerator: fpsNum, denominator: 1 };
+                    }
+                }
+
+                // Recalculate end TC with correct FPS
+                const csvEndTCCorrect = this.calculateEndTCFromLength(entry.startTC, entry.length, fpsExact);
+
+                // Apply pre/post roll to timecodes
+                const sampleRate = 48000; // Use standard sample rate for TC calculations
+                const csvStartSamples = this.metadataHandler.tcToSamples(entry.startTC, sampleRate, fpsExact);
+                const csvEndSamples = this.metadataHandler.tcToSamples(csvEndTCCorrect, sampleRate, fpsExact);
+                
+                // Subtract pre-roll from start, add post-roll to end
+                const prePostRollSamples = Math.round(prePostRoll * sampleRate);
+                const adjustedStartSamples = Math.max(0, csvStartSamples - prePostRollSamples);
+                const adjustedEndSamples = csvEndSamples + prePostRollSamples;
+                
+                const adjustedStartTC = this.metadataHandler.samplesToTC(adjustedStartSamples, sampleRate, fpsExact);
+                const adjustedEndTC = this.metadataHandler.samplesToTC(adjustedEndSamples, sampleRate, fpsExact);
+
+                // Process each matching take
+                for (let matchIdx = 0; matchIdx < matchIndices.length; matchIdx++) {
+                    const takeIndex = matchIndices[matchIdx];
+                    const sourceTake = this.files[takeIndex];
+
+                    // Generate output filename
+                    const outputFilename = this.generateDisambiguatedFilename(entry.fileName, matchIdx);
+
+                    // Check if file exists
+                    let shouldCreate = true;
+                    try {
+                        await directoryHandle.getFileHandle(outputFilename, { create: false });
+                        // File exists, prompt user
+                        shouldCreate = confirm(`File "${outputFilename}" already exists. Overwrite?`);
+                        if (!shouldCreate) continue;
+                    } catch (err) {
+                        // File doesn't exist, proceed
+                    }
+
+                    // Prepare metadata
+                    const outputMetadata = {
+                        scene: entry.scene,
+                        take: entry.take,
+                        filename: outputFilename
+                    };
+
+                    // Extract and create file (using adjusted TCs with pre/post roll)
+                    const result = await this.extractAudioRange(
+                        sourceTake,
+                        adjustedStartTC,
+                        adjustedEndTC,
+                        outputMetadata,
+                        outputFilename,
+                        directoryHandle,
+                        'wav',
+                        bitDepth // Use selected bit depth for conformed files
+                    );
+
+                    if (result.success) {
+                        filesCreated++;
+                        createdFiles.push(outputFilename);
+
+                        // Auto-add to file list
+                        const newFile = await result.handle.getFile();
+                        const metadata = await this.metadataHandler.parseFile(newFile);
+                        this.files.push({
+                            handle: result.handle,
+                            metadata: metadata,
+                            file: newFile,
+                            isGroup: false
+                        });
+                    } else {
+                        console.error(`Failed to create ${outputFilename}: ${result.error}`);
+                    }
+                }
+            }
+
+            // Close progress modal
+            if (progressModal) {
+                progressModal.classList.remove('active');
+            }
+
+            // Refresh UI
+            const tbody = document.getElementById('file-list-body');
+            tbody.innerHTML = '';
+            this.files.forEach((file, i) => this.addTableRow(i, file.metadata));
+            this.updateSelectionUI();
+
+            // Show summary
+            const summary = `Conform Complete\n\n` +
+                `CSV rows processed: ${totalRows}\n` +
+                `Files created: ${filesCreated}\n` +
+                `Rows skipped (no match): ${rowsSkipped}`;
+            
+            alert(summary);
+
+        } catch (err) {
+            if (err.name !== 'AbortError') {
+                console.error('Conform to CSV failed:', err);
+                alert(`Conform failed: ${err.message}`);
+            }
+        } finally {
+            document.body.style.cursor = 'default';
+        }
+    }
+
+    openConformCSVModal() {
+        const modal = document.getElementById('conform-csv-modal');
+        if (modal) {
+            modal.classList.add('active');
+            // Reset state
+            this.conformCSVEntries = null;
+            document.getElementById('csv-filename-display').textContent = 'No file selected';
+            document.getElementById('csv-preview-table').style.display = 'none';
+            document.getElementById('conform-csv-button').disabled = true;
+        }
+    }
+
+    closeConformCSVModal() {
+        const modal = document.getElementById('conform-csv-modal');
+        if (modal) {
+            modal.classList.remove('active');
+        }
+    }
+
+    async handleChooseCSV() {
+        try {
+            const [fileHandle] = await window.showOpenFilePicker({
+                types: [{
+                    description: 'CSV Files',
+                    accept: { 'text/csv': ['.csv'] }
+                }],
+                multiple: false
+            });
+
+            const file = await fileHandle.getFile();
+            const csvText = await file.text();
+
+            // Parse and validate CSV
+            const result = this.parseCSVFile(csvText);
+
+            if (!result.valid) {
+                alert(result.error);
+                return;
+            }
+
+            // Store entries
+            this.conformCSVEntries = result.entries;
+
+            // Update UI
+            document.getElementById('csv-filename-display').textContent = file.name;
+            
+            // Populate preview table
+            const tableBody = document.getElementById('csv-preview-body');
+            tableBody.innerHTML = '';
+            
+            result.entries.forEach(entry => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${entry.fileName}</td>
+                    <td>${entry.scene}</td>
+                    <td>${entry.take}</td>
+                    <td>${entry.length}</td>
+                    <td>${entry.startTC}</td>
+                `;
+                tableBody.appendChild(row);
+            });
+
+            document.getElementById('csv-preview-table').style.display = 'table';
+            document.getElementById('conform-csv-button').disabled = false;
+
+        } catch (err) {
+            if (err.name !== 'AbortError') {
+                console.error('Error choosing CSV:', err);
+                alert(`Failed to load CSV: ${err.message}`);
+            }
         }
     }
 
@@ -3258,6 +3816,16 @@ class App {
                         console.warn(`File System Access API "move" not supported on ${originalName}.`);
                         failedCount++;
                     }
+                }
+                
+                // Update representative metadata for groups
+                if (item.isGroup && item.siblings && item.siblings.length > 0) {
+                    // Extract base name from first sibling's new filename (without suffix)
+                    const firstSiblingFilename = item.siblings[0].metadata.filename;
+                    const baseNameMatch = firstSiblingFilename.match(/^(.+?)(_\d+)?\.wav$/);
+                    const newBaseName = baseNameMatch ? baseNameMatch[1] : firstSiblingFilename.replace(/\.wav$/, '');
+                    // Update representative metadata to show the new base name with _X suffix
+                    item.metadata.filename = `${newBaseName}_X.wav`;
                 }
             }
 
