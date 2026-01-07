@@ -30,14 +30,28 @@ function getSoundReportTakeListData() {
 }
 
 // CSV Export
-function exportSoundReportCSV() {
+async function exportSoundReportCSV() {
   const headerFields = getSoundReportHeaderValues();
   const { files, maxTracks } = getSoundReportTakeListData();
-  // CSV header
-  let csv = headerFields.map(f => f.label).join(',') + '\n';
+  
+  // Build CSV with header fields section at the top
+  let csv = '';
+  
+  // Add header fields section (Roll, Project, Date, etc.)
+  for (const field of headerFields) {
+    if (field.label !== 'None' && field.value) {
+      csv += `${field.label},"${field.value}"\n`;
+    }
+  }
+  
+  // Add blank line separator
+  csv += '\n';
+  
+  // Add take list table header
   csv += ['Filename','Scene','Take','TC Start','Duration']
     .concat(Array.from({length:maxTracks},(_,i)=>`Track ${i+1}`)).concat(['Notes']).join(',') + '\n';
-  // CSV rows
+  
+  // Add take list rows
   for (const file of files) {
     const md = file.metadata;
     const row = [md.filename||'',md.scene||'',md.take||'',md.tcStart||'',md.duration||''];
@@ -46,12 +60,16 @@ function exportSoundReportCSV() {
     row.push(md.notes||'');
     csv += row.map(v => '"'+String(v).replace(/"/g,'""')+'"').join(',') + '\n';
   }
-  // Save dialog
+  
+  // Download using blob (works with all folders)
   const blob = new Blob([csv], {type:'text/csv'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'SoundReport.csv';
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  window.app?.showToast('Sound Report exported successfully', 'success', 3000);
 }
 
 // PDF Export (striped rows, logo, header, table)
@@ -145,8 +163,16 @@ async function exportSoundReportPDF() {
       }
     }
   });
-  // Save dialog
-  doc.save('SoundReport.pdf');
+  
+  // Download using blob (works with all folders)
+  const pdfBlob = doc.output('blob');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(pdfBlob);
+  a.download = 'SoundReport.pdf';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  window.app?.showToast('Sound Report exported successfully', 'success', 3000);
 }
 
 // Helper: file to data URL
@@ -161,9 +187,14 @@ function fileToDataURL(file) {
 
 // Hook up export buttons
 function setupSoundReportExport() {
+  // Create/Export button
   const createBtn = document.getElementById('create-report-btn');
   if (!createBtn) return;
   createBtn.addEventListener('click', () => {
+    // Close the modal first
+    const modal = document.getElementById('sound-report-modal');
+    if (modal) modal.style.display = 'none';
+    
     const format = document.querySelector('input[name="report-export-format"]:checked')?.value || 'csv';
     if (format === 'pdf') {
       exportSoundReportPDF();

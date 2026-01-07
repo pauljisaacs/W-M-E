@@ -1582,6 +1582,44 @@ select {
     border-top: 1px solid var(--border-color);
     display: flex;
     gap: 1.5rem;
-    justify-content: flex-end;
+    justify-content: flex-start;
+    align-items: center;
+    flex-wrap: wrap;
     background: var(--bg-panel);
+}
+
+.report-save-to-group {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-right: auto;
+}
+
+.report-save-to-group label {
+    font-weight: 500;
+    margin: 0;
+}
+
+.save-to-path-container {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 0.5rem 0.75rem;
+}
+
+.save-to-path {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    max-width: 300px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.btn.small {
+    padding: 0.4rem 0.8rem;
+    font-size: 0.85rem;
 }

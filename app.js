@@ -3874,9 +3874,17 @@ class App {
 
     openExportModal() {
         if (this.selectedIndices.size === 0) return;
-        const count = this.selectedIndices.size;
         const modalHeader = document.querySelector('#export-modal .modal-header h3');
-        modalHeader.textContent = count === 1 ? 'Export Mix' : `Export ${count} Files`;
+        
+        // Check if a region is drawn
+        if (this.region.start !== null && this.region.end !== null && this.currentFileMetadata) {
+            // Region is drawn - show filename with "Region"
+            modalHeader.textContent = `Export ${this.currentFileMetadata.filename} Region`;
+        } else {
+            // No region drawn - show standard text
+            const count = this.selectedIndices.size;
+            modalHeader.textContent = count === 1 ? 'Export Mix' : `Export ${count} Files`;
+        }
 
         // Restore last selected mix mode
         const lastMixMode = localStorage.getItem('exportMixMode') || 'current';
@@ -3963,7 +3971,20 @@ class App {
     async handleExport() {
         const format = document.getElementById('export-format').value;
         const mixMode = document.querySelector('input[name="mix-mode"]:checked').value;
-        const selectedFiles = Array.from(this.selectedIndices).map(i => this.files[i]);
+        
+        // If a region is drawn, only export the currently displayed file
+        // Otherwise, export all selected files
+        let selectedFiles;
+        if (this.region.start !== null && this.region.end !== null && this.currentFileMetadata) {
+            // Region export - only export the currently loaded file
+            const currentFileIndex = Array.from(this.selectedIndices).find(i => 
+                this.files[i].metadata.filename === this.currentFileMetadata.filename
+            );
+            selectedFiles = currentFileIndex !== undefined ? [this.files[currentFileIndex]] : [];
+        } else {
+            // No region - export all selected files
+            selectedFiles = Array.from(this.selectedIndices).map(i => this.files[i]);
+        }
 
         if (selectedFiles.length === 0) return;
 
@@ -4204,6 +4225,11 @@ class App {
                         successCount++;
                     }
                 }
+            }
+
+            // Show success notification
+            if (successCount > 0) {
+                this.showToast('Export successful', 'success', 3000);
             }
         } catch (err) {
             console.error('Export process failed:', err);
