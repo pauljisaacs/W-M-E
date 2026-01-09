@@ -1391,7 +1391,7 @@ class App {
         let key;
         if (typeof keyOrIndex === 'number') {
             const keyMap = [
-                'channels', 'bitDepth', 'sampleRate', 'filename', 'format', 'scene', 'take', 'duration', 'tcStart', 'fps', 'notes', 'tape', 'project', 'date', 'fileSize'
+                'channels', 'bitDepth', 'sampleRate', 'filename', 'format', 'scene', 'take', 'duration', 'tcStart', 'fps', 'fileSize', 'tape', 'project', 'endTC', 'notes'
             ];
             key = keyMap[keyOrIndex];
         } else {
@@ -1408,11 +1408,24 @@ class App {
         this.files.sort((a, b) => {
             let valA = a.metadata[key] || '';
             let valB = b.metadata[key] || '';
-
+            
+            // For endTC, calculate it since it's not stored directly in metadata
+            if (key === 'endTC') {
+                valA = this.calculateEndTC(a.metadata);
+                valB = this.calculateEndTC(b.metadata);
+                // Convert to seconds for numeric comparison
+                valA = this.parseTimecodeToSeconds(valA) || 0;
+                valB = this.parseTimecodeToSeconds(valB) || 0;
+            }
             // Numeric sort for specific columns
-            if (['take', 'sampleRate', 'channels', 'bitDepth', 'fileSize'].includes(key)) {
+            else if (['take', 'sampleRate', 'channels', 'bitDepth', 'fileSize'].includes(key)) {
                 valA = parseFloat(valA) || 0;
                 valB = parseFloat(valB) || 0;
+            }
+            // TC-based sort for timecode columns (convert to comparable format)
+            else if (['tcStart'].includes(key)) {
+                valA = this.parseTimecodeToSeconds(valA) || 0;
+                valB = this.parseTimecodeToSeconds(valB) || 0;
             }
 
             if (valA < valB) return this.sortDirection === 'asc' ? -1 : 1;
@@ -1591,9 +1604,11 @@ class App {
                             // Refresh the file object from the handle
                             target.file = await target.handle.getFile();
 
-                            // Update metadata with what we just saved (instead of re-parsing)
-                            // This ensures the UI shows exactly what was saved
-                            target.metadata = { ...target.metadata, ...metadataToSave };
+                            // Re-parse the file to get the updated iXML/bEXT metadata
+                            const freshMetadata = await this.metadataHandler.parseFile(target.file);
+                            
+                            // Merge the fresh metadata (especially iXML and bEXT chunks) with what we just saved
+                            target.metadata = { ...target.metadata, ...metadataToSave, ...freshMetadata };
                         }
                     } else {
                         // Fallback download
@@ -1801,7 +1816,7 @@ class App {
         safeSetDisabled('batch-edit-btn', !hasSelection);
         this.updateSaveButtonState();
         safeSetDisabled('batch-remove-btn', !hasSelection);
-        safeSetDisabled('diagnostics-btn', this.selectedIndices.size !== 1);
+        safeSetDisabled('diagnostics-btn', !hasSelection);
         safeSetDisabled('corrupt-ixml-modal-btn', this.selectedIndices.size !== 1);
         safeSetDisabled('normalize-btn', !hasSelection);
         safeSetDisabled('rename-btn', !hasSelection);
@@ -1855,13 +1870,15 @@ class App {
         // Enable conform to CSV button if one or more files are selected
         safeSetDisabled('conform-csv-btn', this.selectedIndices.size === 0);
         
-        // Enable repair button if exactly one file is selected AND it needs repair OR is missing iXML
+        // Enable repair button if any selected file needs repair OR is missing iXML
         let needsRepair = false;
-        if (this.selectedIndices.size === 1) {
-            const selectedIndex = Array.from(this.selectedIndices)[0];
-            const selectedFile = this.files[selectedIndex];
+        for (const index of this.selectedIndices) {
+            const selectedFile = this.files[index];
             const metadata = selectedFile && selectedFile.metadata;
-            needsRepair = metadata && (metadata.needsIXMLRepair || !metadata.ixmlRaw);
+            if (metadata && (metadata.needsIXMLRepair || !metadata.ixmlRaw)) {
+                needsRepair = true;
+                break;
+            }
         }
         safeSetDisabled('repair-ixmlbtn', !needsRepair);
         safeSetDisabled('repair-ixml-modal-btn', !needsRepair);
@@ -1907,7 +1924,7 @@ class App {
         modal.classList.remove('active');
     }
 
-    applyBatchEdit() {
+    async applyBatchEdit() {
         const updates = {};
 
         // Collect checked fields
@@ -1945,19 +1962,23 @@ class App {
         // Restore selection
         this.updateSelectionUI();
 
-        // Enable save button
-        if (updateCount > 0) {
-            document.getElementById('batch-save-btn').disabled = false;
-            
-            // Trigger auto-save if enabled
-            if (this.autoSaveEnabled) {
-                this.scheduleAutoSave();
-            }
-        }
-
         this.closeBatchEditModal();
 
-        console.log(`Applied ${Object.keys(updates).length} field(s) to ${this.selectedIndices.size} file(s)`);
+        // Save the files immediately to persist the changes to both bEXT and iXML
+        if (updateCount > 0) {
+            document.body.style.cursor = 'wait';
+            try {
+                await this.saveSelected();
+                console.log(`Applied and saved ${Object.keys(updates).length} field(s) to ${this.selectedIndices.size} file(s)`);
+            } catch (err) {
+                console.error('Error saving batch edits:', err);
+                alert('Error saving changes. Please try again.');
+            } finally {
+                document.body.style.cursor = 'default';
+            }
+        } else {
+            console.log(`Applied ${Object.keys(updates).length} field(s) to ${this.selectedIndices.size} file(s)`);
+        }
     }
 
     async viewIXML() {
@@ -2987,112 +3008,129 @@ class App {
     }
 
     async handleRepairIXML() {
-        // Get the selected file
-        if (this.selectedIndices.size !== 1) {
-            alert('Please select exactly one file to repair.');
+        // Get the selected files
+        if (this.selectedIndices.size === 0) {
+            alert('Please select at least one file to repair.');
             return;
         }
 
-        const selectedIndex = Array.from(this.selectedIndices)[0];
-        const selectedFile = this.files[selectedIndex];
-        const metadata = selectedFile.metadata;
-
-        // Check if file needs repair or is missing iXML entirely
-        const isMissingIXML = !metadata.ixmlRaw;
-        const needsIXMLRepair = metadata.needsIXMLRepair && metadata.ixmlRepairData;
-
-        if (!isMissingIXML && !needsIXMLRepair) {
-            alert('This file does not need repair or repair data is not available.');
-            return;
-        }
+        const selectedIndices = Array.from(this.selectedIndices);
+        let successCount = 0;
+        let failCount = 0;
+        const failedFiles = [];
 
         try {
             document.body.style.cursor = 'wait';
-            console.log(`[handleRepairIXML] Repairing ${metadata.filename}`);
+            console.log(`[handleRepairIXML] Repairing ${selectedIndices.length} file(s)...`);
             
-            // Get the file handle for writing
-            if (!selectedFile.handle) {
-                alert('Cannot repair: file handle not available. Please re-import the file.');
-                return;
-            }
+            // Process each selected file sequentially
+            for (const selectedIndex of selectedIndices) {
+                const selectedFile = this.files[selectedIndex];
+                const metadata = selectedFile.metadata;
 
-            // Read the original file to get the full buffer
-            const file = selectedFile.file;
-            const originalBuffer = await file.arrayBuffer();
+                try {
+                    console.log(`[handleRepairIXML] Processing ${metadata.filename} (${successCount + failCount + 1}/${selectedIndices.length})`);
+                    
+                    // Check if file needs repair or is missing iXML entirely
+                    const isMissingIXML = !metadata.ixmlRaw;
+                    const needsIXMLRepair = metadata.needsIXMLRepair && metadata.ixmlRepairData;
 
-            let repairData;
-            if (isMissingIXML) {
-                // Create a complete new iXML chunk from metadata
-                console.log('[handleRepairIXML] No iXML found, creating complete new iXML chunk');
-                
-                // Extract track names from bEXT description field (if present)
-                const bextTrackNames = this.metadataHandler.extractTrackNamesFromBext(metadata.description);
-                console.log('[handleRepairIXML] Track names from bEXT:', bextTrackNames);
-                
-                // If we found track names in bEXT, add them to metadata for iXML creation
-                if (bextTrackNames.length > 0) {
-                    // Create trackNames array for iXML, filling in from bEXT
-                    const trackNames = [];
-                    for (let i = 0; i < metadata.channels; i++) {
-                        trackNames[i] = bextTrackNames[i] || `Track ${i + 1}`;
+                    if (!isMissingIXML && !needsIXMLRepair) {
+                        console.log(`[handleRepairIXML] ${metadata.filename} does not need repair, skipping`);
+                        continue;
                     }
-                    metadata.trackNames = trackNames;
-                    console.log('[handleRepairIXML] Using track names from bEXT:', trackNames);
+
+                    // Get the file handle for writing
+                    if (!selectedFile.handle) {
+                        throw new Error('File handle not available. Please re-import the file.');
+                    }
+
+                    // Read the original file to get the full buffer
+                    const file = selectedFile.file;
+                    const originalBuffer = await file.arrayBuffer();
+
+                    let repairData;
+                    if (isMissingIXML) {
+                        // Create a complete new iXML chunk from metadata
+                        console.log('[handleRepairIXML] No iXML found, creating complete new iXML chunk');
+                        
+                        // Extract track names from bEXT description field (if present)
+                        const bextTrackNames = this.metadataHandler.extractTrackNamesFromBext(metadata.description);
+                        console.log('[handleRepairIXML] Track names from bEXT:', bextTrackNames);
+                        
+                        // If we found track names in bEXT, add them to metadata for iXML creation
+                        if (bextTrackNames.length > 0) {
+                            // Create trackNames array for iXML, filling in from bEXT
+                            const trackNames = [];
+                            for (let i = 0; i < metadata.channels; i++) {
+                                trackNames[i] = bextTrackNames[i] || `Track ${i + 1}`;
+                            }
+                            metadata.trackNames = trackNames;
+                            console.log('[handleRepairIXML] Using track names from bEXT:', trackNames);
+                        }
+                        
+                        console.log('[handleRepairIXML] Metadata for iXML creation:', {
+                            fpsExact: metadata.fpsExact,
+                            fps: metadata.fps,
+                            sampleRate: metadata.sampleRate,
+                            bitDepth: metadata.bitDepth,
+                            timeReference: metadata.timeReference,
+                            project: metadata.project,
+                            scene: metadata.scene,
+                            take: metadata.take,
+                            trackNames: metadata.trackNames
+                        });
+                        repairData = this.metadataHandler.createIXMLChunk(metadata);
+                        console.log('[handleRepairIXML] Created new iXML:', new TextDecoder().decode(repairData).substring(0, 300));
+                    } else {
+                        // Repair the incomplete/corrupted iXML
+                        console.log('[handleRepairIXML] Original iXML:', metadata.ixmlRaw?.substring(0, 200));
+                        console.log('[handleRepairIXML] Repair data:', metadata.ixmlRepairData?.substring(0, 200));
+                        repairData = metadata.ixmlRepairData;
+                    }
+
+                    // Repair the iXML in the file
+                    await this.metadataHandler.repairIXMLInFile(
+                        selectedFile.handle,
+                        originalBuffer,
+                        repairData
+                    );
+
+                    console.log('[handleRepairIXML] File write completed, re-reading to verify...');
+
+                    // Re-read the file from disk to verify repair worked
+                    const repairedFile = await selectedFile.handle.getFile();
+                    const repairedBuffer = await repairedFile.arrayBuffer();
+                    const repairedIXML = this.metadataHandler.getIXMLChunk(repairedBuffer);
+                    
+                    console.log('[handleRepairIXML] Re-read iXML:', repairedIXML?.substring(0, 200));
+                    
+                    // Validate that the repair worked
+                    if (repairedIXML) {
+                        const revalidation = this.metadataHandler.validateAndFixIXML(repairedIXML);
+                        if (revalidation.needsRepair) {
+                            throw new Error('File was written but may not have been properly repaired.');
+                        }
+                    }
+
+                    // Update the file object in the files array with the freshly read file
+                    // This is critical on macOS where file handles can become stale after write operations
+                    selectedFile.file = repairedFile;
+
+                    // Update metadata to mark as repaired
+                    metadata.needsIXMLRepair = false;
+                    metadata.ixmlRaw = repairedIXML;
+
+                    const actionMsg = isMissingIXML ? 'added' : 'repaired';
+                    console.log(`[handleRepairIXML] Successfully ${actionMsg} iXML for ${metadata.filename}`);
+                    successCount++;
+
+                } catch (err) {
+                    console.error(`[handleRepairIXML] Failed to repair ${metadata.filename}:`, err);
+                    failedFiles.push(`${metadata.filename}: ${err.message}`);
+                    failCount++;
                 }
-                
-                console.log('[handleRepairIXML] Metadata for iXML creation:', {
-                    fpsExact: metadata.fpsExact,
-                    fps: metadata.fps,
-                    sampleRate: metadata.sampleRate,
-                    bitDepth: metadata.bitDepth,
-                    timeReference: metadata.timeReference,
-                    project: metadata.project,
-                    scene: metadata.scene,
-                    take: metadata.take,
-                    trackNames: metadata.trackNames
-                });
-                repairData = this.metadataHandler.createIXMLChunk(metadata);
-                console.log('[handleRepairIXML] Created new iXML:', new TextDecoder().decode(repairData).substring(0, 300));
-            } else {
-                // Repair the incomplete/corrupted iXML
-                console.log('[handleRepairIXML] Original iXML:', metadata.ixmlRaw?.substring(0, 200));
-                console.log('[handleRepairIXML] Repair data:', metadata.ixmlRepairData?.substring(0, 200));
-                repairData = metadata.ixmlRepairData;
             }
-
-            // Repair the iXML in the file
-            await this.metadataHandler.repairIXMLInFile(
-                selectedFile.handle,
-                originalBuffer,
-                repairData
-            );
-
-            console.log('[handleRepairIXML] File write completed, re-reading to verify...');
-
-            // Re-read the file from disk to verify repair worked
-            const repairedFile = await selectedFile.handle.getFile();
-            const repairedBuffer = await repairedFile.arrayBuffer();
-            const repairedIXML = this.metadataHandler.getIXMLChunk(repairedBuffer);
-            
-            console.log('[handleRepairIXML] Re-read iXML:', repairedIXML?.substring(0, 200));
-            
-            // Validate that the repair worked
-            if (repairedIXML) {
-                const revalidation = this.metadataHandler.validateAndFixIXML(repairedIXML);
-                if (revalidation.needsRepair) {
-                    console.warn('[handleRepairIXML] File still needs repair after write!');
-                    alert('Warning: File was written but may not have been properly repaired. Please try again.');
-                    return;
-                }
-            }
-
-            // Update the file object in the files array with the freshly read file
-            // This is critical on macOS where file handles can become stale after write operations
-            selectedFile.file = repairedFile;
-
-            // Update metadata to mark as repaired
-            metadata.needsIXMLRepair = false;
-            metadata.ixmlRaw = repairedIXML;
 
             // Refresh the table to remove red highlighting
             const tbody = document.getElementById('file-list-body');
@@ -3100,13 +3138,16 @@ class App {
             this.files.forEach((file, i) => this.addTableRow(i, file.metadata));
             this.updateSelectionUI();
 
-            const actionMsg = isMissingIXML ? 'added' : 'repaired';
-            alert(`✅ Successfully ${actionMsg} iXML for ${metadata.filename}`);
-            console.log(`[handleRepairIXML] Successfully ${actionMsg} iXML for ${metadata.filename}`);
+            // Show summary
+            let message = `✅ Successfully repaired ${successCount} file(s)`;
+            if (failCount > 0) {
+                message += `\n\n⚠️ Failed to repair ${failCount} file(s):\n${failedFiles.join('\n')}`;
+            }
+            alert(message);
 
         } catch (err) {
-            console.error('iXML repair failed:', err);
-            alert(`Repair failed: ${err.message}`);
+            console.error('iXML repair batch failed:', err);
+            alert(`Repair batch failed: ${err.message}`);
         } finally {
             document.body.style.cursor = 'default';
         }
@@ -3594,6 +3635,158 @@ class App {
         return uniqueName;
     }
 
+    async getUniqueFileNameWithParens(directoryHandle, baseFileName) {
+        /**
+         * Check if file exists, and if so, append (1), (2), etc.
+         * until a unique filename is found
+         */
+        try {
+            // First try the base filename
+            await directoryHandle.getFileHandle(baseFileName, { create: false });
+            // If we get here, file exists, so we need to find a unique name
+        } catch (err) {
+            if (err.name === 'NotFoundError') {
+                // File doesn't exist, base name is fine
+                return baseFileName;
+            }
+            // Other error, log it but proceed with base name
+            console.warn('Error checking file existence:', err);
+            return baseFileName;
+        }
+
+        // File exists, append (number) suffix
+        const nameParts = baseFileName.split('.');
+        const extension = nameParts.pop();
+        const nameWithoutExt = nameParts.join('.');
+
+        let counter = 1;
+        let uniqueName;
+        let fileExists = true;
+
+        while (fileExists) {
+            uniqueName = `${nameWithoutExt} (${counter}).${extension}`;
+            try {
+                await directoryHandle.getFileHandle(uniqueName, { create: false });
+                // File exists, increment counter
+                counter++;
+            } catch (err) {
+                if (err.name === 'NotFoundError') {
+                    // File doesn't exist, we found a unique name
+                    fileExists = false;
+                } else {
+                    // Other error, use this name anyway
+                    fileExists = false;
+                }
+            }
+        }
+
+        return uniqueName;
+    }
+
+    async generateFlexibleFilename(metadata, field1, field2, field3, sep1, sep2, custom1, custom2, custom3, trackSuffix = '', outputDirHandle = null) {
+        /**
+         * Generate filename using flexible field-based pattern:
+         * <Field1><Sep1><Field2><Sep2><Field3>.wav
+         * 
+         * Field options: none, project, tape, scene, take, custom
+         * Sep options: none (''), T, -, _, =, ~, +, comma, dot
+         * 
+         * If all metadata fields are missing, use DateTime (YYMMDD-HHMMSS-NN with counter)
+         */
+        
+        const getFieldValue = (fieldType, customValue, fieldNum) => {
+            if (fieldType === 'none') {
+                return null;
+            } else if (fieldType === 'custom') {
+                return customValue || null;
+            } else if (fieldType === 'project') {
+                return metadata.project || null;
+            } else if (fieldType === 'tape') {
+                return metadata.tape || null;
+            } else if (fieldType === 'scene') {
+                // Pad scene with leading zeros to 2 digits if numeric
+                const scene = metadata.scene;
+                if (scene && /^\d+$/.test(scene)) {
+                    return scene.padStart(2, '0');
+                }
+                return scene || null;
+            } else if (fieldType === 'take') {
+                // Pad take with leading zeros to 2 digits if numeric
+                const take = metadata.take;
+                if (take && /^\d+$/.test(take)) {
+                    return take.padStart(2, '0');
+                }
+                return take || null;
+            }
+            return null;
+        };
+
+        const value1 = getFieldValue(field1, custom1, 1);
+        const value2 = getFieldValue(field2, custom2, 2);
+        const value3 = getFieldValue(field3, custom3, 3);
+
+        // If all values are null/missing, use DateTime as fallback with incrementing counter
+        if (!value1 && !value2 && !value3) {
+            const now = new Date();
+            const year = String(now.getFullYear()).slice(-2);
+            const month = String(now.getMonth() + 1).padStart(2, '0');
+            const day = String(now.getDate()).padStart(2, '0');
+            const hours = String(now.getHours()).padStart(2, '0');
+            const minutes = String(now.getMinutes()).padStart(2, '0');
+            const seconds = String(now.getSeconds()).padStart(2, '0');
+            
+            // Generate base filename with hyphens: YYMMDD-HHMMSS
+            const dateTimeBase = `${year}${month}${day}-${hours}${minutes}${seconds}`;
+            
+            // If no output directory provided, return base format with counter 01
+            if (!outputDirHandle) {
+                return `${dateTimeBase}-01${trackSuffix}.wav`;
+            }
+            
+            // Try counter from 01-99 to find a unique filename
+            for (let counter = 1; counter <= 99; counter++) {
+                const counterStr = String(counter).padStart(2, '0');
+                const dateTimeWithCounter = `${dateTimeBase}-${counterStr}`;
+                const testFilename = `${dateTimeWithCounter}${trackSuffix}.wav`;
+                
+                // Check if this filename would be unique
+                try {
+                    // Try to get the file - if it doesn't exist, we found our unique name
+                    await outputDirHandle.getFileHandle(testFilename);
+                    // File exists, continue to next counter
+                } catch (err) {
+                    // File doesn't exist, use this filename
+                    return testFilename;
+                }
+            }
+            
+            // Fallback to counter 99 if all are taken (unlikely)
+            return `${dateTimeBase}-99${trackSuffix}.wav`;
+        }
+
+        // Build filename with separators
+        let parts = [];
+        
+        if (value1) parts.push(value1);
+        
+        if (value2) {
+            if (parts.length > 0 && sep1) {
+                parts.push(sep1);
+            }
+            parts.push(value2);
+        }
+        
+        if (value3) {
+            if (parts.length > 0 && sep2) {
+                parts.push(sep2);
+            }
+            parts.push(value3);
+        }
+
+        const filename = parts.join('');
+        return `${filename}${trackSuffix}.wav`;
+    }
+
     // ========== End Multi-Process Helper Methods ==========
 
     openMultiProcessModal() {
@@ -3704,6 +3897,30 @@ class App {
         // Initialize state on modal open
         handleExtractModeChange();
         
+        // Handle custom field visibility for rename
+        const updateCustomFieldVisibility = () => {
+            const field1 = document.getElementById('mp-rename-field1').value;
+            const field2 = document.getElementById('mp-rename-field2').value;
+            const field3 = document.getElementById('mp-rename-field3').value;
+            
+            const custom1Input = document.getElementById('mp-rename-custom1');
+            const custom2Input = document.getElementById('mp-rename-custom2');
+            const custom3Input = document.getElementById('mp-rename-custom3');
+            
+            // Show/hide custom inputs below their respective selects
+            custom1Input.style.display = field1 === 'custom' ? 'block' : 'none';
+            custom2Input.style.display = field2 === 'custom' ? 'block' : 'none';
+            custom3Input.style.display = field3 === 'custom' ? 'block' : 'none';
+        };
+        
+        // Add change listeners to field selects
+        document.getElementById('mp-rename-field1').addEventListener('change', updateCustomFieldVisibility);
+        document.getElementById('mp-rename-field2').addEventListener('change', updateCustomFieldVisibility);
+        document.getElementById('mp-rename-field3').addEventListener('change', updateCustomFieldVisibility);
+        
+        // Initialize custom field visibility
+        updateCustomFieldVisibility();
+        
         // Note: CSS already handles the disabled state with :not(:checked) ~ selector
         // This is just for any additional JavaScript-based interactivity if needed
     }
@@ -3776,11 +3993,16 @@ class App {
             prePostRoll: extractAudio ? parseInt(document.getElementById('mp-prepost-roll').value) : 0,
             combineToPoly,
             normalize,
-            normalizeLevel: normalize ? parseFloat(document.getElementById('mp-normalize-level').value) : -6.1,
+            normalizeLevel: normalize ? parseFloat(document.getElementById('mp-normalize-level').value) : -1.0,
             rename,
-            renamePattern: rename ? document.getElementById('mp-rename-pattern').value : null,
-            renameSeparator1: rename ? document.getElementById('mp-rename-separator1').value : null,
-            renameSeparator2: rename ? document.getElementById('mp-rename-separator2').value : null,
+            renameField1: rename ? document.getElementById('mp-rename-field1').value : null,
+            renameField2: rename ? document.getElementById('mp-rename-field2').value : null,
+            renameField3: rename ? document.getElementById('mp-rename-field3').value : null,
+            renameSeparator1: rename ? document.getElementById('mp-rename-separator1').value : '',
+            renameSeparator2: rename ? document.getElementById('mp-rename-separator2').value : '',
+            renameCustom1: rename ? document.getElementById('mp-rename-custom1').value : '',
+            renameCustom2: rename ? document.getElementById('mp-rename-custom2').value : '',
+            renameCustom3: rename ? document.getElementById('mp-rename-custom3').value : '',
             outputBitDepth: document.getElementById('mp-output-bitdepth').value,
             keepIntermediateFiles: document.getElementById('mp-keep-intermediate').checked,
             outputDirHandle
@@ -3872,6 +4094,7 @@ class App {
                 const renamed = await this.mpRename(processedFiles, options);
                 successCount += renamed.filter(f => f.success).length;
                 failCount += renamed.filter(f => !f.success).length;
+                processedFiles = renamed.filter(f => f.success).map(f => f.fileObj);
                 
                 // Mark previous files as intermediate (rename creates new files)
                 if (!options.keepIntermediateFiles) {
@@ -4219,9 +4442,73 @@ class App {
     }
 
     async mpRename(fileList, options) {
-        // Placeholder for renaming
-        console.log('[MultiProcess] Rename not yet implemented');
-        return fileList.map(f => ({ success: true, fileObj: f }));
+        const results = [];
+
+        for (const fileObj of fileList) {
+            try {
+                // Extract track suffix from original filename (e.g., '_1', '_2', '_3')
+                const originalName = fileObj.metadata.filename;
+                const trackSuffixMatch = originalName.match(/(_\d+)\.wav$/);
+                const trackSuffix = trackSuffixMatch ? trackSuffixMatch[1] : '';
+
+                // Generate new filename using the flexible field-based pattern
+                const newFileName = await this.generateFlexibleFilename(
+                    fileObj.metadata, 
+                    options.renameField1,
+                    options.renameField2,
+                    options.renameField3,
+                    options.renameSeparator1, 
+                    options.renameSeparator2,
+                    options.renameCustom1,
+                    options.renameCustom2,
+                    options.renameCustom3,
+                    trackSuffix,
+                    options.outputDirHandle
+                );
+
+                console.log(`[MultiProcess] Renaming ${originalName} to ${newFileName}`);
+
+                // Check if filename is the same (no change needed)
+                if (originalName === newFileName) {
+                    console.log(`[MultiProcess] Filename unchanged for ${originalName}`);
+                    results.push({ success: true, fileObj });
+                    continue;
+                }
+
+                // Read the original file as a blob
+                const fileBlob = fileObj.file;
+
+                // Ensure unique filename to prevent overwrites with (1), (2), etc.
+                const uniqueFileName = await this.getUniqueFileNameWithParens(options.outputDirHandle, newFileName);
+
+                // Write to new file with the new name
+                const newFileHandle = await options.outputDirHandle.getFileHandle(uniqueFileName, { create: true });
+                const writable = await newFileHandle.createWritable();
+                await writable.write(fileBlob);
+                await writable.close();
+
+                // Parse the new file and create file object
+                const newFile = await newFileHandle.getFile();
+                const metadata = await this.metadataHandler.parseFile(newFile);
+                const newFileObj = {
+                    handle: newFileHandle,
+                    metadata: metadata,
+                    file: newFile,
+                    isGroup: false
+                };
+
+                // Add to files list
+                this.files.push(newFileObj);
+
+                results.push({ success: true, fileObj: newFileObj });
+
+            } catch (err) {
+                console.error(`[MultiProcess] Rename failed for ${fileObj.metadata.filename}:`, err);
+                results.push({ success: false, error: err.message });
+            }
+        }
+
+        return results;
     }
 
     // ========== End Multi-Process Modal Methods ==========
@@ -4534,7 +4821,7 @@ class App {
         if (pattern === 'project-scene-take') {
             name = `${project}${sep1}${scene}${sep2}${take}`;
         } else {
-            name = `${scene}${sep2}${take}`;
+            name = `${scene}${sep1}${take}`;
         }
 
         // Append track suffix if provided (for sibling files)

@@ -247,7 +247,7 @@
                                 <button id="corrupt-ixml-modal-btn" class="btn secondary" style="background-color: #ff6b6b; color: white; margin-right: 1rem;">Corrupt iXML (Test)</button>
                                 <button id="repair-ixml-modal-btn" class="btn secondary" title="Repair the iXML metadata in the selected file">Repair iXML</button>
                             </div>
-                            <p style="margin-top: 1rem; font-size: 0.9rem; color: var(--text-secondary);">Note: These tools only work when a single WAV file is selected.</p>
+                            <p style="margin-top: 1rem; font-size: 0.9rem; color: var(--text-secondary);">Note: Corrupt iXML only works on a single file. Repair iXML works on one or more selected files.</p>
                         </div>
                     </div>
                 </div>
@@ -628,7 +628,7 @@
                     <div class="mp-inline-options" id="mp-normalize-options">
                         <div class="mp-input-group">
                             <label>Level (dBFS):</label>
-                            <input type="number" id="mp-normalize-level" value="-6.1" step="0.1" min="-60" max="0">
+                            <input type="number" id="mp-normalize-level" value="-1.0" step="0.1" min="-60" max="0">
                         </div>
                     </div>
                 </div>
@@ -641,42 +641,68 @@
                     </label>
                     <div class="mp-inline-options" id="mp-rename-options">
                         <div class="mp-input-group">
-                            <label>Pattern:</label>
-                            <select id="mp-rename-pattern" style="min-width: 216px;">
-                                <option value="scene-sep1-take" selected>Scene[Sep1]Take</option>
-                                <option value="project-sep2-scene-sep1-take">Project[Sep2]Scene[Sep1]Take</option>
-                                <option value="tape-sep2-scene-sep1-take">Tape[Sep2]Scene[Sep1]Take</option>
+                            <label>Field 1:</label>
+                            <select id="mp-rename-field1" class="mp-field-select" style="min-width: 90px;">
+                                <option value="none">None</option>
+                                <option value="project">Project</option>
+                                <option value="tape">Tape</option>
+                                <option value="scene">Scene</option>
+                                <option value="take">Take</option>
+                                <option value="custom" selected>Custom</option>
+                            </select>
+                            <input type="text" id="mp-rename-custom1" placeholder="custom text" style="min-width: 90px; display: none;">
+                        </div>
+                        <div class="mp-input-group">
+                            <label>Sep 1:</label>
+                            <select id="mp-rename-separator1" style="min-width: 60px;">
+                                <option value="" selected>None</option>
+                                <option value="T">T</option>
+                                <option value="-">-</option>
+                                <option value="_">_</option>
+                                <option value="=">=</option>
+                                <option value="~">~</option>
+                                <option value="+">+</option>
+                                <option value=",">,</option>
+                                <option value=".">.</option>
                             </select>
                         </div>
                         <div class="mp-input-group">
-                            <label>Sep1:</label>
-                            <select id="mp-rename-separator1" style="min-width: 30px;">
-                                <option value="">(None)</option>
-                                <option value="_">_</option>
+                            <label>Field 2:</label>
+                            <select id="mp-rename-field2" class="mp-field-select" style="min-width: 90px;">
+                                <option value="none">None</option>
+                                <option value="project">Project</option>
+                                <option value="tape">Tape</option>
+                                <option value="scene" selected>Scene</option>
+                                <option value="take">Take</option>
+                                <option value="custom">Custom</option>
+                            </select>
+                            <input type="text" id="mp-rename-custom2" placeholder="custom text" style="min-width: 90px; display: none;">
+                        </div>
+                        <div class="mp-input-group">
+                            <label>Sep 2:</label>
+                            <select id="mp-rename-separator2" style="min-width: 60px;">
+                                <option value="">None</option>
+                                <option value="T" selected>T</option>
                                 <option value="-">-</option>
-                                <option value=".">.</option>
-                                <option value=" ">space</option>
-                                <option value="+">+</option>
+                                <option value="_">_</option>
                                 <option value="=">=</option>
                                 <option value="~">~</option>
+                                <option value="+">+</option>
                                 <option value=",">,</option>
-                                <option value="" selected>T</option>
+                                <option value=".">.</option>
                             </select>
                         </div>
                         <div class="mp-input-group">
-                            <label>Sep2:</label>
-                            <select id="mp-rename-separator2" style="min-width: 30px;">
-                                <option value="">(None)</option>
-                                <option value="_">_</option>
-                                <option value="-">-</option>
-                                <option value=".">.</option>
-                                <option value=" ">space</option>
-                                <option value="+">+</option>
-                                <option value="=">=</option>
-                                <option value="~">~</option>
-                                <option value=",">,</option>
-                                <option value="" selected>(None)</option>
+                            <label>Field 3:</label>
+                            <select id="mp-rename-field3" class="mp-field-select" style="min-width: 90px;">
+                                <option value="none">None</option>
+                                <option value="project">Project</option>
+                                <option value="tape">Tape</option>
+                                <option value="scene">Scene</option>
+                                <option value="take" selected>Take</option>
+                                <option value="custom">Custom</option>
                             </select>
+                            <input type="text" id="mp-rename-custom3" placeholder="custom text" style="min-width: 90px; display: none;">
                         </div>
                     </div>
                 </div>
