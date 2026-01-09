@@ -91,6 +91,7 @@
             <button id="report-btn" class="btn secondary">Report</button>
             <button id="export-tc-range-btn" class="btn secondary" disabled>Export TC Range</button>
             <button id="conform-csv-btn" class="btn secondary">Conform to CSV</button>
+            <button id="multi-process-btn" class="btn secondary">Multi-Process</button>
         </div>
 
         <!-- Player & Waveform -->
@@ -532,6 +533,180 @@
                     <div id="conform-progress-bar" style="height: 100%; background: var(--accent-primary); width: 0%; transition: width 0.3s;"></div>
                 </div>
                 <p id="conform-progress-text" style="text-align: center; color: var(--text-muted);">0%</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Multi-Process Modal -->
+    <div id="multi-process-modal" class="modal">
+        <div class="modal-content multi-process-modal">
+            <div class="modal-header">
+                <h3>MULTI-PROCESS</h3>
+                <button class="close-modal" id="multi-process-close-btn">&times;</button>
+            </div>
+            <p style="padding: 0 1.5rem; color: var(--text-muted); font-size: 0.9rem; margin: 0.5rem 0 1rem 0;">Choose which operations to apply to the selected files</p>
+
+            <div class="modal-body">
+                
+                <!-- Keep Intermediate Files Option -->
+                <div style="padding: 0.75rem 1rem; background: rgba(255, 149, 0, 0.1); border: 1px solid var(--accent-primary); border-radius: 6px; margin-bottom: 1.5rem;">
+                    <label style="display: flex; align-items: center; gap: 0.75rem; cursor: pointer; user-select: none;">
+                        <input type="checkbox" id="mp-keep-intermediate" style="width: 18px; height: 18px; cursor: pointer; accent-color: var(--accent-primary);">
+                        <span style="font-size: 0.95rem; color: var(--text-main);">Keep intermediate files (for debugging/development)</span>
+                    </label>
+                    <p style="margin: 0.5rem 0 0 2rem; font-size: 0.85rem; color: var(--text-muted);">When unchecked, only the final processed file will be saved</p>
+                </div>
+                
+                <!-- Extract Audio Section -->
+                <div class="mp-section">
+                    <label class="mp-checkbox-label">
+                        <input type="checkbox" id="mp-extract-audio" class="mp-checkbox">
+                        <span>Extract Audio</span>
+                    </label>
+                    
+                    <div class="mp-options" id="mp-extract-options">
+                        <div class="mp-radio-group">
+                            <label class="mp-radio-label">
+                                <input type="radio" name="mp-extract-mode" value="tc-range" id="mp-tc-range" checked>
+                                <span>TC Range (HH:MM:SS)</span>
+                            </label>
+                            <div class="mp-tc-inputs">
+                                <div class="mp-input-group">
+                                    <label>Start:</label>
+                                    <input type="text" id="mp-tc-start" value="01:00:00" placeholder="HH:MM:SS">
+                                </div>
+                                <div class="mp-input-group">
+                                    <label>End:</label>
+                                    <input type="text" id="mp-tc-end" value="01:01:00" placeholder="HH:MM:SS">
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="mp-radio-group">
+                            <label class="mp-radio-label">
+                                <input type="radio" name="mp-extract-mode" value="conform-csv" id="mp-conform-csv">
+                                <span>Conform to CSV</span>
+                            </label>
+                            <div class="mp-csv-controls">
+                                <button id="mp-choose-csv-btn" class="btn secondary small-btn">Choose CSV</button>
+                                <span id="mp-csv-filename" class="mp-csv-filename">test123.csv</span>
+                                <div class="mp-input-group">
+                                    <label>Pre/Post Roll:</label>
+                                    <select id="mp-prepost-roll">
+                                        <option value="0">0 secs</option>
+                                        <option value="1">1 sec</option>
+                                        <option value="2">2 secs</option>
+                                        <option value="3">3 secs</option>
+                                        <option value="4">4 secs</option>
+                                        <option value="5">5 secs</option>
+                                        <option value="6">6 secs</option>
+                                        <option value="7">7 secs</option>
+                                        <option value="8">8 secs</option>
+                                        <option value="9">9 secs</option>
+                                        <option value="10" selected>10 secs</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Combine to Poly Section -->
+                <div class="mp-section">
+                    <label class="mp-checkbox-label">
+                        <input type="checkbox" id="mp-combine-poly" class="mp-checkbox">
+                        <span>Combine to Poly</span>
+                    </label>
+                </div>
+
+                <!-- Normalize Section -->
+                <div class="mp-section">
+                    <label class="mp-checkbox-label">
+                        <input type="checkbox" id="mp-normalize" class="mp-checkbox">
+                        <span>Normalize</span>
+                    </label>
+                    <div class="mp-inline-options" id="mp-normalize-options">
+                        <div class="mp-input-group">
+                            <label>Level (dBFS):</label>
+                            <input type="number" id="mp-normalize-level" value="-6.1" step="0.1" min="-60" max="0">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Rename Section -->
+                <div class="mp-section">
+                    <label class="mp-checkbox-label">
+                        <input type="checkbox" id="mp-rename" class="mp-checkbox">
+                        <span>Rename</span>
+                    </label>
+                    <div class="mp-inline-options" id="mp-rename-options">
+                        <div class="mp-input-group">
+                            <label>Pattern:</label>
+                            <select id="mp-rename-pattern" style="min-width: 216px;">
+                                <option value="scene-sep1-take" selected>Scene[Sep1]Take</option>
+                                <option value="project-sep2-scene-sep1-take">Project[Sep2]Scene[Sep1]Take</option>
+                                <option value="tape-sep2-scene-sep1-take">Tape[Sep2]Scene[Sep1]Take</option>
+                            </select>
+                        </div>
+                        <div class="mp-input-group">
+                            <label>Sep1:</label>
+                            <select id="mp-rename-separator1" style="min-width: 30px;">
+                                <option value="">(None)</option>
+                                <option value="_">_</option>
+                                <option value="-">-</option>
+                                <option value=".">.</option>
+                                <option value=" ">space</option>
+                                <option value="+">+</option>
+                                <option value="=">=</option>
+                                <option value="~">~</option>
+                                <option value=",">,</option>
+                                <option value="" selected>T</option>
+                            </select>
+                        </div>
+                        <div class="mp-input-group">
+                            <label>Sep2:</label>
+                            <select id="mp-rename-separator2" style="min-width: 30px;">
+                                <option value="">(None)</option>
+                                <option value="_">_</option>
+                                <option value="-">-</option>
+                                <option value=".">.</option>
+                                <option value=" ">space</option>
+                                <option value="+">+</option>
+                                <option value="=">=</option>
+                                <option value="~">~</option>
+                                <option value=",">,</option>
+                                <option value="" selected>(None)</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Output Bit Depth -->
+                <div class="mp-section mp-output-section">
+                    <div class="mp-input-group">
+                        <label>Output Bit Depth:</label>
+                        <select id="mp-output-bitdepth">
+                            <option value="same" selected>Same as source</option>
+                            <option value="16">16-bit</option>
+                            <option value="24">24-bit</option>
+                            <option value="32f">32-bit Float</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Save To -->
+                <div class="mp-section mp-save-section">
+                    <div class="mp-input-group">
+                        <label>Save To:</label>
+                        <button id="mp-destination-btn" class="btn secondary small-btn">Destination</button>
+                        <span id="mp-destination-path" class="mp-destination-path">Same as source</span>
+                    </div>
+                </div>
+
+            </div>
+            <div class="modal-footer">
+                <button id="multi-process-exit-btn" class="btn secondary">Exit</button>
+                <button id="multi-process-process-btn" class="btn primary">Process</button>
             </div>
         </div>
     </div>

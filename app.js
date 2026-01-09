@@ -263,6 +263,21 @@ class App {
             }
         });
 
+        // Multi-Process controls
+        document.getElementById('multi-process-btn').addEventListener('click', () => this.openMultiProcessModal());
+        document.getElementById('multi-process-exit-btn').addEventListener('click', () => this.closeMultiProcessModal());
+        document.getElementById('multi-process-process-btn').addEventListener('click', () => this.handleMultiProcess());
+        document.getElementById('mp-choose-csv-btn').addEventListener('click', () => this.handleMPChooseCSV());
+        document.getElementById('mp-destination-btn').addEventListener('click', () => this.handleMPChooseDestination());
+
+        const multiProcessModal = document.getElementById('multi-process-modal');
+        multiProcessModal.querySelector('.close-modal').addEventListener('click', () => this.closeMultiProcessModal());
+        multiProcessModal.addEventListener('click', (e) => {
+            if (e.target.id === 'multi-process-modal') {
+                this.closeMultiProcessModal();
+            }
+        });
+
         // Auto-save toggle
         const autoSaveCheckbox = document.getElementById('auto-save-checkbox');
         autoSaveCheckbox.checked = this.autoSaveEnabled;
@@ -2776,6 +2791,19 @@ class App {
                 bextRaw: undefined
             };
 
+            // If source has bEXT but no iXML, extract track names from bEXT description
+            if (!sourceFile.metadata.ixmlRaw && sourceFile.metadata.description) {
+                const bextTrackNames = this.metadataHandler.extractTrackNamesFromBext(sourceFile.metadata.description);
+                if (bextTrackNames.length > 0) {
+                    const trackNames = [];
+                    for (let i = 0; i < sourceFile.metadata.channels; i++) {
+                        trackNames[i] = bextTrackNames[i] || `Track ${i + 1}`;
+                    }
+                    exportMetadata.trackNames = trackNames;
+                    console.log('[extractAudioRange] Using track names from bEXT:', trackNames);
+                }
+            }
+
             // Calculate timeReference from the actual TC Start
             exportMetadata.timeReference = actualStartSamples;
 
@@ -3515,6 +3543,726 @@ class App {
             modal.classList.remove('active');
         }
     }
+
+    // ========== Multi-Process Helper Methods ==========
+
+    async getUniqueFileName(directoryHandle, baseFileName) {
+        /**
+         * Check if file exists, and if so, append a number suffix (_1, _2, etc.)
+         * until a unique filename is found
+         */
+        try {
+            // First try the base filename
+            await directoryHandle.getFileHandle(baseFileName, { create: false });
+            // If we get here, file exists, so we need to find a unique name
+        } catch (err) {
+            if (err.name === 'NotFoundError') {
+                // File doesn't exist, base name is fine
+                return baseFileName;
+            }
+            // Other error, log it but proceed with base name
+            console.warn('Error checking file existence:', err);
+            return baseFileName;
+        }
+
+        // File exists, append number suffix
+        const nameParts = baseFileName.split('.');
+        const extension = nameParts.pop();
+        const nameWithoutExt = nameParts.join('.');
+
+        let counter = 1;
+        let uniqueName;
+        let fileExists = true;
+
+        while (fileExists) {
+            uniqueName = `${nameWithoutExt}_${counter}.${extension}`;
+            try {
+                await directoryHandle.getFileHandle(uniqueName, { create: false });
+                // File exists, increment counter
+                counter++;
+            } catch (err) {
+                if (err.name === 'NotFoundError') {
+                    // File doesn't exist, we found a unique name
+                    fileExists = false;
+                } else {
+                    // Other error, use this name anyway
+                    fileExists = false;
+                }
+            }
+        }
+
+        return uniqueName;
+    }
+
+    // ========== End Multi-Process Helper Methods ==========
+
+    openMultiProcessModal() {
+        const modal = document.getElementById('multi-process-modal');
+        if (modal) {
+            modal.classList.add('active');
+            
+            // Set default TC Range values based on selected files
+            this.setDefaultTCRange();
+            
+            // Initialize interactivity for checkboxes and radio buttons
+            this.setupMultiProcessInteractivity();
+        }
+    }
+
+    setDefaultTCRange() {
+        /**
+         * Set the default Start TC to the latest Start TC of selected files
+         * and End TC to the earliest End TC of selected files (ignoring frames)
+         */
+        const selectedFiles = Array.from(this.selectedIndices).map(i => this.files[i]);
+        
+        if (selectedFiles.length === 0) return;
+
+        let latestStartTC = null;
+        let earliestEndTC = null;
+        let latestStartSeconds = -Infinity;
+        let earliestEndSeconds = Infinity;
+
+        for (const fileObj of selectedFiles) {
+            const metadata = fileObj.metadata;
+            const tcStart = metadata.tcStart || '00:00:00:00';
+            const duration = metadata.duration || '00:00:00';
+
+            // Parse TC (HH:MM:SS:FF format) but ignore frames for comparison
+            const tcStartWithoutFrames = tcStart.substring(0, 8); // HH:MM:SS
+            const durationWithoutFrames = duration.substring(0, 8); // HH:MM:SS
+            
+            // Convert to seconds for comparison
+            const startSeconds = this.parseTimecodeToSeconds(tcStartWithoutFrames);
+            const durationSeconds = this.parseTimecodeToSeconds(durationWithoutFrames);
+            const endSeconds = startSeconds + durationSeconds;
+
+            // Track latest start
+            if (startSeconds > latestStartSeconds) {
+                latestStartSeconds = startSeconds;
+                latestStartTC = tcStartWithoutFrames;
+            }
+
+            // Track earliest end
+            if (endSeconds < earliestEndSeconds) {
+                earliestEndSeconds = endSeconds;
+                // Convert end seconds back to HH:MM:SS format directly
+                const hours = Math.floor(endSeconds / 3600);
+                const minutes = Math.floor((endSeconds % 3600) / 60);
+                const seconds = Math.floor(endSeconds % 60);
+                earliestEndTC = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+            }
+        }
+
+        // Set the form values
+        if (latestStartTC) {
+            document.getElementById('mp-tc-start').value = latestStartTC;
+        }
+        if (earliestEndTC) {
+            document.getElementById('mp-tc-end').value = earliestEndTC;
+        }
+    }
+
+    setupMultiProcessInteractivity() {
+        // Handle Extract Audio checkbox
+        const extractAudioCheckbox = document.getElementById('mp-extract-audio');
+        const extractOptions = document.getElementById('mp-extract-options');
+        
+        // Handle Normalize checkbox
+        const normalizeCheckbox = document.getElementById('mp-normalize');
+        const normalizeOptions = document.getElementById('mp-normalize-options');
+        
+        // Handle Rename checkbox
+        const renameCheckbox = document.getElementById('mp-rename');
+        const renameOptions = document.getElementById('mp-rename-options');
+        
+        // Radio buttons for Extract Audio mode
+        const tcRangeRadio = document.getElementById('mp-tc-range');
+        const conformCSVRadio = document.getElementById('mp-conform-csv');
+        
+        // When Conform to CSV is selected, disable the Rename option
+        const handleExtractModeChange = () => {
+            if (conformCSVRadio.checked) {
+                // Uncheck Rename checkbox
+                renameCheckbox.checked = false;
+                // Disable Rename checkbox and gray it out
+                renameCheckbox.disabled = true;
+                renameCheckbox.parentElement.style.opacity = '0.5';
+                renameCheckbox.parentElement.style.pointerEvents = 'none';
+            } else {
+                // Enable Rename checkbox
+                renameCheckbox.disabled = false;
+                renameCheckbox.parentElement.style.opacity = '1';
+                renameCheckbox.parentElement.style.pointerEvents = 'auto';
+            }
+        };
+        
+        // Add change listeners to radio buttons
+        tcRangeRadio.addEventListener('change', handleExtractModeChange);
+        conformCSVRadio.addEventListener('change', handleExtractModeChange);
+        
+        // Initialize state on modal open
+        handleExtractModeChange();
+        
+        // Note: CSS already handles the disabled state with :not(:checked) ~ selector
+        // This is just for any additional JavaScript-based interactivity if needed
+    }
+
+    closeMultiProcessModal() {
+        const modal = document.getElementById('multi-process-modal');
+        if (modal) {
+            modal.classList.remove('active');
+        }
+    }
+
+    async handleMultiProcess() {
+        // Validate at least one process is selected
+        const extractAudio = document.getElementById('mp-extract-audio').checked;
+        const combineToPoly = document.getElementById('mp-combine-poly').checked;
+        const normalize = document.getElementById('mp-normalize').checked;
+        const rename = document.getElementById('mp-rename').checked;
+
+        if (!extractAudio && !combineToPoly && !normalize && !rename) {
+            alert('Please select at least one process to execute.');
+            return;
+        }
+
+        // If Extract Audio is enabled, at least one file must be selected
+        if (extractAudio && this.selectedIndices.size === 0) {
+            alert('Please select at least one file.');
+            return;
+        }
+
+        // Validate Extract Audio settings
+        if (extractAudio) {
+            const mode = document.querySelector('input[name="mp-extract-mode"]:checked').value;
+            if (mode === 'tc-range') {
+                const startTime = document.getElementById('mp-tc-start').value.trim();
+                const endTime = document.getElementById('mp-tc-end').value.trim();
+                if (!this.validateTimeFormat(startTime) || !this.validateTimeFormat(endTime)) {
+                    alert('Invalid time format. Please use HH:MM:SS (e.g., 01:23:45)');
+                    return;
+                }
+                const startSeconds = this.parseTimecodeToSeconds(startTime);
+                const endSeconds = this.parseTimecodeToSeconds(endTime);
+                if (startSeconds >= endSeconds) {
+                    alert('Start time must be before end time.');
+                    return;
+                }
+            }
+        }
+
+        this.closeMultiProcessModal();
+        
+        // Get destination folder
+        let outputDirHandle = null;
+        try {
+            outputDirHandle = this.mpDestinationHandle || await window.showDirectoryPicker({
+                mode: 'readwrite'
+            });
+        } catch (err) {
+            if (err.name !== 'AbortError') {
+                alert('Failed to select output directory: ' + err.message);
+            }
+            return;
+        }
+
+        // Collect all options
+        const options = {
+            extractAudio,
+            extractMode: extractAudio ? document.querySelector('input[name="mp-extract-mode"]:checked').value : null,
+            tcStart: extractAudio ? document.getElementById('mp-tc-start').value : null,
+            tcEnd: extractAudio ? document.getElementById('mp-tc-end').value : null,
+            prePostRoll: extractAudio ? parseInt(document.getElementById('mp-prepost-roll').value) : 0,
+            combineToPoly,
+            normalize,
+            normalizeLevel: normalize ? parseFloat(document.getElementById('mp-normalize-level').value) : -6.1,
+            rename,
+            renamePattern: rename ? document.getElementById('mp-rename-pattern').value : null,
+            renameSeparator1: rename ? document.getElementById('mp-rename-separator1').value : null,
+            renameSeparator2: rename ? document.getElementById('mp-rename-separator2').value : null,
+            outputBitDepth: document.getElementById('mp-output-bitdepth').value,
+            keepIntermediateFiles: document.getElementById('mp-keep-intermediate').checked,
+            outputDirHandle
+        };
+
+        // Execute multi-process pipeline
+        await this.executeMultiProcessPipeline(options);
+    }
+
+    async executeMultiProcessPipeline(options) {
+        document.body.style.cursor = 'wait';
+        let processedFiles = [];
+        let successCount = 0;
+        let failCount = 0;
+        const intermediateFiles = []; // Track intermediate files for cleanup
+
+        try {
+            const selectedFiles = Array.from(this.selectedIndices).map(i => this.files[i]);
+
+            // STEP 1: Extract Audio
+            if (options.extractAudio) {
+                console.log('[MultiProcess] Step 1: Extracting Audio...');
+                const extractedFiles = await this.mpExtractAudio(selectedFiles, options);
+                successCount += extractedFiles.filter(f => f.success).length;
+                failCount += extractedFiles.filter(f => !f.success).length;
+                processedFiles = extractedFiles.filter(f => f.success).map(f => f.fileObj);
+                
+                // Mark as intermediate if more processing steps follow
+                if (!options.keepIntermediateFiles && (options.combineToPoly || options.normalize || options.rename)) {
+                    extractedFiles.forEach(f => {
+                        if (f.success) intermediateFiles.push(f.fileObj);
+                    });
+                }
+            } else {
+                processedFiles = selectedFiles;
+            }
+
+            if (processedFiles.length === 0) {
+                alert('No files available for further processing.');
+                return;
+            }
+
+            // STEP 2: Combine to Poly (if enabled and multiple files)
+            if (options.combineToPoly && processedFiles.length > 1) {
+                console.log('[MultiProcess] Step 2: Combining to Poly...');
+                const combined = await this.mpCombineToPoly(processedFiles, options);
+                if (combined.success) {
+                    // Always mark previous files as intermediate when Combine runs
+                    // (they are superseded by the combined output)
+                    if (!options.keepIntermediateFiles) {
+                        processedFiles.forEach(f => {
+                            if (!intermediateFiles.includes(f)) {
+                                intermediateFiles.push(f);
+                            }
+                        });
+                    }
+                    processedFiles = [combined.fileObj];
+                    successCount++;
+                } else {
+                    console.warn('[MultiProcess] Combine to Poly failed:', combined.error);
+                    failCount++;
+                }
+            }
+
+            // STEP 3: Normalize
+            if (options.normalize) {
+                console.log('[MultiProcess] Step 3: Normalizing Audio...');
+                const previousFiles = [...processedFiles]; // Save reference to previous files
+                const normalized = await this.mpNormalize(processedFiles, options);
+                successCount += normalized.filter(f => f.success).length;
+                failCount += normalized.filter(f => !f.success).length;
+                processedFiles = normalized.filter(f => f.success).map(f => f.fileObj);
+                
+                // Always mark previous files as intermediate when Normalize runs
+                // (they are superseded by the normalized output)
+                if (!options.keepIntermediateFiles) {
+                    previousFiles.forEach(f => {
+                        if (!intermediateFiles.includes(f)) {
+                            intermediateFiles.push(f);
+                        }
+                    });
+                }
+            }
+
+            // STEP 4: Rename
+            if (options.rename) {
+                console.log('[MultiProcess] Step 4: Renaming Files...');
+                const previousFiles = [...processedFiles]; // Save reference to previous files
+                const renamed = await this.mpRename(processedFiles, options);
+                successCount += renamed.filter(f => f.success).length;
+                failCount += renamed.filter(f => !f.success).length;
+                
+                // Mark previous files as intermediate (rename creates new files)
+                if (!options.keepIntermediateFiles) {
+                    previousFiles.forEach(f => {
+                        if (!intermediateFiles.includes(f)) {
+                            intermediateFiles.push(f);
+                        }
+                    });
+                }
+            }
+
+            // Clean up intermediate files if not keeping them
+            if (!options.keepIntermediateFiles && intermediateFiles.length > 0) {
+                console.log(`[MultiProcess] Cleaning up ${intermediateFiles.length} intermediate file(s)...`);
+                for (const fileObj of intermediateFiles) {
+                    try {
+                        // Remove from file system
+                        await fileObj.handle.remove();
+                        
+                        // Remove from this.files array
+                        const index = this.files.findIndex(f => f.handle === fileObj.handle);
+                        if (index !== -1) {
+                            this.files.splice(index, 1);
+                        }
+                    } catch (err) {
+                        console.warn(`Failed to delete intermediate file ${fileObj.metadata.filename}:`, err);
+                    }
+                }
+            }
+
+            // Show summary
+            const message = options.keepIntermediateFiles 
+                ? `Multi-Process Complete!\nSuccessfully processed: ${successCount}\nFailed: ${failCount}`
+                : `Multi-Process Complete!\nFinal files created: ${processedFiles.length}\nIntermediate files cleaned: ${intermediateFiles.length}\nFailed: ${failCount}`;
+            alert(message);
+
+            // Refresh file list
+            const tbody = document.getElementById('file-list-body');
+            tbody.innerHTML = '';
+            this.files.forEach((file, i) => this.addTableRow(i, file.metadata));
+            this.updateSelectionUI();
+
+        } catch (err) {
+            console.error('[MultiProcess] Pipeline failed:', err);
+            alert(`Multi-Process failed: ${err.message}`);
+        } finally {
+            document.body.style.cursor = 'default';
+        }
+    }
+
+    async mpExtractAudio(selectedFiles, options) {
+        const results = [];
+
+        for (const sourceFile of selectedFiles) {
+            try {
+                const startTC = options.tcStart + ':00'; // Add frame count
+                const endTC = options.tcEnd + ':00';
+                const nameWithoutExt = sourceFile.metadata.filename.replace(/\.[^/.]+$/, '');
+                const baseFileName = `${nameWithoutExt}_extract.wav`;
+                
+                // Get unique filename (avoid overwriting existing files)
+                const fileName = await this.getUniqueFileName(options.outputDirHandle, baseFileName);
+
+                // Determine bit depth
+                let bitDepth = 24;
+                if (options.outputBitDepth !== 'same') {
+                    bitDepth = options.outputBitDepth === '32f' ? 32 : parseInt(options.outputBitDepth);
+                } else {
+                    bitDepth = sourceFile.metadata.bitDepth || 24;
+                }
+
+                const result = await this.extractAudioRange(
+                    sourceFile,
+                    startTC,
+                    endTC,
+                    {},
+                    fileName,
+                    options.outputDirHandle,
+                    'wav',
+                    bitDepth
+                );
+
+                if (result.success) {
+                    const newFile = await result.handle.getFile();
+                    const metadata = await this.metadataHandler.parseFile(newFile);
+                    const fileObj = {
+                        handle: result.handle,
+                        metadata: metadata,
+                        file: newFile,
+                        isGroup: false
+                    };
+                    this.files.push(fileObj);
+                    results.push({ success: true, fileObj, handle: result.handle });
+                } else {
+                    results.push({ success: false, error: result.error });
+                }
+            } catch (err) {
+                console.error(`[MultiProcess] Extract Audio failed for ${sourceFile.metadata.filename}:`, err);
+                results.push({ success: false, error: err.message });
+            }
+        }
+
+        return results;
+    }
+
+    async mpCombineToPoly(fileList, options) {
+        // Validate we have at least 2 files
+        if (fileList.length < 2) {
+            console.warn('[MultiProcess] Cannot combine - need at least 2 files');
+            return { success: false, error: 'Need at least 2 files to combine' };
+        }
+
+        try {
+            // Validate all files are monophonic
+            const allMono = fileList.every(f => f.metadata.channels === 1);
+            if (!allMono) {
+                return { success: false, error: 'All files must be monophonic (1 channel) to combine' };
+            }
+
+            console.log(`[MultiProcess] Combining ${fileList.length} monophonic files into polyphonic file...`);
+
+            // Load all file buffers
+            const fileBuffers = await Promise.all(
+                fileList.map(f => f.file.arrayBuffer())
+            );
+
+            // Extract track names from metadata
+            const trackNames = fileList.map((f, i) => {
+                if (f.metadata.trackNames && f.metadata.trackNames.length > 0) {
+                    return f.metadata.trackNames[0];
+                }
+                return `Ch${i + 1}`;
+            });
+
+            // Use first file's metadata as base
+            const baseMetadata = fileList[0].metadata;
+
+            // Combine audio files using existing audioProcessor method
+            const combinedBlob = await this.audioProcessor.combineToPolyphonic(
+                fileBuffers,
+                trackNames,
+                baseMetadata
+            );
+
+            // Determine bit depth
+            let bitDepth = 24;
+            if (options.outputBitDepth !== 'same') {
+                bitDepth = options.outputBitDepth === '32f' ? 32 : parseInt(options.outputBitDepth);
+            } else {
+                bitDepth = baseMetadata.bitDepth || 24;
+            }
+
+            // Prepare metadata for polyphonic file
+            const polyMetadata = {
+                ...baseMetadata,
+                channels: fileList.length,
+                trackNames: trackNames,
+                bitDepth: bitDepth
+            };
+
+            // Create output filename based on first file
+            const nameWithoutExt = fileList[0].metadata.filename.replace(/\.[^/.]+$/, '');
+            const baseFileName = `${nameWithoutExt}_poly.wav`;
+            const fileName = await this.getUniqueFileName(options.outputDirHandle, baseFileName);
+
+            // Add metadata to combined file
+            const combinedArrayBuffer = await combinedBlob.arrayBuffer();
+            const finalBlob = await this.metadataHandler.saveWav(
+                { arrayBuffer: async () => combinedArrayBuffer },
+                polyMetadata
+            );
+
+            // Save file
+            const fileHandle = await options.outputDirHandle.getFileHandle(fileName, { create: true });
+            const writable = await fileHandle.createWritable();
+            await writable.write(finalBlob);
+            await writable.close();
+
+            // Parse and add to file list
+            const newFile = await fileHandle.getFile();
+            const metadata = await this.metadataHandler.parseFile(newFile);
+            const newFileObj = {
+                handle: fileHandle,
+                metadata: metadata,
+                file: newFile,
+                isGroup: false
+            };
+            this.files.push(newFileObj);
+
+            return { success: true, fileObj: newFileObj };
+
+        } catch (err) {
+            console.error('[MultiProcess] Combine to Poly failed:', err);
+            return { success: false, error: err.message };
+        }
+    }
+
+    async mpNormalize(fileList, options) {
+        const results = [];
+
+        for (const fileObj of fileList) {
+            try {
+                const targetDb = parseFloat(options.normalizeLevel);
+                console.log(`[MultiProcess] Normalizing ${fileObj.metadata.filename} to ${targetDb} dBFS...`);
+                
+                // Read and decode the original file
+                const arrayBuffer = await fileObj.file.arrayBuffer();
+                const audioBuffer = await this.audioEngine.audioCtx.decodeAudioData(arrayBuffer.slice(0));
+
+                // Apply normalization
+                const sampleRate = audioBuffer.sampleRate;
+                const channels = audioBuffer.numberOfChannels;
+                const length = audioBuffer.length;
+
+                // Find max amplitude across all channels
+                let maxAmplitude = 0;
+                for (let ch = 0; ch < channels; ch++) {
+                    const data = audioBuffer.getChannelData(ch);
+                    for (let i = 0; i < data.length; i++) {
+                        maxAmplitude = Math.max(maxAmplitude, Math.abs(data[i]));
+                    }
+                }
+
+                if (maxAmplitude === 0) {
+                    results.push({ success: false, error: 'File is silent, cannot normalize' });
+                    continue;
+                }
+
+                // Calculate gain needed to reach target level
+                const targetLinear = Math.pow(10, targetDb / 20);
+                const gainFactor = targetLinear / maxAmplitude;
+
+                // Apply gain using OfflineAudioContext
+                const OfflineAudioContext = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+                const offlineCtx = new OfflineAudioContext(channels, length, sampleRate);
+
+                const source = offlineCtx.createBufferSource();
+                source.buffer = audioBuffer;
+
+                const gainNode = offlineCtx.createGain();
+                gainNode.gain.value = gainFactor;
+
+                source.connect(gainNode);
+                gainNode.connect(offlineCtx.destination);
+
+                source.start(0);
+                const normalizedBuffer = await offlineCtx.startRendering();
+
+                // Determine bit depth
+                let bitDepth = 24;
+                if (options.outputBitDepth !== 'same') {
+                    bitDepth = options.outputBitDepth === '32f' ? 32 : parseInt(options.outputBitDepth);
+                } else {
+                    bitDepth = fileObj.metadata.bitDepth || 24;
+                }
+
+                // Create output filename
+                const nameWithoutExt = fileObj.metadata.filename.replace(/\.[^/.]+$/, '');
+                const baseFileName = `${nameWithoutExt}_normalized.wav`;
+                
+                // Get unique filename (avoid overwriting existing files)
+                const fileName = await this.getUniqueFileName(options.outputDirHandle, baseFileName);
+
+                // Prepare metadata - preserve all original metadata
+                const exportMetadata = {
+                    ...fileObj.metadata,
+                    bitDepth: bitDepth
+                };
+
+                // Create base WAV file
+                const wavBuffer = this.audioProcessor.createWavFile(normalizedBuffer, bitDepth, null, exportMetadata);
+                
+                // Create bEXT and iXML chunks with metadata
+                const bextChunk = this.metadataHandler.createBextChunk(exportMetadata);
+                const ixmlChunk = this.metadataHandler.createIXMLChunk(exportMetadata);
+                
+                // Calculate padding and sizes
+                const bextPadding = bextChunk.byteLength % 2 !== 0 ? 1 : 0;
+                const ixmlPadding = ixmlChunk.byteLength % 2 !== 0 ? 1 : 0;
+                const bextTotalSize = 8 + bextChunk.byteLength + bextPadding;
+                const ixmlTotalSize = 8 + ixmlChunk.byteLength + ixmlPadding;
+                
+                // Calculate new file size
+                const wavView = new DataView(wavBuffer);
+                const wavArray = new Uint8Array(wavBuffer);
+                const riffSize = wavView.getUint32(4, true);
+                const oldFileSize = riffSize + 8;
+                const newFileSize = oldFileSize + bextTotalSize + ixmlTotalSize;
+                
+                // Create new buffer with metadata chunks
+                const newWavBuffer = new Uint8Array(newFileSize);
+                newWavBuffer.set(wavArray);
+                
+                const chunkView = new DataView(newWavBuffer.buffer);
+                
+                // Write bEXT chunk
+                let chunkOffset = oldFileSize;
+                newWavBuffer[chunkOffset] = 0x62;     // 'b'
+                newWavBuffer[chunkOffset + 1] = 0x65; // 'e'
+                newWavBuffer[chunkOffset + 2] = 0x78; // 'x'
+                newWavBuffer[chunkOffset + 3] = 0x74; // 't'
+                chunkView.setUint32(chunkOffset + 4, bextChunk.byteLength, true);
+                newWavBuffer.set(new Uint8Array(bextChunk), chunkOffset + 8);
+                chunkOffset += bextTotalSize;
+                
+                // Write iXML chunk
+                newWavBuffer[chunkOffset] = 0x69;     // 'i'
+                newWavBuffer[chunkOffset + 1] = 0x58; // 'X'
+                newWavBuffer[chunkOffset + 2] = 0x4d; // 'M'
+                newWavBuffer[chunkOffset + 3] = 0x4c; // 'L'
+                chunkView.setUint32(chunkOffset + 4, ixmlChunk.byteLength, true);
+                newWavBuffer.set(new Uint8Array(ixmlChunk), chunkOffset + 8);
+                
+                // Update RIFF file size
+                chunkView.setUint32(4, newFileSize - 8, true);
+                
+                const blob = new Blob([newWavBuffer], { type: 'audio/wav' });
+
+                // Save file
+                const fileHandle = await options.outputDirHandle.getFileHandle(fileName, { create: true });
+                const writable = await fileHandle.createWritable();
+                await writable.write(blob);
+                await writable.close();
+
+                // Parse and add to file list
+                const newFile = await fileHandle.getFile();
+                const metadata = await this.metadataHandler.parseFile(newFile);
+                const newFileObj = {
+                    handle: fileHandle,
+                    metadata: metadata,
+                    file: newFile,
+                    isGroup: false
+                };
+                this.files.push(newFileObj);
+
+                results.push({ success: true, fileObj: newFileObj });
+
+            } catch (err) {
+                console.error(`[MultiProcess] Normalize failed for ${fileObj.metadata.filename}:`, err);
+                results.push({ success: false, error: err.message });
+            }
+        }
+
+        return results;
+    }
+
+    async mpRename(fileList, options) {
+        // Placeholder for renaming
+        console.log('[MultiProcess] Rename not yet implemented');
+        return fileList.map(f => ({ success: true, fileObj: f }));
+    }
+
+    // ========== End Multi-Process Modal Methods ==========
+
+    async handleMPChooseCSV() {
+        try {
+            const [fileHandle] = await window.showOpenFilePicker({
+                types: [{
+                    description: 'CSV Files',
+                    accept: { 'text/csv': ['.csv'] }
+                }],
+                multiple: false
+            });
+
+            const file = await fileHandle.getFile();
+            document.getElementById('mp-csv-filename').textContent = file.name;
+            
+            // Store the file handle for later use
+            this.mpCSVFileHandle = fileHandle;
+        } catch (err) {
+            if (err.name !== 'AbortError') {
+                console.error('Error choosing CSV file:', err);
+            }
+        }
+    }
+
+    async handleMPChooseDestination() {
+        try {
+            const directoryHandle = await window.showDirectoryPicker();
+            document.getElementById('mp-destination-path').textContent = directoryHandle.name;
+            
+            // Store the directory handle for later use
+            this.mpDestinationHandle = directoryHandle;
+        } catch (err) {
+            if (err.name !== 'AbortError') {
+                console.error('Error choosing destination:', err);
+            }
+        }
+    }
+
+    // ========== End Multi-Process Modal Methods ==========
 
     async handleChooseCSV() {
         try {

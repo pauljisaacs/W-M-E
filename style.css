@@ -1623,3 +1623,178 @@ select {
     padding: 0.4rem 0.8rem;
     font-size: 0.85rem;
 }
+
+/* ============================================
+   MULTI-PROCESS MODAL STYLES
+   ============================================ */
+
+.multi-process-modal {
+    max-width: 700px;
+    width: 90%;
+}
+
+.mp-section {
+    margin-bottom: 1.5rem;
+    padding-bottom: 1.5rem;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.mp-section:last-of-type {
+    border-bottom: none;
+}
+
+.mp-checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-main);
+    cursor: pointer;
+    user-select: none;
+}
+
+.mp-checkbox {
+    width: 20px;
+    height: 20px;
+    cursor: pointer;
+    accent-color: var(--accent-primary);
+}
+
+.mp-options {
+    margin-top: 1rem;
+    margin-left: 2rem;
+    padding: 1rem;
+    background: rgba(255, 255, 255, 0.02);
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+}
+
+.mp-inline-options {
+    display: flex;
+    gap: 1.5rem;
+    margin-top: 0.75rem;
+    margin-left: 2rem;
+    align-items: center;
+}
+
+.mp-radio-group {
+    margin-bottom: 1.25rem;
+}
+
+.mp-radio-group:last-child {
+    margin-bottom: 0;
+}
+
+.mp-radio-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.95rem;
+    color: var(--text-main);
+    cursor: pointer;
+    user-select: none;
+    margin-bottom: 0.75rem;
+}
+
+.mp-radio-label input[type="radio"] {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+    accent-color: var(--accent-primary);
+}
+
+.mp-tc-inputs {
+    display: flex;
+    gap: 1.5rem;
+    margin-top: 0.5rem;
+    margin-left: 1.5rem;
+}
+
+.mp-csv-controls {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-top: 0.5rem;
+    margin-left: 1.5rem;
+    flex-wrap: wrap;
+}
+
+.mp-csv-filename {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    font-style: italic;
+}
+
+.mp-input-group {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.mp-input-group label {
+    font-size: 0.9rem;
+    color: var(--text-main);
+    white-space: nowrap;
+    min-width: fit-content;
+}
+
+.mp-input-group input[type="text"],
+.mp-input-group input[type="number"],
+.mp-input-group select {
+    background-color: var(--bg-dark);
+    border: 1px solid var(--border-color);
+    color: var(--text-main);
+    padding: 0.4rem 0.6rem;
+    border-radius: 4px;
+    font-family: inherit;
+    font-size: 0.9rem;
+    min-width: 100px;
+}
+
+.mp-input-group input[type="text"]:focus,
+.mp-input-group input[type="number"]:focus,
+.mp-input-group select:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+}
+
+.mp-input-group select {
+    cursor: pointer;
+    min-width: 180px;
+}
+
+.small-btn {
+    padding: 0.4rem 0.8rem;
+    font-size: 0.85rem;
+    min-width: 120px;
+}
+
+.mp-destination-path {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    font-style: italic;
+}
+
+.mp-output-section,
+.mp-save-section {
+    padding-top: 0.5rem;
+}
+
+/* Disabled state for nested controls */
+.mp-checkbox:not(:checked) ~ .mp-options,
+.mp-checkbox:not(:checked) ~ .mp-inline-options {
+    opacity: 0.4;
+    pointer-events: none;
+}
+
+/* Extract Audio radio button handling */
+#mp-tc-range:not(:checked) ~ .mp-tc-inputs {
+    opacity: 0.4;
+    pointer-events: none;
+}
+
+#mp-conform-csv:not(:checked) ~ .mp-csv-controls {
+    opacity: 0.4;
+    pointer-events: none;
+}
