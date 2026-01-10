@@ -134,6 +134,7 @@ class App {
         document.getElementById('batch-edit-btn').addEventListener('click', () => this.openBatchEditModal());
         document.getElementById('batch-save-btn').addEventListener('click', () => this.saveSelected());
         document.getElementById('batch-remove-btn').addEventListener('click', () => this.removeSelected());
+        document.getElementById('batch-delete-btn').addEventListener('click', () => this.openDeleteConfirmModal());
 
         // File Operations
         document.getElementById('diagnostics-btn').addEventListener('click', () => this.openDiagnosticsModal());
@@ -142,6 +143,11 @@ class App {
         document.getElementById('modal-close-btn').addEventListener('click', () => this.closeBatchEditModal());
         document.getElementById('batch-cancel-btn').addEventListener('click', () => this.closeBatchEditModal());
         document.getElementById('batch-apply-btn').addEventListener('click', () => this.applyBatchEdit());
+
+        // Delete confirmation modal controls
+        document.getElementById('delete-modal-close-btn').addEventListener('click', () => this.closeDeleteConfirmModal());
+        document.getElementById('delete-cancel-btn').addEventListener('click', () => this.closeDeleteConfirmModal());
+        document.getElementById('delete-permanent-btn').addEventListener('click', () => this.handleDeleteFiles());
 
         // Diagnostics Modal controls
         document.getElementById('diagnostics-close-btn').addEventListener('click', () => this.closeDiagnosticsModal());
@@ -312,6 +318,48 @@ class App {
         document.getElementById('combine-close-btn').addEventListener('click', () => this.closeCombineModal());
         document.getElementById('combine-cancel-btn').addEventListener('click', () => this.closeCombineModal());
         document.getElementById('combine-confirm-btn').addEventListener('click', () => this.processCombineFiles());
+
+        // Combine filename format field toggles
+        ['combine-rename-field1', 'combine-rename-field2', 'combine-rename-field3'].forEach((fieldId, index) => {
+            const customIndex = index + 1;
+            document.getElementById(fieldId).addEventListener('change', (e) => {
+                const customInput = document.getElementById(`combine-rename-custom${customIndex}`);
+                if (e.target.value === 'custom') {
+                    customInput.style.display = 'inline-block';
+                } else {
+                    customInput.style.display = 'none';
+                }
+                // Update filename previews
+                this.updateCombineFilenamePreviews();
+            });
+        });
+
+        // Add input listeners for custom text fields and separators
+        ['combine-rename-custom1', 'combine-rename-custom2', 'combine-rename-custom3'].forEach(id => {
+            document.getElementById(id).addEventListener('input', () => {
+                this.updateCombineFilenamePreviews();
+            });
+        });
+        ['combine-rename-separator1', 'combine-rename-separator2'].forEach(id => {
+            document.getElementById(id).addEventListener('change', () => {
+                this.updateCombineFilenamePreviews();
+            });
+        });
+
+        // Combine destination folder selector
+        document.getElementById('combine-select-dir-btn').addEventListener('click', async () => {
+            try {
+                const dirHandle = await window.showDirectoryPicker();
+                this.combineDestinationHandle = dirHandle;
+                const pathSpan = document.getElementById('combine-dest-path');
+                pathSpan.textContent = dirHandle.name;
+                pathSpan.style.color = 'var(--accent-primary)';
+            } catch (err) {
+                if (err.name !== 'AbortError') {
+                    console.error('Error selecting directory:', err);
+                }
+            }
+        });
 
         const combineModal = document.getElementById('combine-modal');
         combineModal.addEventListener('click', (e) => {
@@ -1816,6 +1864,7 @@ class App {
         safeSetDisabled('batch-edit-btn', !hasSelection);
         this.updateSaveButtonState();
         safeSetDisabled('batch-remove-btn', !hasSelection);
+        safeSetDisabled('batch-delete-btn', !hasSelection);
         safeSetDisabled('diagnostics-btn', !hasSelection);
         safeSetDisabled('corrupt-ixml-modal-btn', this.selectedIndices.size !== 1);
         safeSetDisabled('normalize-btn', !hasSelection);
@@ -1826,7 +1875,7 @@ class App {
         
         // Enable combine button if:
         // 1. Any sibling groups are detected AND no poly file is selected, OR
-        // 2. Multiple individual mono files are selected with same TC Start and audio size
+        // 2. Multiple individual mono files are selected that can be grouped by TC Start and audio size
         const hasSiblingGroups = this.files.some(item => item.isGroup);
         let isPolySelected = false;
         let canCombineSelectedMono = false;
@@ -1839,7 +1888,7 @@ class App {
                            selectedFile.metadata.channels > 1 && 
                            !selectedFile.isGroup;
         } else if (this.selectedIndices.size >= 2) {
-            // Check if all selected files are individual mono files with matching TC Start and audio size
+            // Check if selected files are individual mono files that can be grouped
             const selectedFiles = Array.from(this.selectedIndices).map(idx => this.files[idx]);
             const allMono = selectedFiles.every(f => 
                 f && 
@@ -1849,16 +1898,18 @@ class App {
             );
             
             if (allMono) {
-                const firstFile = selectedFiles[0];
-                const tcStart = firstFile.metadata.tcStart;
-                const audioSize = firstFile.metadata.audioDataSize;
+                // Group files by TC Start and audio size
+                const groups = new Map();
+                for (const file of selectedFiles) {
+                    const key = `${file.metadata.tcStart}_${file.metadata.audioDataSize}`;
+                    if (!groups.has(key)) {
+                        groups.set(key, []);
+                    }
+                    groups.get(key).push(file);
+                }
                 
-                const allMatch = selectedFiles.every(f => 
-                    f.metadata.tcStart === tcStart && 
-                    f.metadata.audioDataSize === audioSize
-                );
-                
-                canCombineSelectedMono = allMatch;
+                // Enable combine if at least one group has 2+ files
+                canCombineSelectedMono = Array.from(groups.values()).some(group => group.length >= 2);
             }
         }
         
@@ -1922,6 +1973,82 @@ class App {
     closeBatchEditModal() {
         const modal = document.getElementById('batch-edit-modal');
         modal.classList.remove('active');
+    }
+
+    openDeleteConfirmModal() {
+        if (this.selectedIndices.size === 0) return;
+
+        const modal = document.getElementById('delete-confirm-modal');
+        document.getElementById('delete-count').textContent = this.selectedIndices.size;
+        modal.classList.add('active');
+    }
+
+    closeDeleteConfirmModal() {
+        const modal = document.getElementById('delete-confirm-modal');
+        modal.classList.remove('active');
+    }
+
+    async handleDeleteFiles() {
+        if (this.selectedIndices.size === 0) return;
+
+        this.closeDeleteConfirmModal();
+        document.body.style.cursor = 'wait';
+
+        try {
+            // Stop playback to avoid issues with deleted files
+            this.stop();
+
+            const indices = Array.from(this.selectedIndices).sort((a, b) => b - a);
+            let successCount = 0;
+            let failCount = 0;
+
+            for (const index of indices) {
+                const item = this.files[index];
+                const targets = item.isGroup ? item.siblings : [item];
+
+                for (const target of targets) {
+                    try {
+                        if (target.handle && target.handle.remove) {
+                            // Permanently delete the file
+                            // Note: Web browsers cannot move files to system Trash
+                            await target.handle.remove({ recursive: false });
+                            successCount++;
+                        } else {
+                            console.warn(`Cannot delete ${target.metadata.filename}: file handle does not support deletion`);
+                            failCount++;
+                        }
+                    } catch (err) {
+                        console.error(`Failed to delete ${target.metadata.filename}:`, err);
+                        failCount++;
+                    }
+                }
+
+                // Remove from files array
+                this.files.splice(index, 1);
+            }
+
+            // Clear selection
+            this.selectedIndices.clear();
+
+            // Refresh UI
+            const tbody = document.getElementById('file-list-body');
+            tbody.innerHTML = '';
+            this.files.forEach((file, i) => this.addTableRow(i, file.metadata));
+            this.updateSelectionUI();
+
+            // Show summary
+            let message = `${successCount} file(s) permanently deleted`;
+            if (failCount > 0) {
+                message += `\n${failCount} file(s) could not be deleted`;
+            }
+            alert(message);
+
+        } catch (err) {
+            console.error('Delete operation failed:', err);
+            alert(`Delete failed: ${err.message}`);
+        } finally {
+            document.body.style.cursor = 'default';
+        }
     }
 
     async applyBatchEdit() {
@@ -3873,21 +4000,13 @@ class App {
         const tcRangeRadio = document.getElementById('mp-tc-range');
         const conformCSVRadio = document.getElementById('mp-conform-csv');
         
-        // When Conform to CSV is selected, disable the Rename option
+        // Extract mode change handler (Rename is always available)
         const handleExtractModeChange = () => {
-            if (conformCSVRadio.checked) {
-                // Uncheck Rename checkbox
-                renameCheckbox.checked = false;
-                // Disable Rename checkbox and gray it out
-                renameCheckbox.disabled = true;
-                renameCheckbox.parentElement.style.opacity = '0.5';
-                renameCheckbox.parentElement.style.pointerEvents = 'none';
-            } else {
-                // Enable Rename checkbox
-                renameCheckbox.disabled = false;
-                renameCheckbox.parentElement.style.opacity = '1';
-                renameCheckbox.parentElement.style.pointerEvents = 'auto';
-            }
+            // Rename is always available regardless of extract mode
+            // CSV mode creates multiple groups that can benefit from consistent renaming
+            renameCheckbox.disabled = false;
+            renameCheckbox.parentElement.style.opacity = '1';
+            renameCheckbox.parentElement.style.pointerEvents = 'auto';
         };
         
         // Add change listeners to radio buttons
@@ -3966,6 +4085,12 @@ class App {
                     alert('Start time must be before end time.');
                     return;
                 }
+            } else if (mode === 'conform-csv') {
+                // Validate CSV is loaded
+                if (!this.mpCSVEntries || this.mpCSVEntries.length === 0) {
+                    alert('Please choose a CSV file before proceeding.');
+                    return;
+                }
             }
         }
 
@@ -3991,6 +4116,7 @@ class App {
             tcStart: extractAudio ? document.getElementById('mp-tc-start').value : null,
             tcEnd: extractAudio ? document.getElementById('mp-tc-end').value : null,
             prePostRoll: extractAudio ? parseInt(document.getElementById('mp-prepost-roll').value) : 0,
+            csvEntries: extractAudio && this.mpCSVEntries ? this.mpCSVEntries : null,
             combineToPoly,
             normalize,
             normalizeLevel: normalize ? parseFloat(document.getElementById('mp-normalize-level').value) : -1.0,
@@ -4059,8 +4185,9 @@ class App {
                             }
                         });
                     }
-                    processedFiles = [combined.fileObj];
-                    successCount++;
+                    // Handle multiple created files (intelligent grouping)
+                    processedFiles = combined.fileObjs || [combined.fileObj];
+                    successCount += processedFiles.length;
                 } else {
                     console.warn('[MultiProcess] Combine to Poly failed:', combined.error);
                     failCount++;
@@ -4148,52 +4275,170 @@ class App {
     async mpExtractAudio(selectedFiles, options) {
         const results = [];
 
-        for (const sourceFile of selectedFiles) {
-            try {
-                const startTC = options.tcStart + ':00'; // Add frame count
-                const endTC = options.tcEnd + ':00';
-                const nameWithoutExt = sourceFile.metadata.filename.replace(/\.[^/.]+$/, '');
-                const baseFileName = `${nameWithoutExt}_extract.wav`;
-                
-                // Get unique filename (avoid overwriting existing files)
-                const fileName = await this.getUniqueFileName(options.outputDirHandle, baseFileName);
+        // Handle TC Range mode
+        if (options.extractMode === 'tc-range') {
+            for (const sourceFile of selectedFiles) {
+                try {
+                    const startTC = options.tcStart + ':00'; // Add frame count
+                    const endTC = options.tcEnd + ':00';
+                    const nameWithoutExt = sourceFile.metadata.filename.replace(/\.[^/.]+$/, '');
+                    const baseFileName = `${nameWithoutExt}_extract.wav`;
+                    
+                    // Get unique filename (avoid overwriting existing files)
+                    const fileName = await this.getUniqueFileName(options.outputDirHandle, baseFileName);
 
-                // Determine bit depth
-                let bitDepth = 24;
-                if (options.outputBitDepth !== 'same') {
-                    bitDepth = options.outputBitDepth === '32f' ? 32 : parseInt(options.outputBitDepth);
-                } else {
-                    bitDepth = sourceFile.metadata.bitDepth || 24;
+                    // Determine bit depth
+                    let bitDepth = 24;
+                    if (options.outputBitDepth !== 'same') {
+                        bitDepth = options.outputBitDepth === '32f' ? 32 : parseInt(options.outputBitDepth);
+                    } else {
+                        bitDepth = sourceFile.metadata.bitDepth || 24;
+                    }
+
+                    const result = await this.extractAudioRange(
+                        sourceFile,
+                        startTC,
+                        endTC,
+                        {},
+                        fileName,
+                        options.outputDirHandle,
+                        'wav',
+                        bitDepth
+                    );
+
+                    if (result.success) {
+                        const newFile = await result.handle.getFile();
+                        const metadata = await this.metadataHandler.parseFile(newFile);
+                        const fileObj = {
+                            handle: result.handle,
+                            metadata: metadata,
+                            file: newFile,
+                            isGroup: false
+                        };
+                        this.files.push(fileObj);
+                        results.push({ success: true, fileObj, handle: result.handle });
+                    } else {
+                        results.push({ success: false, error: result.error });
+                    }
+                } catch (err) {
+                    console.error(`[MultiProcess] Extract Audio failed for ${sourceFile.metadata.filename}:`, err);
+                    results.push({ success: false, error: err.message });
                 }
+            }
+        }
+        // Handle Conform to CSV mode
+        else if (options.extractMode === 'conform-csv') {
+            const csvEntries = options.csvEntries;
+            const selectedIndices = new Set(selectedFiles.map((_, idx) => 
+                this.files.findIndex(f => f === selectedFiles[idx])
+            ));
 
-                const result = await this.extractAudioRange(
-                    sourceFile,
-                    startTC,
-                    endTC,
-                    {},
-                    fileName,
-                    options.outputDirHandle,
-                    'wav',
-                    bitDepth
-                );
+            for (const entry of csvEntries) {
+                try {
+                    // Infer FPS from first matched take
+                    let fpsExact = { numerator: 24, denominator: 1 };
+                    
+                    // Calculate end TC from length
+                    const csvEndTC = this.calculateEndTCFromLength(entry.startTC, entry.length, fpsExact);
 
-                if (result.success) {
-                    const newFile = await result.handle.getFile();
-                    const metadata = await this.metadataHandler.parseFile(newFile);
-                    const fileObj = {
-                        handle: result.handle,
-                        metadata: metadata,
-                        file: newFile,
-                        isGroup: false
-                    };
-                    this.files.push(fileObj);
-                    results.push({ success: true, fileObj, handle: result.handle });
-                } else {
-                    results.push({ success: false, error: result.error });
+                    // Find matching takes in selected files
+                    const matchIndices = this.findMatchingTakes(entry.startTC, csvEndTC, selectedIndices);
+
+                    if (matchIndices.length === 0) {
+                        console.log(`[MultiProcess] Skipping CSV entry "${entry.fileName}": no matching takes found`);
+                        results.push({ success: false, error: 'No matching takes found' });
+                        continue;
+                    }
+
+                    // Use FPS from first matched take
+                    const firstMatch = this.files[matchIndices[0]];
+                    if (firstMatch.metadata.fpsExact) {
+                        fpsExact = firstMatch.metadata.fpsExact;
+                    } else if (firstMatch.metadata.fps) {
+                        if (firstMatch.metadata.fps === '23.98') {
+                            fpsExact = { numerator: 24000, denominator: 1001 };
+                        } else if (firstMatch.metadata.fps === '29.97') {
+                            fpsExact = { numerator: 30000, denominator: 1001 };
+                        } else {
+                            const fpsNum = parseFloat(firstMatch.metadata.fps);
+                            fpsExact = { numerator: fpsNum, denominator: 1 };
+                        }
+                    }
+
+                    // Recalculate end TC with correct FPS
+                    const csvEndTCCorrect = this.calculateEndTCFromLength(entry.startTC, entry.length, fpsExact);
+
+                    // Apply pre/post roll to timecodes
+                    const sampleRate = 48000;
+                    const csvStartSamples = this.metadataHandler.tcToSamples(entry.startTC, sampleRate, fpsExact);
+                    const csvEndSamples = this.metadataHandler.tcToSamples(csvEndTCCorrect, sampleRate, fpsExact);
+                    
+                    const prePostRollSamples = Math.round(options.prePostRoll * sampleRate);
+                    const adjustedStartSamples = Math.max(0, csvStartSamples - prePostRollSamples);
+                    const adjustedEndSamples = csvEndSamples + prePostRollSamples;
+                    
+                    const adjustedStartTC = this.metadataHandler.samplesToTC(adjustedStartSamples, sampleRate, fpsExact);
+                    const adjustedEndTC = this.metadataHandler.samplesToTC(adjustedEndSamples, sampleRate, fpsExact);
+
+                    // Process each matching take
+                    for (let matchIdx = 0; matchIdx < matchIndices.length; matchIdx++) {
+                        const takeIndex = matchIndices[matchIdx];
+                        const sourceTake = this.files[takeIndex];
+
+                        // Generate output filename with disambiguation
+                        const outputFilename = matchIndices.length > 1 
+                            ? this.generateDisambiguatedFilename(entry.fileName, matchIdx)
+                            : `${entry.fileName}.wav`;
+
+                        // Get unique filename to avoid conflicts
+                        const fileName = await this.getUniqueFileName(options.outputDirHandle, outputFilename);
+
+                        // Determine bit depth
+                        let bitDepth = 24;
+                        if (options.outputBitDepth !== 'same') {
+                            bitDepth = options.outputBitDepth === '32f' ? 32 : parseInt(options.outputBitDepth);
+                        } else {
+                            bitDepth = sourceTake.metadata.bitDepth || 24;
+                        }
+
+                        // Prepare metadata from CSV
+                        const outputMetadata = {
+                            scene: entry.scene,
+                            take: entry.take,
+                            filename: fileName
+                        };
+
+                        // Extract audio
+                        const result = await this.extractAudioRange(
+                            sourceTake,
+                            adjustedStartTC,
+                            adjustedEndTC,
+                            outputMetadata,
+                            fileName,
+                            options.outputDirHandle,
+                            'wav',
+                            bitDepth
+                        );
+
+                        if (result.success) {
+                            const newFile = await result.handle.getFile();
+                            const metadata = await this.metadataHandler.parseFile(newFile);
+                            const fileObj = {
+                                handle: result.handle,
+                                metadata: metadata,
+                                file: newFile,
+                                isGroup: false
+                            };
+                            this.files.push(fileObj);
+                            results.push({ success: true, fileObj, handle: result.handle });
+                        } else {
+                            results.push({ success: false, error: result.error });
+                        }
+                    }
+                } catch (err) {
+                    console.error(`[MultiProcess] Conform CSV failed for entry "${entry.fileName}":`, err);
+                    results.push({ success: false, error: err.message });
                 }
-            } catch (err) {
-                console.error(`[MultiProcess] Extract Audio failed for ${sourceFile.metadata.filename}:`, err);
-                results.push({ success: false, error: err.message });
             }
         }
 
@@ -4214,77 +4459,105 @@ class App {
                 return { success: false, error: 'All files must be monophonic (1 channel) to combine' };
             }
 
-            console.log(`[MultiProcess] Combining ${fileList.length} monophonic files into polyphonic file...`);
-
-            // Load all file buffers
-            const fileBuffers = await Promise.all(
-                fileList.map(f => f.file.arrayBuffer())
-            );
-
-            // Extract track names from metadata
-            const trackNames = fileList.map((f, i) => {
-                if (f.metadata.trackNames && f.metadata.trackNames.length > 0) {
-                    return f.metadata.trackNames[0];
+            // Intelligently group files by TC Start + audioDataSize (like dedicated Combine modal)
+            const groups = new Map();
+            fileList.forEach(file => {
+                const key = `${file.metadata.tcStart}_${file.metadata.audioDataSize}`;
+                if (!groups.has(key)) {
+                    groups.set(key, []);
                 }
-                return `Ch${i + 1}`;
+                groups.get(key).push(file);
             });
 
-            // Use first file's metadata as base
-            const baseMetadata = fileList[0].metadata;
+            // Filter to only groups with 2+ files
+            const validGroups = Array.from(groups.values()).filter(group => group.length >= 2);
 
-            // Combine audio files using existing audioProcessor method
-            const combinedBlob = await this.audioProcessor.combineToPolyphonic(
-                fileBuffers,
-                trackNames,
-                baseMetadata
-            );
-
-            // Determine bit depth
-            let bitDepth = 24;
-            if (options.outputBitDepth !== 'same') {
-                bitDepth = options.outputBitDepth === '32f' ? 32 : parseInt(options.outputBitDepth);
-            } else {
-                bitDepth = baseMetadata.bitDepth || 24;
+            if (validGroups.length === 0) {
+                console.warn('[MultiProcess] No valid groups found for combining (each group needs 2+ files)');
+                return { success: false, error: 'No combinable groups found (need matching files by TC Start and duration)' };
             }
 
-            // Prepare metadata for polyphonic file
-            const polyMetadata = {
-                ...baseMetadata,
-                channels: fileList.length,
-                trackNames: trackNames,
-                bitDepth: bitDepth
-            };
+            console.log(`[MultiProcess] Found ${validGroups.length} group(s) to combine (${fileList.length} total files)`);
 
-            // Create output filename based on first file
-            const nameWithoutExt = fileList[0].metadata.filename.replace(/\.[^/.]+$/, '');
-            const baseFileName = `${nameWithoutExt}_poly.wav`;
-            const fileName = await this.getUniqueFileName(options.outputDirHandle, baseFileName);
+            // Process each group and collect results
+            const createdFiles = [];
 
-            // Add metadata to combined file
-            const combinedArrayBuffer = await combinedBlob.arrayBuffer();
-            const finalBlob = await this.metadataHandler.saveWav(
-                { arrayBuffer: async () => combinedArrayBuffer },
-                polyMetadata
-            );
+            for (let groupIndex = 0; groupIndex < validGroups.length; groupIndex++) {
+                const group = validGroups[groupIndex];
+                console.log(`[MultiProcess] Combining group ${groupIndex + 1}/${validGroups.length} (${group.length} files)...`);
 
-            // Save file
-            const fileHandle = await options.outputDirHandle.getFileHandle(fileName, { create: true });
-            const writable = await fileHandle.createWritable();
-            await writable.write(finalBlob);
-            await writable.close();
+                // Load all file buffers for this group
+                const fileBuffers = await Promise.all(
+                    group.map(f => f.file.arrayBuffer())
+                );
 
-            // Parse and add to file list
-            const newFile = await fileHandle.getFile();
-            const metadata = await this.metadataHandler.parseFile(newFile);
-            const newFileObj = {
-                handle: fileHandle,
-                metadata: metadata,
-                file: newFile,
-                isGroup: false
-            };
-            this.files.push(newFileObj);
+                // Extract track names from metadata
+                const trackNames = group.map((f, i) => {
+                    if (f.metadata.trackNames && f.metadata.trackNames.length > 0) {
+                        return f.metadata.trackNames[0];
+                    }
+                    return `Ch${i + 1}`;
+                });
 
-            return { success: true, fileObj: newFileObj };
+                // Use first file's metadata as base
+                const baseMetadata = group[0].metadata;
+
+                // Combine audio files using existing audioProcessor method
+                const combinedBlob = await this.audioProcessor.combineToPolyphonic(
+                    fileBuffers,
+                    trackNames,
+                    baseMetadata
+                );
+
+                // Determine bit depth
+                let bitDepth = 24;
+                if (options.outputBitDepth !== 'same') {
+                    bitDepth = options.outputBitDepth === '32f' ? 32 : parseInt(options.outputBitDepth);
+                } else {
+                    bitDepth = baseMetadata.bitDepth || 24;
+                }
+
+                // Prepare metadata for polyphonic file
+                const polyMetadata = {
+                    ...baseMetadata,
+                    channels: group.length,
+                    trackNames: trackNames,
+                    bitDepth: bitDepth
+                };
+
+                // Create output filename based on first file
+                const nameWithoutExt = group[0].metadata.filename.replace(/\.[^/.]+$/, '');
+                const baseFileName = `${nameWithoutExt}_poly.wav`;
+                const fileName = await this.getUniqueFileName(options.outputDirHandle, baseFileName);
+
+                // Add metadata to combined file
+                const combinedArrayBuffer = await combinedBlob.arrayBuffer();
+                const finalBlob = await this.metadataHandler.saveWav(
+                    { arrayBuffer: async () => combinedArrayBuffer },
+                    polyMetadata
+                );
+
+                // Save file
+                const fileHandle = await options.outputDirHandle.getFileHandle(fileName, { create: true });
+                const writable = await fileHandle.createWritable();
+                await writable.write(finalBlob);
+                await writable.close();
+
+                // Parse and add to file list
+                const newFile = await fileHandle.getFile();
+                const metadata = await this.metadataHandler.parseFile(newFile);
+                const newFileObj = {
+                    handle: fileHandle,
+                    metadata: metadata,
+                    file: newFile,
+                    isGroup: false
+                };
+                this.files.push(newFileObj);
+                createdFiles.push(newFileObj);
+            }
+
+            console.log(`[MultiProcess] Successfully combined ${validGroups.length} group(s) into ${createdFiles.length} polyphonic file(s)`);
+            return { success: true, fileObjs: createdFiles };
 
         } catch (err) {
             console.error('[MultiProcess] Combine to Poly failed:', err);
@@ -4524,13 +4797,27 @@ class App {
             });
 
             const file = await fileHandle.getFile();
-            document.getElementById('mp-csv-filename').textContent = file.name;
+            const csvText = await file.text();
+
+            // Parse and validate CSV
+            const result = this.parseCSVFile(csvText);
+
+            if (!result.valid) {
+                alert(result.error);
+                return;
+            }
+
+            // Store CSV entries
+            this.mpCSVEntries = result.entries;
             
-            // Store the file handle for later use
-            this.mpCSVFileHandle = fileHandle;
+            // Update UI to show filename and entry count
+            document.getElementById('mp-csv-filename').textContent = `${file.name} (${result.entries.length} entries)`;
+            
+            console.log(`[Multi-Process] Loaded CSV with ${result.entries.length} entries`);
         } catch (err) {
             if (err.name !== 'AbortError') {
                 console.error('Error choosing CSV file:', err);
+                alert(`Failed to load CSV: ${err.message}`);
             }
         }
     }
@@ -5699,8 +5986,8 @@ class App {
         // Find all sibling groups
         let siblingGroups = this.files.filter(item => item.isGroup);
         
-        // Also check if selected individual mono files can be combined
-        let selectedMonoFiles = [];
+        // Check if selected individual mono files can be combined
+        let monoFileGroups = [];
         if (this.selectedIndices.size >= 2) {
             const selectedFiles = Array.from(this.selectedIndices).map(idx => this.files[idx]);
             const allMono = selectedFiles.every(f => 
@@ -5711,42 +5998,50 @@ class App {
             );
             
             if (allMono) {
-                const firstFile = selectedFiles[0];
-                const tcStart = firstFile.metadata.tcStart;
-                const audioSize = firstFile.metadata.audioDataSize;
+                // Group files by TC Start and audio size
+                const groups = new Map();
+                selectedFiles.forEach((file, idx) => {
+                    const key = `${file.metadata.tcStart}_${file.metadata.audioDataSize}`;
+                    if (!groups.has(key)) {
+                        groups.set(key, []);
+                    }
+                    groups.get(key).push({
+                        file: file,
+                        originalIndex: Array.from(this.selectedIndices)[idx]
+                    });
+                });
                 
-                const allMatch = selectedFiles.every(f => 
-                    f.metadata.tcStart === tcStart && 
-                    f.metadata.audioDataSize === audioSize
-                );
-                
-                if (allMatch) {
-                    selectedMonoFiles = selectedFiles;
-                }
+                // Only keep groups with 2+ files
+                monoFileGroups = Array.from(groups.values())
+                    .filter(group => group.length >= 2)
+                    .map(group => ({
+                        files: group.map(g => g.file),
+                        fileIndices: group.map(g => g.originalIndex)
+                    }));
             }
         }
         
-        // If selected mono files, prioritize combining them
-        if (selectedMonoFiles.length >= 2) {
-            // Create a virtual group from selected mono files
-            const fileIndices = Array.from(this.selectedIndices);
-            const baseName = this.getCommonBaseName(selectedMonoFiles.map(f => f.metadata.filename));
-            
-            this.combineGroups = [{
-                groupIndex: 0,
-                baseName: baseName,
-                siblings: selectedMonoFiles.map((file, index) => ({
-                    originalIndex: index,
-                    handle: file.handle,
-                    file: file.file,
-                    metadata: file.metadata,
-                    order: index,
-                    selected: true
-                })),
-                metadata: { ...selectedMonoFiles[0].metadata },
-                destinationHandle: null,
-                fileIndices: fileIndices // Track original indices
-            }];
+        // If we have mono file groups, prioritize combining them
+        if (monoFileGroups.length > 0) {
+            this.combineGroups = monoFileGroups.map((group, groupIndex) => {
+                const baseName = this.getCommonBaseName(group.files.map(f => f.metadata.filename));
+                
+                return {
+                    groupIndex: groupIndex,
+                    baseName: baseName,
+                    siblings: group.files.map((file, index) => ({
+                        originalIndex: index,
+                        handle: file.handle,
+                        file: file.file,
+                        metadata: file.metadata,
+                        order: index,
+                        selected: true
+                    })),
+                    metadata: { ...group.files[0].metadata },
+                    destinationHandle: null,
+                    fileIndices: group.fileIndices // Track original indices
+                };
+            });
         } else if (siblingGroups.length === 0) {
             alert('No sibling file groups detected, and no compatible selected files to combine.');
             return;
@@ -5784,12 +6079,14 @@ class App {
             const header = document.createElement('div');
             header.className = 'combine-group-header';
             header.innerHTML = `
-                <h4>${group.baseName}</h4>
                 <div class="combine-group-info">
                     ${group.siblings.length} files • 
                     ${group.metadata.sampleRate / 1000}kHz • 
                     ${group.metadata.bitDepth}-bit • 
                     ${group.metadata.duration}
+                </div>
+                <div class="combine-filename-preview" data-group-index="${groupIndex}" style="margin-top: 0.5em; padding: 0.5em; background: var(--bg-primary); border-radius: 4px; font-family: monospace; font-size: 0.9em; color: var(--accent-primary);">
+                    Output: <span class="preview-name">Loading...</span>
                 </div>
             `;
 
@@ -5869,36 +6166,6 @@ class App {
             const destination = document.createElement('div');
             destination.className = 'combine-destination';
             
-            const outputRow = document.createElement('div');
-            outputRow.className = 'combine-output-row';
-            outputRow.innerHTML = `
-                <label>Output filename:</label>
-                <input type="text" class="combine-output-name" value="${group.baseName}_poly.wav" data-group-index="${groupIndex}">
-            `;
-            
-            const destinationRow = document.createElement('div');
-            destinationRow.className = 'combine-destination-row';
-            destinationRow.innerHTML = `
-                <label>Save to:</label>
-                <button class="btn secondary combine-select-dir" data-group-index="${groupIndex}">Select Destination Folder</button>
-                <span class="combine-dest-path" data-group-index="${groupIndex}">Same as source files</span>
-            `;
-            
-            const dirButton = destinationRow.querySelector('.combine-select-dir');
-            dirButton.addEventListener('click', async () => {
-                try {
-                    const dirHandle = await window.showDirectoryPicker();
-                    this.combineGroups[groupIndex].destinationHandle = dirHandle;
-                    const pathSpan = destinationRow.querySelector('.combine-dest-path');
-                    pathSpan.textContent = dirHandle.name;
-                    pathSpan.style.color = 'var(--accent-primary)';
-                } catch (err) {
-                    if (err.name !== 'AbortError') {
-                        console.error('Error selecting directory:', err);
-                    }
-                }
-            });
-            
             const selectionInfo = document.createElement('div');
             selectionInfo.className = 'combine-selection-info';
             selectionInfo.innerHTML = `
@@ -5906,8 +6173,6 @@ class App {
             `;
             
             destination.appendChild(selectionInfo);
-            destination.appendChild(outputRow);
-            destination.appendChild(destinationRow);
 
             groupDiv.appendChild(header);
             groupDiv.appendChild(fileList);
@@ -5915,8 +6180,110 @@ class App {
             container.appendChild(groupDiv);
         });
 
+        // Initialize custom text field visibility based on selected values
+        ['combine-rename-field1', 'combine-rename-field2', 'combine-rename-field3'].forEach((fieldId, index) => {
+            const customIndex = index + 1;
+            const field = document.getElementById(fieldId);
+            const customInput = document.getElementById(`combine-rename-custom${customIndex}`);
+            if (field.value === 'custom') {
+                customInput.style.display = 'inline-block';
+            } else {
+                customInput.style.display = 'none';
+            }
+        });
+
+        // Reset destination handle
+        this.combineDestinationHandle = null;
+        document.getElementById('combine-dest-path').textContent = 'Same as source files';
+        document.getElementById('combine-dest-path').style.color = 'var(--text-muted)';
+
+        // Update filename previews
+        this.updateCombineFilenamePreviews();
+
         const modal = document.getElementById('combine-modal');
         modal.classList.add('active');
+    }
+
+    /**
+     * Update filename previews for all groups in combine modal
+     */
+    updateCombineFilenamePreviews() {
+        if (!this.combineGroups || this.combineGroups.length === 0) {
+            return;
+        }
+
+        // Get current format settings
+        const field1 = document.getElementById('combine-rename-field1')?.value || 'scene';
+        const field2 = document.getElementById('combine-rename-field2')?.value || 'take';
+        const field3 = document.getElementById('combine-rename-field3')?.value || 'custom';
+        const sep1 = document.getElementById('combine-rename-separator1')?.value || 'T';
+        const sep2 = document.getElementById('combine-rename-separator2')?.value || '';
+        const custom1 = document.getElementById('combine-rename-custom1')?.value || '';
+        const custom2 = document.getElementById('combine-rename-custom2')?.value || '';
+        const custom3 = document.getElementById('combine-rename-custom3')?.value || '_poly';
+
+        // Update each group's preview
+        this.combineGroups.forEach((group, groupIndex) => {
+            const previewElement = document.querySelector(`.combine-filename-preview[data-group-index="${groupIndex}"] .preview-name`);
+            if (!previewElement) return;
+
+            // Create metadata for poly file
+            const polyMetadata = {
+                ...group.metadata,
+                channels: group.siblings.length
+            };
+
+            // Generate preview filename synchronously (no directory handle needed for preview)
+            const getFieldValue = (fieldType, customValue) => {
+                if (fieldType === 'none') return null;
+                if (fieldType === 'custom') return customValue || null;
+                if (fieldType === 'project') return polyMetadata.project || null;
+                if (fieldType === 'tape') return polyMetadata.tape || null;
+                if (fieldType === 'scene') {
+                    const scene = polyMetadata.scene;
+                    if (scene && /^\d+$/.test(scene)) return scene.padStart(2, '0');
+                    return scene || null;
+                }
+                if (fieldType === 'take') {
+                    const take = polyMetadata.take;
+                    if (take && /^\d+$/.test(take)) return take.padStart(2, '0');
+                    return take || null;
+                }
+                return null;
+            };
+
+            const value1 = getFieldValue(field1, custom1);
+            const value2 = getFieldValue(field2, custom2);
+            const value3 = getFieldValue(field3, custom3);
+
+            let filename;
+            if (!value1 && !value2 && !value3) {
+                // Use DateTime fallback
+                const now = new Date();
+                const year = String(now.getFullYear()).slice(-2);
+                const month = String(now.getMonth() + 1).padStart(2, '0');
+                const day = String(now.getDate()).padStart(2, '0');
+                const hours = String(now.getHours()).padStart(2, '0');
+                const minutes = String(now.getMinutes()).padStart(2, '0');
+                const seconds = String(now.getSeconds()).padStart(2, '0');
+                filename = `${year}${month}${day}-${hours}${minutes}${seconds}-01.wav`;
+            } else {
+                // Build filename with separators
+                let parts = [];
+                if (value1) parts.push(value1);
+                if (value2) {
+                    if (parts.length > 0 && sep1) parts.push(sep1);
+                    parts.push(value2);
+                }
+                if (value3) {
+                    if (parts.length > 0 && sep2) parts.push(sep2);
+                    parts.push(value3);
+                }
+                filename = parts.join('') + '.wav';
+            }
+
+            previewElement.textContent = filename;
+        });
     }
 
     /**
@@ -6020,17 +6387,21 @@ class App {
             
             group.siblings = newOrder;
             
-            // Get output filename
-            const outputInput = document.querySelector(`.combine-output-name[data-group-index="${groupIndex}"]`) ||
-                               document.querySelectorAll('.combine-output-name')[groupIndex];
-            group.outputFilename = outputInput.value.trim();
-            
-            if (!group.outputFilename) {
-                group.outputFilename = `${group.baseName}_poly.wav`;
-            } else if (!group.outputFilename.toLowerCase().endsWith('.wav')) {
-                group.outputFilename += '.wav';
-            }
+            // Output filename will be generated using the shared format, not stored here
         });
+
+        // Collect filename format settings from modal
+        const renameField1 = document.getElementById('combine-rename-field1').value;
+        const renameField2 = document.getElementById('combine-rename-field2').value;
+        const renameField3 = document.getElementById('combine-rename-field3').value;
+        const renameSeparator1 = document.getElementById('combine-rename-separator1').value;
+        const renameSeparator2 = document.getElementById('combine-rename-separator2').value;
+        const renameCustom1 = document.getElementById('combine-rename-custom1').value;
+        const renameCustom2 = document.getElementById('combine-rename-custom2').value;
+        const renameCustom3 = document.getElementById('combine-rename-custom3').value;
+        
+        // Get shared destination handle
+        const destinationHandle = this.combineDestinationHandle;
 
         this.closeCombineModal();
 
@@ -6108,10 +6479,27 @@ class App {
                 // Prepare metadata for polyphonic file
                 const polyMetadata = {
                     ...group.metadata,
-                    filename: group.outputFilename,
                     channels: group.siblings.length,
                     trackNames: trackNames
                 };
+
+                // Generate output filename using shared format
+                const outputFilename = await this.generateFlexibleFilename(
+                    polyMetadata,
+                    renameField1,
+                    renameField2,
+                    renameField3,
+                    renameSeparator1,
+                    renameSeparator2,
+                    renameCustom1,
+                    renameCustom2,
+                    renameCustom3,
+                    '', // no track suffix for poly files
+                    destinationHandle
+                );
+
+                // Update metadata with generated filename
+                polyMetadata.filename = outputFilename;
 
                 // Add metadata to combined file
                 const combinedArrayBuffer = await combinedBlob.arrayBuffer();
@@ -6121,13 +6509,14 @@ class App {
                 );
 
                 // Save file
-                const suggestedName = group.outputFilename;
+                const suggestedName = outputFilename;
                 let handle;
                 
                 try {
-                    if (group.destinationHandle) {
-                        // Save to selected directory
-                        handle = await group.destinationHandle.getFileHandle(suggestedName, { create: true });
+                    if (destinationHandle) {
+                        // Save to selected directory with unique filename
+                        const uniqueFileName = await this.getUniqueFileNameWithParens(destinationHandle, suggestedName);
+                        handle = await destinationHandle.getFileHandle(uniqueFileName, { create: true });
                         
                         const writable = await handle.createWritable();
                         await writable.write(finalBlob);
@@ -6147,7 +6536,7 @@ class App {
                         await writable.close();
                     }
 
-                    console.log(`✓ Combined file saved: ${group.outputFilename}`);
+                    console.log(`✓ Combined file saved: ${outputFilename}`);
 
                     // Auto-add to file list
                     const newFile = await handle.getFile();

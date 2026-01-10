@@ -39,10 +39,9 @@
                 <div class="batch-actions">
                     <button id="import-btn" class="btn secondary">Import</button>
                     <button id="batch-remove-btn" class="btn secondary" disabled>Remove</button>
+                    <button id="batch-delete-btn" class="btn secondary" disabled>Delete</button>
                     <button id="batch-edit-btn" class="btn secondary" disabled>Batch Edit</button>
                     <button id="batch-save-btn" class="btn secondary" disabled>Save</button>
-                    <button id="combine-btn" class="btn secondary" disabled>Combine</button>
-                    <button id="split-btn" class="btn secondary" disabled>Split</button>
                 </div>
                 <div class="auto-save-toggle">
                     <label>
@@ -86,12 +85,15 @@
 
         <!-- File Operations Toolbar -->
         <div class="file-operations-toolbar">
-            <button id="diagnostics-btn" class="btn secondary" disabled>Diagnostics</button>
+            <button id="multi-process-btn" class="btn secondary">Multi-Process</button>
+            <button id="export-tc-range-btn" class="btn secondary" disabled>Extract TC Range</button>
+            <button id="conform-csv-btn" class="btn secondary">Conform to CSV</button>
+            <button id="combine-btn" class="btn secondary" disabled>Combine</button>
+            <button id="split-btn" class="btn secondary" disabled>Split</button>
+            <button id="normalize-btn" class="btn secondary" disabled>Normalize</button>
             <button id="rename-btn" class="btn secondary" disabled>Rename</button>
             <button id="report-btn" class="btn secondary">Report</button>
-            <button id="export-tc-range-btn" class="btn secondary" disabled>Export TC Range</button>
-            <button id="conform-csv-btn" class="btn secondary">Conform to CSV</button>
-            <button id="multi-process-btn" class="btn secondary">Multi-Process</button>
+            <button id="diagnostics-btn" class="btn secondary" disabled>Diagnostics</button>
         </div>
 
         <!-- Player & Waveform -->
@@ -111,7 +113,6 @@
                     </div>
                 </div>
                 <div style="display: flex; gap: 10px; align-items: center;">
-                    <button id="normalize-btn" class="btn secondary" disabled>Normalize</button>
                     <button class="toggle-btn">▼</button>
                 </div>
             </div>
@@ -214,6 +215,25 @@
                 <div class="modal-footer">
                     <button id="batch-apply-btn" class="btn primary">Apply Changes</button>
                     <button id="batch-cancel-btn" class="btn secondary">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Delete Confirmation Modal -->
+        <div id="delete-confirm-modal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2>Delete Files</h2>
+                    <button class="modal-close" id="delete-modal-close-btn">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <p class="modal-info">You have selected <span id="delete-count">0</span> file(s) to delete.</p>
+                    <p style="margin-top: 1rem; color: #ff6b6b; font-weight: bold;">⚠️ Warning: Files will be permanently deleted and cannot be recovered.</p>
+                    <p style="margin-top: 0.5rem; font-size: 0.9rem; color: var(--text-secondary);">Note: Web browsers cannot move files to the system Trash.</p>
+                </div>
+                <div class="modal-footer">
+                    <button id="delete-permanent-btn" class="btn" style="background-color: #ff6b6b; color: white;">Delete Permanently</button>
+                    <button id="delete-cancel-btn" class="btn secondary">Cancel</button>
                 </div>
             </div>
         </div>
@@ -805,6 +825,90 @@
                 <button class="close-modal" id="combine-close-btn">&times;</button>
             </div>
             <div class="modal-body">
+                <!-- Shared Output Settings -->
+                <div class="combine-output-settings" style="background: var(--bg-secondary); padding: 1em; margin-bottom: 1.5em; border-radius: 4px;">
+                    <h4 style="margin-top: 0; margin-bottom: 1em; font-size: 1.1em;">Output Settings (applies to all groups)</h4>
+                    
+                    <!-- Filename Format -->
+                    <div style="margin-bottom: 1em;">
+                        <label style="display: block; margin-bottom: 0.5em; font-weight: 600;">Filename Format:</label>
+                        <div style="display: flex; gap: 0.5em; flex-wrap: wrap; align-items: center;">
+                            <div style="display: flex; gap: 0.3em; align-items: center;">
+                                <label style="margin: 0; font-size: 0.9em;">Field 1:</label>
+                                <select id="combine-rename-field1" class="mp-field-select" style="min-width: 90px;">
+                                    <option value="none">None</option>
+                                    <option value="project">Project</option>
+                                    <option value="tape">Tape</option>
+                                    <option value="scene" selected>Scene</option>
+                                    <option value="take">Take</option>
+                                    <option value="custom">Custom</option>
+                                </select>
+                                <input type="text" id="combine-rename-custom1" placeholder="custom text" style="min-width: 90px; display: none;">
+                            </div>
+                            <div style="display: flex; gap: 0.3em; align-items: center;">
+                                <label style="margin: 0; font-size: 0.9em;">Sep:</label>
+                                <select id="combine-rename-separator1" style="min-width: 60px;">
+                                    <option value="">None</option>
+                                    <option value="T" selected>T</option>
+                                    <option value="-">-</option>
+                                    <option value="_">_</option>
+                                    <option value="=">=</option>
+                                    <option value="~">~</option>
+                                    <option value="+">+</option>
+                                    <option value=",">,</option>
+                                    <option value=".">.</option>
+                                </select>
+                            </div>
+                            <div style="display: flex; gap: 0.3em; align-items: center;">
+                                <label style="margin: 0; font-size: 0.9em;">Field 2:</label>
+                                <select id="combine-rename-field2" class="mp-field-select" style="min-width: 90px;">
+                                    <option value="none">None</option>
+                                    <option value="project">Project</option>
+                                    <option value="tape">Tape</option>
+                                    <option value="scene">Scene</option>
+                                    <option value="take" selected>Take</option>
+                                    <option value="custom">Custom</option>
+                                </select>
+                                <input type="text" id="combine-rename-custom2" placeholder="custom text" style="min-width: 90px; display: none;">
+                            </div>
+                            <div style="display: flex; gap: 0.3em; align-items: center;">
+                                <label style="margin: 0; font-size: 0.9em;">Sep:</label>
+                                <select id="combine-rename-separator2" style="min-width: 60px;">
+                                    <option value="">None</option>
+                                    <option value="T">T</option>
+                                    <option value="-">-</option>
+                                    <option value="_">_</option>
+                                    <option value="=">=</option>
+                                    <option value="~">~</option>
+                                    <option value="+">+</option>
+                                    <option value=",">,</option>
+                                    <option value=".">.</option>
+                                </select>
+                            </div>
+                            <div style="display: flex; gap: 0.3em; align-items: center;">
+                                <label style="margin: 0; font-size: 0.9em;">Field 3:</label>
+                                <select id="combine-rename-field3" class="mp-field-select" style="min-width: 90px;">
+                                    <option value="none" selected>None</option>
+                                    <option value="project">Project</option>
+                                    <option value="tape">Tape</option>
+                                    <option value="scene">Scene</option>
+                                    <option value="take">Take</option>
+                                    <option value="custom">Custom</option>
+                                </select>
+                                <input type="text" id="combine-rename-custom3" placeholder="custom text" style="min-width: 90px; display: none;">
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Destination Folder -->
+                    <div style="display: flex; align-items: center; gap: 1em;">
+                        <label style="margin: 0; font-weight: 600;">Destination:</label>
+                        <button id="combine-select-dir-btn" class="btn secondary">Select Destination Folder</button>
+                        <span id="combine-dest-path" style="color: var(--text-muted); font-size: 0.95em;">Same as source files</span>
+                    </div>
+                </div>
+                
+                <!-- File Groups -->
                 <div id="combine-groups-container">
                     <!-- Sibling groups will be listed here -->
                 </div>

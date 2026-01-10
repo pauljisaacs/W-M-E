@@ -5,7 +5,7 @@
   "display": "standalone",
   "background_color": "#121212",
   "theme_color": "#1e1e1e",
-  "version": "1.0.1",
+  "version": "0.99.01 (beta)",
   "icons": [
     {
       "src": "icon-192.png",
