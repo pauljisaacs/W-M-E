@@ -1054,15 +1054,15 @@ export class MetadataHandler {
 
             // Escape the tag to handle special regex characters
             const escapedTag = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            // Match tag=VALUE until whitespace or end of string
-            const regex = new RegExp(`\\b${escapedTag}=[^\\s\\r\\n]*`, 'g');
+            // Match tag=VALUE until newline or end of string (allow spaces in values)
+            const regex = new RegExp(`\\b${escapedTag}=[^\\r\\n]*`, 'g');
             
             // Try to replace - if it returns the same string, the tag wasn't found
             const newDesc = desc.replace(regex, `${tag}=${val}`);
             
             if (newDesc === desc && val !== '') {
                 // Tag not found, append it
-                const separator = (desc.endsWith('\n') || desc.endsWith('\r') || desc.endsWith(' ') || desc === '') ? '' : ' ';
+                const separator = (desc.endsWith('\n') || desc.endsWith('\r') || desc.endsWith(' ') || desc === '') ? '' : '\n';
                 desc = desc ? `${desc}${separator}${tag}=${val}` : `${tag}=${val}`;
             } else {
                 desc = newDesc;
