@@ -137,6 +137,7 @@ class App {
         document.getElementById('batch-delete-btn').addEventListener('click', () => this.openDeleteConfirmModal());
 
         // File Operations
+        document.getElementById('auto-group-btn').addEventListener('click', () => this.autoGroupByMetadata());
         document.getElementById('diagnostics-btn').addEventListener('click', () => this.openDiagnosticsModal());
 
         // Modal controls
@@ -1487,11 +1488,10 @@ class App {
         this.files.forEach((file, i) => this.addTableRow(i, file.metadata));
 
         // Update header indicators
-        document.querySelectorAll('#table-header th').forEach((th, i) => {
+        document.querySelectorAll('#table-header th').forEach((th) => {
             th.classList.remove('sort-asc', 'sort-desc');
-            // Map visual index to original index
-            const originalIndex = this.columnOrder[i];
-            if (originalIndex === columnIndex) {
+            // Check if this header's sort key matches the current sort column
+            if (th.dataset.sort === key || th.dataset.sort === this.sortColumn) {
                 th.classList.add(this.sortDirection === 'asc' ? 'sort-asc' : 'sort-desc');
             }
         });
@@ -1865,6 +1865,11 @@ class App {
         this.updateSaveButtonState();
         safeSetDisabled('batch-remove-btn', !hasSelection);
         safeSetDisabled('batch-delete-btn', !hasSelection);
+        
+        // Auto-Group button: enabled if selected files OR ungrouped files exist
+        const hasUngroupedFiles = this.files.some(f => !f.isGroup);
+        safeSetDisabled('auto-group-btn', !hasSelection && !hasUngroupedFiles);
+        
         safeSetDisabled('diagnostics-btn', !hasSelection);
         safeSetDisabled('corrupt-ixml-modal-btn', this.selectedIndices.size !== 1);
         safeSetDisabled('normalize-btn', !hasSelection);
@@ -2234,6 +2239,173 @@ class App {
         return null; // No iXML chunk found
     }
 
+    /**
+     * Auto-group files by metadata (tcStart + audioDataSize)
+     * Works on selected files if any, otherwise all ungrouped files
+     */
+    async autoGroupByMetadata() {
+        // Determine files to process
+        let filesToProcess;
+        let isSelection = false;
+        
+        if (this.selectedIndices.size > 0) {
+            // Work on selected files
+            filesToProcess = Array.from(this.selectedIndices)
+                .map(idx => ({ file: this.files[idx], originalIndex: idx }))
+                .filter(item => item.file && !item.file.isGroup); // Exclude already grouped files
+            isSelection = true;
+        } else {
+            // Work on all ungrouped files
+            filesToProcess = this.files
+                .map((file, idx) => ({ file, originalIndex: idx }))
+                .filter(item => !item.file.isGroup);
+        }
+        
+        if (filesToProcess.length < 2) {
+            alert('Need at least 2 ungrouped files to auto-group.');
+            return;
+        }
+        
+        // Group by tcStart + audioDataSize
+        const groups = new Map();
+        filesToProcess.forEach(item => {
+            const key = `${item.file.metadata.tcStart}_${item.file.metadata.audioDataSize}`;
+            if (!groups.has(key)) {
+                groups.set(key, []);
+            }
+            groups.get(key).push(item);
+        });
+        
+        // Filter to only groups with 2+ files and all mono
+        const validGroups = [];
+        for (const [key, items] of groups.entries()) {
+            if (items.length < 2) continue;
+            
+            // Check all files in group are mono
+            const allMono = items.every(item => item.file.metadata.channels === 1);
+            if (!allMono) {
+                console.warn(`Skipping group with key ${key} - contains non-mono files`);
+                continue;
+            }
+            
+            validGroups.push(items);
+        }
+        
+        if (validGroups.length === 0) {
+            const msg = isSelection 
+                ? 'No groupable files found in selection.\n\nFiles must:\n• Be monophonic (1 channel)\n• Have matching TC Start and duration\n• Have at least 2 files per group'
+                : 'No groupable files found.\n\nFiles must:\n• Be monophonic (1 channel)\n• Have matching TC Start and duration\n• Have at least 2 files per group';
+            alert(msg);
+            return;
+        }
+        
+        // Show confirmation
+        const totalFiles = validGroups.reduce((sum, group) => sum + group.length, 0);
+        const msg = isSelection
+            ? `Create ${validGroups.length} sibling group${validGroups.length > 1 ? 's' : ''} from ${totalFiles} selected file${totalFiles > 1 ? 's' : ''}?`
+            : `Create ${validGroups.length} sibling group${validGroups.length > 1 ? 's' : ''} from ${totalFiles} file${totalFiles > 1 ? 's' : ''}?`;
+        
+        if (!confirm(msg)) {
+            return;
+        }
+        
+        // Create sibling groups
+        const indicesToRemove = new Set();
+        const newGroups = [];
+        
+        for (const groupItems of validGroups) {
+            // Sort by filename for consistent ordering
+            groupItems.sort((a, b) => 
+                a.file.metadata.filename.localeCompare(b.file.metadata.filename, undefined, { numeric: true, sensitivity: 'base' })
+            );
+            
+            // Generate group name from Scene + Take metadata
+            const firstFile = groupItems[0].file;
+            let groupName;
+            
+            if (firstFile.metadata.scene && firstFile.metadata.take) {
+                const scene = firstFile.metadata.scene;
+                const take = firstFile.metadata.take;
+                // Pad scene and take with leading zeros if numeric
+                const scenePadded = /^\d+$/.test(scene) ? scene.padStart(2, '0') : scene;
+                const takePadded = /^\d+$/.test(take) ? take.padStart(2, '0') : take;
+                groupName = `${scenePadded}T${takePadded}_X.wav`;
+            } else {
+                // Fallback: use common base name
+                const filenames = groupItems.map(item => item.file.metadata.filename);
+                const baseName = this.getCommonBaseName(filenames);
+                groupName = `${baseName}_X.wav`;
+            }
+            
+            // Collect track names from all siblings
+            const trackNames = groupItems.map((item, idx) => {
+                if (item.file.metadata.trackNames && item.file.metadata.trackNames.length > 0) {
+                    return item.file.metadata.trackNames[0];
+                }
+                return `Ch${idx + 1}`;
+            });
+            
+            // Create sibling group object
+            const siblingGroup = {
+                isGroup: true,
+                metadata: {
+                    ...firstFile.metadata,
+                    filename: groupName,
+                    channels: groupItems.length, // Number of siblings (files in group)
+                    trackNames: trackNames // Track names from all siblings
+                },
+                siblings: groupItems.map((item, idx) => ({
+                    handle: item.file.handle,
+                    file: item.file.file,
+                    metadata: item.file.metadata,
+                    order: idx
+                })),
+                // Keep reference to first file for compatibility
+                handle: groupItems[0].file.handle,
+                file: groupItems[0].file.file
+            };
+            
+            newGroups.push({
+                group: siblingGroup,
+                insertIndex: Math.min(...groupItems.map(item => item.originalIndex))
+            });
+            
+            // Mark original indices for removal
+            groupItems.forEach(item => indicesToRemove.add(item.originalIndex));
+        }
+        
+        // Remove individual files and insert groups
+        // Sort indices in descending order to remove from end first
+        const sortedIndices = Array.from(indicesToRemove).sort((a, b) => b - a);
+        sortedIndices.forEach(idx => {
+            this.files.splice(idx, 1);
+        });
+        
+        // Insert groups at appropriate positions (adjust for removals)
+        newGroups.sort((a, b) => a.insertIndex - b.insertIndex);
+        let offset = 0;
+        for (const { group, insertIndex } of newGroups) {
+            // Calculate adjusted index accounting for previous removals
+            const adjustedIndex = insertIndex - Array.from(indicesToRemove).filter(i => i < insertIndex).length + offset;
+            this.files.splice(adjustedIndex, 0, group);
+            offset++;
+        }
+        
+        // Refresh table
+        const tbody = document.getElementById('file-list-body');
+        tbody.innerHTML = '';
+        this.files.forEach((item, index) => {
+            this.addTableRow(index, item.metadata);
+        });
+        
+        // Clear selection and update UI
+        this.selectedIndices.clear();
+        this.updateSelectionUI();
+        
+        // Show success message
+        this.showToast(`Created ${validGroups.length} sibling group${validGroups.length > 1 ? 's' : ''} from ${totalFiles} file${totalFiles > 1 ? 's' : ''}`, 'success', 3000);
+    }
+
     openDiagnosticsModal() {
         console.log('Opening diagnostics modal');
         // Default to iXML tab and populate it
@@ -2290,39 +2462,76 @@ class App {
         const item = this.files[index];
 
         try {
-            // Refresh file object from handle if available (in case file was modified)
-            if (item.handle) {
-                try {
-                    item.file = await item.handle.getFile();
-                } catch (err) {
-                    console.warn('Could not refresh file from handle:', err);
-                    // Continue with existing file reference
-                }
+            const content = document.getElementById('bext-content');
+            
+            // First try to use cached bEXT data from metadata
+            if (item.metadata && item.metadata.bextRaw) {
+                const bextData = this.formatBEXTDisplay(item.metadata.bextRaw);
+                content.textContent = bextData || 'No bEXT data found in this file.';
+                return;
             }
 
-            const arrayBuffer = await item.file.arrayBuffer();
-            const bextData = this.extractBEXT(arrayBuffer);
+            // For large files, only read the last portion (bEXT chunks are typically at the end)
+            // For >3GB files, reading entire file will fail or be very slow
+            const fileSize = item.file.size;
+            const isLargeFile = fileSize > 2 * 1024 * 1024 * 1024; // > 2GB
 
-            const content = document.getElementById('bext-content');
-
-            if (bextData) {
-                content.textContent = bextData;
+            if (isLargeFile) {
+                // For large files, read only the last 256KB (bEXT is usually much smaller)
+                const tailSize = Math.min(256 * 1024, fileSize);
+                const startPos = fileSize - tailSize;
+                
+                const slice = item.file.slice(startPos, fileSize);
+                const arrayBuffer = await slice.arrayBuffer();
+                
+                // Parse from this tail section
+                const bextData = this.extractBEXT(arrayBuffer, true);
+                
+                if (bextData) {
+                    content.textContent = bextData;
+                } else {
+                    content.textContent = 'No bEXT data found in this file.\n\n(File is >2GB - only checked last 256KB)';
+                }
             } else {
-                content.textContent = 'No bEXT data found in this file.';
+                // For normal files, read the whole thing
+                // Refresh file object from handle if available (in case file was modified)
+                if (item.handle) {
+                    try {
+                        item.file = await item.handle.getFile();
+                    } catch (err) {
+                        console.warn('Could not refresh file from handle:', err);
+                        // Continue with existing file reference
+                    }
+                }
+
+                const arrayBuffer = await item.file.arrayBuffer();
+                const bextData = this.extractBEXT(arrayBuffer);
+
+                if (bextData) {
+                    content.textContent = bextData;
+                } else {
+                    content.textContent = 'No bEXT data found in this file.';
+                }
             }
 
             // Note: Tab switching and modal opening is handled by the caller
         } catch (err) {
             console.error('Error reading bEXT:', err);
-            alert('Failed to read bEXT data from file.');
+            const content = document.getElementById('bext-content');
+            content.textContent = `Error reading bEXT: ${err.message}\n\nThis may occur on very large files or due to file access restrictions.`;
         }
     }
 
-    extractBEXT(arrayBuffer) {
+    extractBEXT(arrayBuffer, isTailOnly = false) {
         const view = new DataView(arrayBuffer);
-        let offset = 12; // Skip RIFF header
+        let offset = isTailOnly ? 0 : 12; // Skip RIFF header only if reading full file
 
+        // For tail-only mode, search from the beginning of the slice (which is already the tail)
+        // Look for bext chunk within this buffer
         while (offset < view.byteLength - 8) {
+            // Safely read chunk ID
+            if (offset + 8 > view.byteLength) break;
+            
             const chunkId = String.fromCharCode(
                 view.getUint8(offset),
                 view.getUint8(offset + 1),
@@ -2333,60 +2542,79 @@ class App {
 
             if (chunkId === 'bext') {
                 // Found bEXT chunk
-                const chunkOffset = offset + 8;
-
-                // Helper to read string
-                const readStr = (off, len) => {
-                    let s = '';
-                    for (let i = 0; i < len; i++) {
-                        const c = view.getUint8(off + i);
-                        if (c === 0) break;
-                        s += String.fromCharCode(c);
-                    }
-                    return s;
-                };
-
-                const description = readStr(chunkOffset, 256);
-                const originator = readStr(chunkOffset + 256, 32);
-                const originatorRef = readStr(chunkOffset + 288, 32);
-                const date = readStr(chunkOffset + 320, 10);
-                const time = readStr(chunkOffset + 330, 8);
-
-                const timeRefLow = view.getUint32(chunkOffset + 338, true);
-                const timeRefHigh = view.getUint32(chunkOffset + 342, true);
-                const timeRef = (BigInt(timeRefHigh) << 32n) | BigInt(timeRefLow);
-
-                const version = view.getUint16(chunkOffset + 346, true);
-
-                // Format output
-                let output = `Description: ${description}\n`;
-                output += `Originator: ${originator}\n`;
-                output += `Originator Reference: ${originatorRef}\n`;
-                output += `Origination Date: ${date}\n`;
-                output += `Origination Time: ${time}\n`;
-                output += `Time Reference: ${timeRef.toString()} samples\n`;
-                output += `Version: ${version}\n`;
-
-                // Coding History (starts at offset 602 if version 1, but technically variable)
-                // For simplicity, we'll assume standard V1 size of 602 bytes before coding history
-                if (chunkSize > 602) {
-                    const history = readStr(chunkOffset + 602, chunkSize - 602);
-                    if (history) {
-                        output += `\nCoding History:\n${history}`;
-                    }
-                }
-
-                return output;
+                return this.formatBEXTDisplay({ view, offset });
             }
 
             offset += 8 + chunkSize;
-            if (offset % 2 !== 0) offset++;
         }
 
-        return null;
+        return null; // No bEXT found
     }
 
+    formatBEXTDisplay(bextInfo) {
+        try {
+            let view, chunkOffset;
+            
+            if (bextInfo.view) {
+                // Called from extractBEXT with view and offset
+                view = bextInfo.view;
+                chunkOffset = bextInfo.offset + 8;
+            } else if (bextInfo instanceof Uint8Array) {
+                // Called with raw bext buffer from metadata.bextRaw
+                view = new DataView(bextInfo.buffer, bextInfo.byteOffset, bextInfo.byteLength);
+                chunkOffset = 0; // The buffer starts at the bext chunk data (no chunk header)
+            } else {
+                // Unknown format
+                return String(bextInfo);
+            }
 
+            // Helper to read string
+            const readStr = (off, len) => {
+                let s = '';
+                for (let i = 0; i < len; i++) {
+                    if (off + i >= view.byteLength) break;
+                    const c = view.getUint8(off + i);
+                    if (c === 0) break;
+                    s += String.fromCharCode(c);
+                }
+                return s;
+            };
+
+            const description = readStr(chunkOffset, 256);
+            const originator = readStr(chunkOffset + 256, 32);
+            const originatorRef = readStr(chunkOffset + 288, 32);
+            const date = readStr(chunkOffset + 320, 10);
+            const time = readStr(chunkOffset + 330, 8);
+
+            const timeRefLow = view.getUint32(chunkOffset + 338, true);
+            const timeRefHigh = view.getUint32(chunkOffset + 342, true);
+            const timeRef = (BigInt(timeRefHigh) << 32n) | BigInt(timeRefLow);
+
+            const version = view.getUint16(chunkOffset + 346, true);
+
+            // Format output
+            let output = `Description: ${description}\n`;
+            output += `Originator: ${originator}\n`;
+            output += `Originator Reference: ${originatorRef}\n`;
+            output += `Origination Date: ${date}\n`;
+            output += `Origination Time: ${time}\n`;
+            output += `Time Reference: ${timeRef.toString()} samples\n`;
+            output += `Version: ${version}\n`;
+
+            // Coding History
+            if (chunkOffset + 602 < view.byteLength) {
+                const history = readStr(chunkOffset + 602, Math.min(1000, view.byteLength - chunkOffset - 602));
+                if (history) {
+                    output += `\nCoding History:\n${history}`;
+                }
+            }
+
+            return output;
+        } catch (err) {
+            console.error('Error formatting bEXT display:', err);
+            return null;
+        }
+    }
 
     // Debug function to corrupt iXML for testing repair functionality
     async corruptIXMLForTesting(corruptionType = 'missing-closing-tag') {
@@ -2517,7 +2745,7 @@ class App {
 
     async loadAudioForFile(index) {
         const item = this.files[index];
-        const targetFiles = item.isGroup ? [item, ...item.siblings] : [item];
+        const targetFiles = item.isGroup ? item.siblings : [item];
         const isGroup = item.isGroup;
         const totalSize = targetFiles.reduce((acc, f) => acc + f.file.size, 0);
         const totalSizeMB = (totalSize / (1024 * 1024)).toFixed(1);
@@ -2648,8 +2876,23 @@ class App {
                 this.audioEngine.renderWaveform(canvas, buffer, this.mixer.channels, this.cueMarkers, this.selectedCueMarkerId);
             };
 
+            // Collect track names for mixer
+            let trackNames;
+            if (isGroup) {
+                // For sibling groups, collect track names from each sibling
+                trackNames = item.siblings.map((sib, idx) => {
+                    if (sib.metadata.trackNames && sib.metadata.trackNames.length > 0) {
+                        return sib.metadata.trackNames[0];
+                    }
+                    return `Ch${idx + 1}`;
+                });
+            } else {
+                // For single files, use existing track names
+                trackNames = item.metadata.trackNames;
+            }
+
             // Build mixer UI for this file (reuses existing mixer container)
-            this.mixer.buildUI(trackCount, item.metadata.trackNames);
+            this.mixer.buildUI(trackCount, trackNames);
 
             // Render Waveform (initial)
             this.audioEngine.renderWaveform(canvas, buffer, this.mixer.channels, this.cueMarkers, this.selectedCueMarkerId);
@@ -5293,6 +5536,7 @@ class App {
     async handleExport() {
         const format = document.getElementById('export-format').value;
         const mixMode = document.querySelector('input[name="mix-mode"]:checked').value;
+        const channelMode = document.getElementById('export-channels').value;
         
         // If a region is drawn, only export the currently displayed file
         // Otherwise, export all selected files
@@ -5413,13 +5657,20 @@ class App {
                     isRegionExport = true;
                 }
 
-                // Render stereo mix
-                const renderedBuffer = await this.audioEngine.renderStereoMix(
-                    buffer,
-                    this.mixer.channels,
-                    mixMode,
-                    this.mixer.masterFaderLevel
-                );
+                // Render mix (mono or stereo)
+                const renderedBuffer = channelMode === 'mono'
+                    ? await this.audioEngine.renderMonoMix(
+                        buffer,
+                        this.mixer.channels,
+                        mixMode,
+                        this.mixer.masterFaderLevel
+                    )
+                    : await this.audioEngine.renderStereoMix(
+                        buffer,
+                        this.mixer.channels,
+                        mixMode,
+                        this.mixer.masterFaderLevel
+                    );
 
                 // Encode
                 let blob;

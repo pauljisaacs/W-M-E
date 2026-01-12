@@ -47,7 +47,7 @@ export class AudioEngine {
                     }
                     return decoded;
                 } catch (nativeErr) {
-                    console.warn('[decodeFile] Native decoding failed, trying manual WAV decoding...', nativeErr);
+                    console.log('[decodeFile] Native decoding not supported for this file, using manual WAV decoder...');
                     return this.decodeWavManually(bufferClone);
                 }
             }
@@ -549,24 +549,119 @@ export class AudioEngine {
             panNode.connect(masterGainNode);
         });
 
-        // For mono source, duplicate left to right channel as fallback (after explicitly mixed channels)
-        // This ensures stereo output even if mixer configuration doesn't fill both channels
-        if (sourceBuffer.numberOfChannels === 1 && mixerChannels.length > 0) {
-            // If we only have 1 source channel and explicit mixer channels, they should have handled panning
-            // But as a safety net for the fallback case where no explicit channels are mixed:
-            const monoChannel = 0;
-            if (mixerChannels[monoChannel]) {
-                // Already handled above in the forEach loop
-            } else {
-                // No mixer channel for mono source - this shouldn't happen, but duplicate to both channels
+        source.start(0);
+        return await offlineCtx.startRendering();
+    }
+
+    async renderMonoMix(sourceBuffer, mixerChannels, mode = 'current', masterFaderLevel = 1.0) {
+        if (!sourceBuffer) throw new Error("No buffer to render");
+
+        // Create MONO offline context (1 channel)
+        const offlineCtx = new OfflineAudioContext(1, sourceBuffer.length, sourceBuffer.sampleRate);
+
+        // Helper function to convert master fader level to gain
+        const getMasterGain = (faderLevel) => {
+            const dBCurve = [
+                [1.00, 10],
+                [0.75, 0],
+                [0.50, -10],
+                [0.40, -20],
+                [0.30, -30],
+                [0.20, -40],
+                [0.10, -55],
+                [0.05, -70],
+                [0.02, -80],
+                [0.00, -Infinity]
+            ];
+            
+            const sliderToDb = (slider) => {
+                if (slider <= 0) return -Infinity;
+                for (let j = 1; j < dBCurve.length; ++j) {
+                    if (slider >= dBCurve[j][0]) {
+                        const [x1, y1] = dBCurve[j-1];
+                        const [x2, y2] = dBCurve[j];
+                        return y1 + (y2 - y1) * (slider - x1) / (x2 - x1);
+                    }
+                }
+                return dBCurve[dBCurve.length-1][1];
+            };
+            
+            const dbToGain = (db) => {
+                if (!isFinite(db)) return 0;
+                return Math.pow(10, db / 20);
+            };
+            
+            return dbToGain(sliderToDb(faderLevel));
+        };
+
+        const masterGain = getMasterGain(masterFaderLevel);
+
+        // Mode: bypass - use default settings (sum all channels to mono)
+        if (mode === 'bypass') {
+            const source = offlineCtx.createBufferSource();
+            source.buffer = sourceBuffer;
+            const splitter = offlineCtx.createChannelSplitter(sourceBuffer.numberOfChannels);
+            source.connect(splitter);
+
+            // Create master gain node to apply master fader
+            const masterGainNode = offlineCtx.createGain();
+            masterGainNode.gain.value = masterGain;
+            masterGainNode.connect(offlineCtx.destination);
+
+            // Sum all channels to mono with equal weighting
+            const channelCount = sourceBuffer.numberOfChannels;
+            const gainPerChannel = 1.0 / Math.sqrt(channelCount); // Energy-preserving sum
+
+            for (let i = 0; i < channelCount; i++) {
                 const gainNode = offlineCtx.createGain();
-                gainNode.gain.value = monoCompensation;
-                const splitterForFallback = offlineCtx.createChannelSplitter(1);
-                source.connect(splitterForFallback);
-                splitterForFallback.connect(gainNode, 0);
+                gainNode.gain.value = gainPerChannel;
+                splitter.connect(gainNode, i);
                 gainNode.connect(masterGainNode);
             }
+
+            source.start(0);
+            return await offlineCtx.startRendering();
         }
+
+        // Mode: automation - not implemented for mono yet, fall back to current
+        if (mode === 'automation') {
+            console.warn('Automation not yet implemented for mono mix, falling back to current mix');
+            mode = 'current';
+        }
+
+        // Mode: current (default) - use static mixer settings, sum to mono
+        const source = offlineCtx.createBufferSource();
+        source.buffer = sourceBuffer;
+        const splitter = offlineCtx.createChannelSplitter(sourceBuffer.numberOfChannels);
+        source.connect(splitter);
+
+        // Create master gain node to apply master fader
+        const masterGainNode = offlineCtx.createGain();
+        masterGainNode.gain.value = masterGain;
+        masterGainNode.connect(offlineCtx.destination);
+
+        // Check Solo state
+        const isAnySolo = mixerChannels.some(ch => ch.isSoloed);
+
+        mixerChannels.forEach(ch => {
+            if (ch.index >= sourceBuffer.numberOfChannels) return;
+
+            // Gain Logic (ignore pan for mono mix)
+            let gainValue = ch.volume;
+            if (isAnySolo) {
+                if (!ch.isSoloed) gainValue = 0;
+            } else {
+                if (ch.isMuted) gainValue = 0;
+            }
+
+            // Create gain node and connect directly to master (no panning for mono)
+            const gainNode = offlineCtx.createGain();
+            gainNode.gain.value = gainValue;
+
+            // Connect: Splitter -> Gain -> Master Gain -> Destination (mono)
+            splitter.connect(gainNode, ch.index);
+            gainNode.connect(masterGainNode);
+        });
 
         source.start(0);
         return await offlineCtx.startRendering();

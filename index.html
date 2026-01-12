@@ -93,6 +93,7 @@
             <button id="normalize-btn" class="btn secondary" disabled>Normalize</button>
             <button id="rename-btn" class="btn secondary" disabled>Rename</button>
             <button id="report-btn" class="btn secondary">Report</button>
+            <button id="auto-group-btn" class="btn secondary" disabled>Auto-Group</button>
             <button id="diagnostics-btn" class="btn secondary" disabled>Diagnostics</button>
         </div>
 
@@ -382,6 +383,14 @@
                             Use Automation <span class="radio-hint">(Automated fader movements)</span>
                         </label>
                     </div>
+                </div>
+
+                <div class="input-group">
+                    <label for="export-channels">Channels:</label>
+                    <select id="export-channels">
+                        <option value="stereo" selected>Stereo (2ch)</option>
+                        <option value="mono">Mono (1ch)</option>
+                    </select>
                 </div>
 
                 <div class="input-group">

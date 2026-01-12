@@ -1050,19 +1050,22 @@ export class MetadataHandler {
 
         // Helper to update or append a tag in the description
         const updateTag = (tag, val) => {
-            if (!val && val !== '') return; // Allow empty string updates if tag exists
+            if (val === undefined || val === null) return;
 
-            // Regex to match tag=VALUE (until newline or end of string)
-            // Sound Devices uses newlines often, so we match until \n or end
-            const regex = new RegExp(`${tag}=[^\\r\\n]*`);
-
-            if (regex.test(desc)) {
-                desc = desc.replace(regex, `${tag}=${val}`);
-            } else if (val) {
-                // Append if not found and we have a value
-                // Check if desc ends with newline
-                const separator = (desc.endsWith('\n') || desc.endsWith('\r')) ? '' : '\r\n';
+            // Escape the tag to handle special regex characters
+            const escapedTag = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            // Match tag=VALUE until whitespace or end of string
+            const regex = new RegExp(`\\b${escapedTag}=[^\\s\\r\\n]*`, 'g');
+            
+            // Try to replace - if it returns the same string, the tag wasn't found
+            const newDesc = desc.replace(regex, `${tag}=${val}`);
+            
+            if (newDesc === desc && val !== '') {
+                // Tag not found, append it
+                const separator = (desc.endsWith('\n') || desc.endsWith('\r') || desc.endsWith(' ') || desc === '') ? '' : ' ';
                 desc = desc ? `${desc}${separator}${tag}=${val}` : `${tag}=${val}`;
+            } else {
+                desc = newDesc;
             }
         };
 
@@ -1071,6 +1074,14 @@ export class MetadataHandler {
         updateTag('sTAKE', metadata.take || '');
         updateTag('sTAPE', metadata.tape || '');
         updateTag('sNOTE', metadata.notes || '');
+
+        // Update track names (sTRK1=, sTRK2=, etc.)
+        if (metadata.trackNames && metadata.trackNames.length > 0) {
+            for (let i = 0; i < metadata.trackNames.length; i++) {
+                const trackNum = i + 1;
+                updateTag(`sTRK${trackNum}`, metadata.trackNames[i] || '');
+            }
+        }
 
         // Update sSPEED tag if FPS changed
         if (metadata.fps) {
