@@ -236,8 +236,32 @@ tr:hover {
     background-color: var(--bg-hover);
 }
 
+tr:focus {
+    outline: none;
+}
+
 tr.selected {
     background-color: rgba(209, 101, 0, 0.585);
+}
+
+/* Sibling child row styling */
+tr.sibling-child-row {
+    background-color: rgba(255, 149, 0, 0.08);
+    opacity: 0.9;
+    font-size: 0.95em;
+}
+
+tr.sibling-child-row:hover {
+    background-color: rgba(255, 149, 0, 0.15);
+}
+
+tr.sibling-child-row:focus {
+    outline: none;
+}
+
+/* Selected child row - higher specificity */
+tr.sibling-child-row.selected {
+    background-color: rgba(209, 101, 0, 0.585) !important;
 }
 
 /* Editable FPS and TC Start fields */

@@ -77,6 +77,7 @@ class App {
 
         this.files = []; // Array of { fileHandle, metadata, fileObj }
         this.selectedIndices = new Set();
+        this.selectedChildren = new Map(); // Track selected child files: "parentIndex:siblingOrder" -> true
         this.lastSelectedIndex = -1; // For shift-click range selection
         this.currentlyLoadedFileIndex = -1; // Track which file is currently loaded
         this.columnOrder = [3, 12, 11, 0, 1, 2, 4, 5, 6, 7, 8, 13, 9, 10, 14]; // Default order: Filename, Project, Tape, Channels, BitDepth, SampleRate, Format, Scene, Take, Duration, TC Start, End TC, FPS, FileSize, Notes
@@ -137,7 +138,18 @@ class App {
         document.getElementById('batch-delete-btn').addEventListener('click', () => this.openDeleteConfirmModal());
 
         // File Operations
-        document.getElementById('auto-group-btn').addEventListener('click', () => this.autoGroupByMetadata());
+        document.getElementById('auto-group-btn').addEventListener('click', () => {
+            // Check if selected items are sibling groups
+            const selectedGroups = Array.from(this.selectedIndices)
+                .map(idx => this.files[idx])
+                .filter(f => f && f.isGroup);
+            
+            if (selectedGroups.length > 0) {
+                this.ungroupSiblings();
+            } else {
+                this.autoGroupByMetadata();
+            }
+        });
         document.getElementById('diagnostics-btn').addEventListener('click', () => this.openDiagnosticsModal());
 
         // Modal controls
@@ -391,6 +403,81 @@ class App {
 
                 if (this.files.length === 0) return;
 
+                // Check if we're currently navigating within expanded child rows
+                const focusedRow = document.activeElement;
+                const isChildRow = focusedRow && focusedRow.classList && focusedRow.classList.contains('sibling-child-row');
+                const isParentRow = focusedRow && focusedRow.dataset.index !== undefined && !focusedRow.dataset.parentIndex;
+                
+                console.log('[global-keydown] focused:', focusedRow?.tagName, 'isChild:', isChildRow, 'isParent:', isParentRow, 'key:', e.key);
+
+                if (isChildRow) {
+                    // Handle navigation within child rows
+                    const parentIndex = parseInt(focusedRow.dataset.parentIndex);
+                    const siblingOrder = parseInt(focusedRow.dataset.siblingOrder);
+                    const parentGroup = this.files[parentIndex];
+                    const siblingsCount = parentGroup.siblings ? parentGroup.siblings.length : 0;
+
+                    console.log('[global-keydown] Child nav: parent:', parentIndex, 'sibling:', siblingOrder, 'total:', siblingsCount);
+
+                    let nextParentIndex = parentIndex;
+                    let nextSiblingOrder = siblingOrder;
+
+                    if (e.key === 'ArrowDown') {
+                        if (siblingOrder < siblingsCount - 1) {
+                            // Next sibling
+                            nextSiblingOrder = siblingOrder + 1;
+                        } else {
+                            // Last child, move to next parent group
+                            let foundNext = false;
+                            for (let i = parentIndex + 1; i < this.files.length; i++) {
+                                if (!this.files[i].isChild) {
+                                    this.selectFile(i, { metaKey: false, ctrlKey: false, shiftKey: false });
+                                    // Focus the parent row
+                                    const tbody = document.getElementById('file-list-body');
+                                    const parentRow = tbody.querySelector(`tr[data-index="${i}"]:not([data-parent-index])`);
+                                    if (parentRow) {
+                                        setTimeout(() => parentRow.focus(), 0);
+                                        parentRow.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                                    }
+                                    foundNext = true;
+                                    break;
+                                }
+                            }
+                            if (!foundNext) return;
+                            return;
+                        }
+                    } else { // ArrowUp
+                        if (siblingOrder > 0) {
+                            // Previous sibling
+                            nextSiblingOrder = siblingOrder - 1;
+                        } else {
+                            // First child, move to parent group
+                            this.selectFile(parentIndex, { metaKey: false, ctrlKey: false, shiftKey: false });
+                            // Focus the parent row
+                            const tbody = document.getElementById('file-list-body');
+                            const parentRow = tbody.querySelector(`tr[data-index="${parentIndex}"]:not([data-parent-index])`);
+                            if (parentRow) {
+                                setTimeout(() => parentRow.focus(), 0);
+                                parentRow.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                            }
+                            return;
+                        }
+                    }
+
+                    // Select the next/prev child
+                    this.selectChildFile(nextParentIndex, nextSiblingOrder, { metaKey: false, ctrlKey: false, shiftKey: false });
+                    
+                    // Scroll the row into view
+                    const tbody = document.getElementById('file-list-body');
+                    const nextRow = tbody.querySelector(`tr.sibling-child-row[data-parent-index="${nextParentIndex}"][data-sibling-order="${nextSiblingOrder}"]`);
+                    if (nextRow) {
+                        setTimeout(() => nextRow.focus(), 0); // Ensure focus after render
+                        nextRow.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                    }
+                    return;
+                }
+
+                // Original parent row navigation logic
                 // Blur any focused element to prevent focus traps
                 if (document.activeElement && document.activeElement.blur) {
                     document.activeElement.blur();
@@ -403,6 +490,19 @@ class App {
                     targetIndex = 0;
                 } else {
                     if (e.key === 'ArrowDown') {
+                        // Check if current selection is expanded group with children
+                        const selectedFile = this.files[this.lastSelectedIndex];
+                        if (selectedFile && selectedFile.isGroup && selectedFile.siblings && selectedFile.siblings.length > 0) {
+                            const tbody = document.getElementById('file-list-body');
+                            const firstChildRow = tbody.querySelector(`tr.sibling-child-row[data-parent-index="${this.lastSelectedIndex}"][data-sibling-order="0"]`);
+                            if (firstChildRow) {
+                                // Group is expanded, navigate to first child
+                                this.selectChildFile(this.lastSelectedIndex, 0, { metaKey: false, ctrlKey: false, shiftKey: false });
+                                firstChildRow.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                                return;
+                            }
+                        }
+
                         // Already at the end, don't process
                         if (this.lastSelectedIndex >= this.files.length - 1) return;
                         targetIndex = this.lastSelectedIndex + 1;
@@ -410,6 +510,20 @@ class App {
                         // Already at the start, don't process
                         if (this.lastSelectedIndex <= 0) return;
                         targetIndex = this.lastSelectedIndex - 1;
+                        
+                        // Check if the previous parent group is expanded with children
+                        const previousFile = this.files[targetIndex];
+                        if (previousFile && previousFile.isGroup && previousFile.siblings && previousFile.siblings.length > 0) {
+                            const tbody = document.getElementById('file-list-body');
+                            const lastChildOrder = previousFile.siblings.length - 1;
+                            const lastChildRow = tbody.querySelector(`tr.sibling-child-row[data-parent-index="${targetIndex}"][data-sibling-order="${lastChildOrder}"]`);
+                            if (lastChildRow) {
+                                // Group is expanded, navigate to last child
+                                this.selectChildFile(targetIndex, lastChildOrder, { metaKey: false, ctrlKey: false, shiftKey: false });
+                                lastChildRow.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                                return;
+                            }
+                        }
                     }
                 }
 
@@ -1180,12 +1294,18 @@ class App {
         return result;
     }
 
-    addTableRow(index, metadata) {
+    addTableRow(index, metadata, isChild = false, parentIndex = null) {
         console.log(`[addTableRow] index=${index}, metadata:`, { scene: metadata.scene, take: metadata.take, notes: metadata.notes, tape: metadata.tape, project: metadata.project });
 
         const tbody = document.getElementById('file-list-body');
         const tr = document.createElement('tr');
         tr.dataset.index = index;
+        
+        // Mark child rows
+        if (isChild) {
+            tr.classList.add('sibling-child-row');
+            tr.dataset.parentIndex = parentIndex;
+        }
 
         // Highlight red if file is missing iXML chunk
         if (!metadata.ixmlRaw) {
@@ -1321,14 +1441,70 @@ class App {
         cells[0] = createCell('channels', channelDisplay, false);
         cells[1] = createCell('bitDepth', metadata.bitDepth ? metadata.bitDepth : '', false);
         cells[2] = createCell('sampleRate', metadata.sampleRate ? (metadata.sampleRate / 1000) + 'k' : '', false);
-        cells[3] = createCell('filename', metadata.filename, false);
+        
+        // Special handling for filename cell - add expand/collapse icon for sibling groups
+        const filenameCell = document.createElement('td');
+        const filenameContainer = document.createElement('div');
+        filenameContainer.style.display = 'flex';
+        filenameContainer.style.alignItems = 'center';
+        filenameContainer.style.gap = '6px';
+        
+        if (!isChild && item.isGroup && item.siblings && item.siblings.length > 0) {
+            // Add expand/collapse icon
+            const toggleBtn = document.createElement('button');
+            toggleBtn.className = 'expand-toggle';
+            toggleBtn.dataset.index = index;
+            toggleBtn.innerHTML = '▶';
+            toggleBtn.title = 'Expand siblings';
+            toggleBtn.style.background = 'none';
+            toggleBtn.style.border = 'none';
+            toggleBtn.style.color = 'var(--accent-primary)';
+            toggleBtn.style.cursor = 'pointer';
+            toggleBtn.style.padding = '0';
+            toggleBtn.style.fontSize = '0.8em';
+            toggleBtn.style.width = '16px';
+            toggleBtn.style.height = '16px';
+            toggleBtn.style.display = 'flex';
+            toggleBtn.style.alignItems = 'center';
+            toggleBtn.style.justifyContent = 'center';
+            toggleBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.toggleSiblingExpand(index);
+            });
+            filenameContainer.appendChild(toggleBtn);
+            tr.dataset.isGroup = 'true';
+        } else if (isChild) {
+            // Add spacer for child rows to align with expanded siblings
+            const spacer = document.createElement('div');
+            spacer.style.width = '16px';
+            spacer.style.marginLeft = '8px';
+            filenameContainer.appendChild(spacer);
+        }
+        
+        const filenameText = document.createElement('span');
+        filenameText.textContent = metadata.filename;
+        filenameContainer.appendChild(filenameText);
+        filenameCell.appendChild(filenameContainer);
+        cells[3] = filenameCell;
         cells[4] = createCell('format', metadata.format, false);
         cells[5] = createCell('scene', metadata.scene);
         cells[6] = createCell('take', metadata.take);
         cells[7] = createCell('duration', metadata.duration, false);
         cells[8] = createCell('tcStart', metadata.tcStart, false);
         cells[9] = createCell('fps', metadata.fps, false);
-        cells[10] = createCell('fileSize', metadata.fileSize ? ((metadata.fileSize / 1000000).toFixed(2) + ' MB') : '', false);
+        
+        // File size: for sibling groups, sum all children; for individual files, show single size
+        let fileSizeDisplay = '';
+        if (item.isGroup && item.siblings && item.siblings.length > 0) {
+            // Sum file sizes from all siblings
+            const totalSize = item.siblings.reduce((sum, sibling) => sum + (sibling.metadata.fileSize || 0), 0);
+            fileSizeDisplay = totalSize ? ((totalSize / 1000000).toFixed(2) + ' MB') : '';
+        } else {
+            // Single file size
+            fileSizeDisplay = metadata.fileSize ? ((metadata.fileSize / 1000000).toFixed(2) + ' MB') : '';
+        }
+        cells[10] = createCell('fileSize', fileSizeDisplay, false);
+        
         cells[11] = createCell('tape', metadata.tape);
         cells[12] = createCell('project', metadata.project);
         cells[13] = createCell('endTC', this.calculateEndTC(metadata), false);
@@ -1347,10 +1523,188 @@ class App {
             tr.title = 'This file has an incomplete or corrupted iXML chunk and needs repair';
         }
 
+        // Make parent rows focusable for keyboard navigation
+        if (!isChild) {
+            tr.tabIndex = 0;
+        }
+
         tr.addEventListener('click', (e) => this.selectFile(index, e));
         tbody.appendChild(tr);
     }
 
+    async selectChildFile(parentIndex, siblingOrder, e) {
+        const key = `${parentIndex}:${siblingOrder}`;
+        console.log('[selectChildFile] parentIndex:', parentIndex, 'siblingOrder:', siblingOrder, 'key:', key);
+        
+        if (e.ctrlKey || e.metaKey) {
+            // Toggle selection with Ctrl/Cmd
+            if (this.selectedChildren.has(key)) {
+                this.selectedChildren.delete(key);
+                console.log('[selectChildFile] Toggled OFF:', key);
+            } else {
+                this.selectedChildren.set(key, true);
+                console.log('[selectChildFile] Toggled ON:', key);
+            }
+        } else if (e.shiftKey) {
+            // Range selection not implemented for child rows yet
+            this.selectedChildren.clear();
+            this.selectedIndices.clear();
+            this.selectedChildren.set(key, true);
+            console.log('[selectChildFile] Shift-selected:', key);
+        } else {
+            // Single selection
+            this.selectedChildren.clear();
+            this.selectedIndices.clear();
+            this.selectedChildren.set(key, true);
+            console.log('[selectChildFile] Single-selected:', key);
+        }
+        
+        console.log('[selectChildFile] selectedChildren Map:', this.selectedChildren);
+        this.updateSelectionUI();
+        
+        // Focus the child row for keyboard navigation
+        const tbody = document.getElementById('file-list-body');
+        const childRow = tbody.querySelector(`tr.sibling-child-row[data-parent-index="${parentIndex}"][data-sibling-order="${siblingOrder}"]`);
+        if (childRow) {
+            childRow.focus();
+        }
+        
+        // Clear region selection when switching files
+        this.clearRegion();
+        
+        // Load the selected child file into waveform view and mixer
+        if (this.selectedChildren.has(key)) {
+            const groupItem = this.files[parentIndex];
+            if (groupItem.isGroup && groupItem.siblings && groupItem.siblings[siblingOrder]) {
+                const childSibling = groupItem.siblings[siblingOrder];
+                
+                // Create a temporary single-file structure and add it to this.files temporarily
+                // so loadAudioForFile can find it by index
+                const tempChildItem = {
+                    isGroup: false,
+                    handle: childSibling.handle,
+                    file: childSibling.file,
+                    metadata: childSibling.metadata
+                };
+                
+                // Store the temp item and get its index
+                const tempIndex = this.files.length;
+                this.files.push(tempChildItem);
+                
+                // Load audio for this child file
+                await this.loadAudioForFile(tempIndex);
+                
+                // Remove the temp item
+                this.files.pop();
+                
+                this.currentlyLoadedFileIndex = -1; // Mark as child, not a regular file index
+            }
+        }
+    }
+
+
+    toggleSiblingExpand(groupIndex) {
+        const tbody = document.getElementById('file-list-body');
+        const groupRow = tbody.querySelector(`tr[data-index="${groupIndex}"]`);
+        if (!groupRow) return;
+        
+        const toggleBtn = groupRow.querySelector('.expand-toggle');
+        if (!toggleBtn) return;
+        
+        const isExpanded = groupRow.dataset.expanded === 'true';
+        
+        if (isExpanded) {
+            // Collapse: remove child rows
+            this.collapseGroup(groupIndex, tbody);
+            toggleBtn.innerHTML = '▶';
+            toggleBtn.title = 'Expand siblings';
+            groupRow.dataset.expanded = 'false';
+        } else {
+            // Expand: insert child rows
+            this.expandGroup(groupIndex, tbody);
+            toggleBtn.innerHTML = '▼';
+            toggleBtn.title = 'Collapse siblings';
+            groupRow.dataset.expanded = 'true';
+        }
+    }
+    
+    expandGroup(groupIndex, tbody) {
+        const groupItem = this.files[groupIndex];
+        if (!groupItem.isGroup || !groupItem.siblings) return;
+        
+        const groupRow = tbody.querySelector(`tr[data-index="${groupIndex}"]`);
+        if (!groupRow) return;
+        
+        // Insert child rows after the group row
+        let insertAfter = groupRow;
+        for (let i = 0; i < groupItem.siblings.length; i++) {
+            const sibling = groupItem.siblings[i];
+            const childRow = document.createElement('tr');
+            childRow.classList.add('sibling-child-row');
+            childRow.dataset.parentIndex = String(groupIndex);
+            childRow.dataset.siblingOrder = String(i);
+            childRow.tabIndex = 0; // Make focusable for keyboard navigation
+            
+            // Create cells for child row
+            const createCell = (val, editable = true) => {
+                const td = document.createElement('td');
+                td.textContent = val || '';
+                return td;
+            };
+            
+            const cells = [];
+            const childMetadata = sibling.metadata;
+            const childChannelDisplay = childMetadata.channels === 1 ? '1 (Mono)' : `${childMetadata.channels} (Poly)`;
+            
+            cells[0] = createCell(childChannelDisplay);
+            cells[1] = createCell(childMetadata.bitDepth ? childMetadata.bitDepth : '');
+            cells[2] = createCell(childMetadata.sampleRate ? (childMetadata.sampleRate / 1000) + 'k' : '');
+            
+            // Filename with indentation
+            const filenameCell = document.createElement('td');
+            const filenameContainer = document.createElement('div');
+            filenameContainer.style.display = 'flex';
+            filenameContainer.style.alignItems = 'center';
+            filenameContainer.style.paddingLeft = '36px';
+            const filenameText = document.createElement('span');
+            filenameText.textContent = childMetadata.filename;
+            filenameContainer.appendChild(filenameText);
+            filenameCell.appendChild(filenameContainer);
+            cells[3] = filenameCell;
+            
+            cells[4] = createCell(childMetadata.format);
+            cells[5] = createCell(childMetadata.scene);
+            cells[6] = createCell(childMetadata.take);
+            cells[7] = createCell(childMetadata.duration);
+            cells[8] = createCell(childMetadata.tcStart);
+            cells[9] = createCell(childMetadata.fps);
+            cells[10] = createCell(childMetadata.fileSize ? ((childMetadata.fileSize / 1000000).toFixed(2) + ' MB') : '');
+            cells[11] = createCell(childMetadata.tape);
+            cells[12] = createCell(childMetadata.project);
+            cells[13] = createCell(this.calculateEndTC(childMetadata));
+            cells[14] = createCell(childMetadata.notes);
+            
+            // Append cells in column order
+            this.columnOrder.forEach(colIndex => {
+                if (cells[colIndex]) {
+                    childRow.appendChild(cells[colIndex]);
+                }
+            });
+            
+            // Add selection handler for child row
+            childRow.addEventListener('click', (e) => this.selectChildFile(groupIndex, i, e));
+            
+            // Insert after the previous row
+            insertAfter.after(childRow);
+            insertAfter = childRow;
+        }
+    }
+    
+    collapseGroup(groupIndex, tbody) {
+        // Remove all child rows of this group
+        const childRows = tbody.querySelectorAll(`tr.sibling-child-row[data-parent-index="${groupIndex}"]`);
+        childRows.forEach(row => row.remove());
+    }
 
     validateTimecode(tc) {
         // Validate HH:MM:SS:FF format
@@ -1762,6 +2116,9 @@ class App {
     }
 
     async selectFile(index, event) {
+        // Clear child selections when selecting a parent row
+        this.selectedChildren.clear();
+        
         // Handle Multi-select
         if (event && (event.metaKey || event.ctrlKey)) {
             if (this.selectedIndices.has(index)) {
@@ -1846,14 +2203,34 @@ class App {
     updateSelectionUI() {
         const rows = document.querySelectorAll('#file-list-body tr');
         rows.forEach((r, i) => {
-            if (this.selectedIndices.has(i)) {
-                r.classList.add('selected');
+            const index = parseInt(r.dataset.index);
+            const isChildRow = r.classList.contains('sibling-child-row');
+            
+            if (isChildRow) {
+                // Handle child row selection
+                const parentIndex = parseInt(r.dataset.parentIndex);
+                const siblingOrder = parseInt(r.dataset.siblingOrder);
+                const key = `${parentIndex}:${siblingOrder}`;
+                
+                console.log('[updateSelectionUI] Child row:', { parentIndex, siblingOrder, key, hasKey: this.selectedChildren.has(key) });
+                
+                if (this.selectedChildren.has(key)) {
+                    r.classList.add('selected');
+                    console.log('[updateSelectionUI] Added selected class to child row:', key);
+                } else {
+                    r.classList.remove('selected');
+                }
             } else {
-                r.classList.remove('selected');
+                // Handle regular row selection
+                if (this.selectedIndices.has(index)) {
+                    r.classList.add('selected');
+                } else {
+                    r.classList.remove('selected');
+                }
             }
         });
 
-        const hasSelection = this.selectedIndices.size > 0;
+        const hasSelection = this.selectedIndices.size > 0 || this.selectedChildren.size > 0;
         
         // Update button states with null checks
         const safeSetDisabled = (id, disabled) => {
@@ -1866,9 +2243,19 @@ class App {
         safeSetDisabled('batch-remove-btn', !hasSelection);
         safeSetDisabled('batch-delete-btn', !hasSelection);
         
-        // Auto-Group button: enabled if selected files OR ungrouped files exist
+        // Auto-Group button: enabled if selected files OR ungrouped files exist, OR if sibling groups selected
         const hasUngroupedFiles = this.files.some(f => !f.isGroup);
-        safeSetDisabled('auto-group-btn', !hasSelection && !hasUngroupedFiles);
+        const selectedGroups = Array.from(this.selectedIndices)
+            .map(idx => this.files[idx])
+            .filter(f => f && f.isGroup);
+        const canUngroup = selectedGroups.length > 0;
+        
+        const autoGroupBtn = document.getElementById('auto-group-btn');
+        if (autoGroupBtn) {
+            autoGroupBtn.disabled = !hasSelection && !hasUngroupedFiles && !canUngroup;
+            autoGroupBtn.textContent = canUngroup ? 'Ungroup Siblings' : 'Auto-Group';
+        }
+        safeSetDisabled('auto-group-btn', !hasSelection && !hasUngroupedFiles && !canUngroup);
         
         safeSetDisabled('diagnostics-btn', !hasSelection);
         safeSetDisabled('corrupt-ixml-modal-btn', this.selectedIndices.size !== 1);
@@ -1885,14 +2272,29 @@ class App {
         let isPolySelected = false;
         let canCombineSelectedMono = false;
         
-        if (this.selectedIndices.size === 1) {
-            const selectedIndex = Array.from(this.selectedIndices)[0];
-            const selectedFile = this.files[selectedIndex];
-            isPolySelected = selectedFile && 
-                           selectedFile.metadata && 
-                           selectedFile.metadata.channels > 1 && 
-                           !selectedFile.isGroup;
-        } else if (this.selectedIndices.size >= 2) {
+        if (this.selectedIndices.size >= 1) {
+            // Check if all selected files are poly (channels > 1) and not groups
+            const selectedFiles = Array.from(this.selectedIndices).map(idx => this.files[idx]);
+            const allPoly = selectedFiles.every(f => 
+                f && 
+                !f.isGroup && 
+                f.metadata && 
+                f.metadata.channels > 1
+            );
+            
+            if (allPoly) {
+                isPolySelected = true;
+            } else if (this.selectedIndices.size === 1) {
+                // Single selection: check if it's poly
+                const selectedFile = selectedFiles[0];
+                isPolySelected = selectedFile && 
+                               selectedFile.metadata && 
+                               selectedFile.metadata.channels > 1 && 
+                               !selectedFile.isGroup;
+            }
+        }
+        
+        if (this.selectedIndices.size >= 2) {
             // Check if selected files are individual mono files that can be grouped
             const selectedFiles = Array.from(this.selectedIndices).map(idx => this.files[idx]);
             const allMono = selectedFiles.every(f => 
@@ -2114,10 +2516,8 @@ class App {
     }
 
     async viewIXML() {
-        if (this.selectedIndices.size !== 1) return;
-
-        const index = Array.from(this.selectedIndices)[0];
-        const item = this.files[index];
+        const item = this.getSelectedFileForDiagnostics();
+        if (!item) return;
 
         const content = document.getElementById('ixml-content');
 
@@ -2243,6 +2643,74 @@ class App {
      * Auto-group files by metadata (tcStart + audioDataSize)
      * Works on selected files if any, otherwise all ungrouped files
      */
+    ungroupSiblings() {
+        // Collect all sibling groups from selection
+        const groupsToUngroup = [];
+        const indicesToRemove = new Set();
+        
+        for (const idx of this.selectedIndices) {
+            const item = this.files[idx];
+            if (item && item.isGroup && item.siblings && item.siblings.length > 0) {
+                groupsToUngroup.push({ group: item, index: idx });
+                indicesToRemove.add(idx);
+            }
+        }
+        
+        if (groupsToUngroup.length === 0) {
+            alert('No sibling groups selected to ungroup.');
+            return;
+        }
+        
+        const totalFiles = groupsToUngroup.reduce((sum, g) => sum + g.group.siblings.length, 0);
+        const msg = `Ungroup ${groupsToUngroup.length} sibling group${groupsToUngroup.length > 1 ? 's' : ''} (${totalFiles} file${totalFiles > 1 ? 's' : ''}) back into individual files?`;
+        
+        if (!confirm(msg)) {
+            return;
+        }
+        
+        // Collect all individual files to re-insert
+        const filesToReinsert = [];
+        for (const { group, index } of groupsToUngroup) {
+            // Re-create individual file objects from siblings
+            for (const sibling of group.siblings) {
+                filesToReinsert.push({
+                    file: {
+                        handle: sibling.handle,
+                        file: sibling.file,
+                        metadata: { ...sibling.metadata }
+                    },
+                    insertIndex: index
+                });
+            }
+        }
+        
+        // Remove groups in reverse order
+        const sortedIndices = Array.from(indicesToRemove).sort((a, b) => b - a);
+        sortedIndices.forEach(idx => {
+            this.files.splice(idx, 1);
+        });
+        
+        // Re-insert individual files at appropriate positions
+        filesToReinsert.sort((a, b) => a.insertIndex - b.insertIndex);
+        let offset = 0;
+        for (const { file, insertIndex } of filesToReinsert) {
+            const adjustedIndex = insertIndex - Array.from(indicesToRemove).filter(i => i < insertIndex).length + offset;
+            this.files.splice(adjustedIndex, 0, file);
+            offset++;
+        }
+        
+        // Clear selection and refresh table
+        this.selectedIndices.clear();
+        const tbody = document.getElementById('file-list-body');
+        tbody.innerHTML = '';
+        this.files.forEach((item, index) => {
+            this.addTableRow(index, item.metadata);
+        });
+        
+        this.updateSelectionUI();
+        console.log(`✓ Ungrouped ${groupsToUngroup.length} sibling group${groupsToUngroup.length > 1 ? 's' : ''} into ${totalFiles} individual file${totalFiles > 1 ? 's' : ''}`);
+    }
+
     async autoGroupByMetadata() {
         // Determine files to process
         let filesToProcess;
@@ -2414,6 +2882,35 @@ class App {
         document.getElementById('diagnostics-modal').classList.add('active');
     }
 
+    getSelectedFileForDiagnostics() {
+        // Helper method to get the selected file for diagnostics
+        // Returns the file item and its metadata (handles both parent and child selections)
+        
+        // Check if a child is selected
+        if (this.selectedChildren.size === 1) {
+            const childKey = Array.from(this.selectedChildren.keys())[0];
+            const [parentIndex, siblingOrder] = childKey.split(':').map(Number);
+            const groupItem = this.files[parentIndex];
+            
+            if (groupItem.isGroup && groupItem.siblings && groupItem.siblings[siblingOrder]) {
+                const childSibling = groupItem.siblings[siblingOrder];
+                return {
+                    handle: childSibling.handle,
+                    file: childSibling.file,
+                    metadata: childSibling.metadata
+                };
+            }
+        }
+        
+        // Otherwise check if a parent is selected
+        if (this.selectedIndices.size === 1) {
+            const index = Array.from(this.selectedIndices)[0];
+            return this.files[index];
+        }
+        
+        return null;
+    }
+
     closeDiagnosticsModal() {
         const modal = document.getElementById('diagnostics-modal');
         modal.classList.remove('active');
@@ -2456,10 +2953,8 @@ class App {
     }
 
     async viewBEXT() {
-        if (this.selectedIndices.size !== 1) return;
-
-        const index = Array.from(this.selectedIndices)[0];
-        const item = this.files[index];
+        const item = this.getSelectedFileForDiagnostics();
+        if (!item) return;
 
         try {
             const content = document.getElementById('bext-content');
@@ -6861,48 +7356,62 @@ class App {
      * Open Split modal for the selected poly file
      */
     openSplitModal() {
-        // Get the selected poly file
-        if (this.selectedIndices.size !== 1) {
-            alert('Please select exactly one poly file to split.');
+        // Get the selected poly files
+        if (this.selectedIndices.size === 0) {
+            alert('Please select one or more poly files to split.');
             return;
         }
 
-        const selectedIndex = Array.from(this.selectedIndices)[0];
-        const selectedFile = this.files[selectedIndex];
+        // Get all selected poly files
+        const polyFiles = [];
+        for (const index of this.selectedIndices) {
+            const file = this.files[index];
+            if (file && file.metadata && file.metadata.channels > 1) {
+                polyFiles.push({
+                    index,
+                    file: file.file,
+                    handle: file.handle,
+                    metadata: file.metadata
+                });
+            }
+        }
 
-        if (!selectedFile || !selectedFile.metadata || selectedFile.metadata.channels <= 1) {
-            alert('Selected file is not a poly file.');
+        if (polyFiles.length === 0) {
+            alert('Please select one or more poly files (files with channels > 1).');
             return;
         }
 
-        // Store the file to split
+        // Store the files to split
         this.splitFileData = {
-            index: selectedIndex,
-            file: selectedFile.file,
-            handle: selectedFile.handle,
-            metadata: selectedFile.metadata,
-            destinationHandle: null
+            files: polyFiles,
+            destinationHandle: null,
+            currentFileIndex: 0
         };
 
         // Update modal info
-        document.getElementById('split-filename').textContent = selectedFile.metadata.filename;
+        const fileCount = polyFiles.length;
+        const fileList = polyFiles.map(f => f.metadata.filename).join(', ');
+        document.getElementById('split-filename').textContent = fileCount === 1 
+            ? polyFiles[0].metadata.filename 
+            : `${fileCount} files: ${fileList}`;
         // Show 'Same as source files' if no folder is selected
         document.getElementById('split-folder-path').textContent = 'Same as source files';
         document.getElementById('split-confirm-btn').disabled = true;
 
-        // Update bit depth selector to show source file's bit depth
+        // Update bit depth selector to show first file's bit depth
         const bitDepthSelect = document.getElementById('split-bitdepth');
-        if (selectedFile.metadata.bitDepth) {
+        const firstFile = polyFiles[0];
+        if (firstFile.metadata.bitDepth) {
             // Check if source bit depth is an option
             let hasMatch = false;
             for (const option of bitDepthSelect.options) {
-                if (option.value === selectedFile.metadata.bitDepth.toString()) {
+                if (option.value === firstFile.metadata.bitDepth.toString()) {
                     hasMatch = true;
                     break;
                 }
             }
             // If not matched, keep on "Preserve Original"
-            bitDepthSelect.value = hasMatch ? selectedFile.metadata.bitDepth.toString() : 'preserve';
+            bitDepthSelect.value = hasMatch ? firstFile.metadata.bitDepth.toString() : 'preserve';
         } else {
             bitDepthSelect.value = 'preserve';
         }
@@ -6954,148 +7463,163 @@ class App {
 
         try {
             document.body.style.cursor = 'wait';
-            this.showToast('Splitting file...', 'info', 2000);
+            const { files, destinationHandle } = this.splitFileData;
+            const totalFiles = files.length;
+            let successCount = 0;
 
-            const { file, handle, metadata, destinationHandle } = this.splitFileData;
-            const channels = metadata.channels;
+            // Process each poly file
+            for (let fileIdx = 0; fileIdx < files.length; fileIdx++) {
+                const fileData = files[fileIdx];
+                const { file, handle, metadata } = fileData;
+                
+                this.showToast(`Splitting file ${fileIdx + 1}/${totalFiles}: ${metadata.filename}...`, 'info', 1000);
 
-            // Get selected bit depth from modal
-            const bitDepthSelect = document.getElementById('split-bitdepth');
-            let bitDepth = 16; // Default fallback
-            if (bitDepthSelect.value === 'preserve') {
-                bitDepth = metadata.bitDepth || 16;
-            } else {
-                bitDepth = parseInt(bitDepthSelect.value);
-            }
-
-            // Read the original file
-            const arrayBuffer = await file.arrayBuffer();
-            
-            // Get track names from iXML BEFORE decoding (decoding detaches the buffer)
-            let trackNames = [];
-            const ixmlString = this.metadataHandler.getIXMLChunk(arrayBuffer);
-            if (ixmlString) {
-                const parser = new DOMParser();
-                const xmlDoc = parser.parseFromString(ixmlString, 'text/xml');
-                const tracks = xmlDoc.querySelectorAll('TRACK');
-                tracks.forEach(track => {
-                    const name = track.querySelector('NAME')?.textContent || '';
-                    trackNames.push(name);
-                });
-            }
-            
-
-            
-            // If iXML track names are missing or all the same, try bEXT as fallback
-            const allTrackNamesSame = trackNames.length > 0 && trackNames.every(name => name === trackNames[0]);
-            if (trackNames.length === 0 || allTrackNamesSame) {
-                console.log('[Split] Track names are missing or identical, checking bEXT for identifiers');
-                const bextTrackNames = this.metadataHandler.extractTrackNamesFromBext(metadata.description);
-                if (bextTrackNames.length > 0) {
-                    trackNames = bextTrackNames;
-                    console.log('[Split] Using track names from bEXT:', trackNames);
+                // Get selected bit depth from modal
+                const bitDepthSelect = document.getElementById('split-bitdepth');
+                let bitDepth = 16; // Default fallback
+                if (bitDepthSelect.value === 'preserve') {
+                    bitDepth = metadata.bitDepth || 16;
+                } else {
+                    bitDepth = parseInt(bitDepthSelect.value);
                 }
-            }
-            
-            // Decode audio using AudioEngine (handles both native and manual WAV decoding)
-            // Note: This may detach the arrayBuffer
-            const audioBuffer = await this.audioEngine.decodeFile(arrayBuffer);
 
-            // Split each channel into a separate file
-            const baseName = metadata.filename.replace(/\.wav$/i, '');
-            
+                const channels = metadata.channels;
 
-            
-            for (let ch = 0; ch < channels; ch++) {
-                // Create mono audio buffer for this channel
-                const monoBuffer = this.audioEngine.audioCtx.createBuffer(
-                    1,
-                    audioBuffer.length,
-                    audioBuffer.sampleRate
-                );
+                // Read the original file
+                const arrayBuffer = await file.arrayBuffer();
                 
-                const channelData = audioBuffer.getChannelData(ch);
-
-                
-                monoBuffer.copyToChannel(channelData, 0);
-                
-                const monoChannelData = monoBuffer.getChannelData(0);
-
-                
-                // Check if data is all zeros (silence)
-                const hasAudio = channelData.some(s => Math.abs(s) > 0.0001);
-
-
-                // Generate filename with track name or channel number
-                // Ensure we have a unique name for each channel
-                let trackName = trackNames[ch];
-                if (!trackName) {
-                    // No track name in iXML for this channel, use Ch# format
-                    trackName = `Ch${ch + 1}`;
+                // Get track names from iXML BEFORE decoding (decoding detaches the buffer)
+                let trackNames = [];
+                const ixmlString = this.metadataHandler.getIXMLChunk(arrayBuffer);
+                if (ixmlString) {
+                    const parser = new DOMParser();
+                    const xmlDoc = parser.parseFromString(ixmlString, 'text/xml');
+                    const tracks = xmlDoc.querySelectorAll('TRACK');
+                    tracks.forEach(track => {
+                        const name = track.querySelector('NAME')?.textContent || '';
+                        trackNames.push(name);
+                    });
                 }
-                const sanitizedTrackName = trackName.replace(/[^a-zA-Z0-9_-]/g, '_');
-                let outputFilename = `${baseName}_${sanitizedTrackName}.wav`;
                 
-                // If we get a collision (same name for multiple channels), append channel number
-                const filenameExists = true; // We can't really check this in browser, so always add counter if needed
-                if (trackNames.length < channels && ch > 0) {
-                    // We're falling back to Ch# naming, add the channel number to be safe
-                    if (!trackName.includes(ch.toString())) {
-                        outputFilename = `${baseName}_${sanitizedTrackName}_Ch${ch + 1}.wav`;
+
+                
+                // If iXML track names are missing or all the same, try bEXT as fallback
+                const allTrackNamesSame = trackNames.length > 0 && trackNames.every(name => name === trackNames[0]);
+                if (trackNames.length === 0 || allTrackNamesSame) {
+                    console.log('[Split] Track names are missing or identical, checking bEXT for identifiers');
+                    const bextTrackNames = this.metadataHandler.extractTrackNamesFromBext(metadata.description);
+                    if (bextTrackNames.length > 0) {
+                        trackNames = bextTrackNames;
+                        console.log('[Split] Using track names from bEXT:', trackNames);
                     }
                 }
                 
-                // Calculate stats before encoding (avoid spread operator on large arrays to prevent stack overflow)
-                let minVal = Infinity, maxVal = -Infinity, sumSquares = 0;
-                for (let i = 0; i < monoChannelData.length; i++) {
-                    const sample = monoChannelData[i];
-                    minVal = Math.min(minVal, sample);
-                    maxVal = Math.max(maxVal, sample);
-                    sumSquares += sample * sample;
+                // Decode audio using AudioEngine (handles both native and manual WAV decoding)
+                // Note: This may detach the arrayBuffer
+                const audioBuffer = await this.audioEngine.decodeFile(arrayBuffer);
+
+                // Split each channel into a separate file
+                const baseName = metadata.filename.replace(/\.wav$/i, '');
+                
+
+                
+                for (let ch = 0; ch < channels; ch++) {
+                    // Create mono audio buffer for this channel
+                    const monoBuffer = this.audioEngine.audioCtx.createBuffer(
+                        1,
+                        audioBuffer.length,
+                        audioBuffer.sampleRate
+                    );
+                    
+                    const channelData = audioBuffer.getChannelData(ch);
+
+                    
+                    monoBuffer.copyToChannel(channelData, 0);
+                    
+                    const monoChannelData = monoBuffer.getChannelData(0);
+
+                    
+                    // Check if data is all zeros (silence)
+                    const hasAudio = channelData.some(s => Math.abs(s) > 0.0001);
+
+                    // Get track name for metadata (not used in filename)
+                    let trackName = trackNames[ch];
+                    if (!trackName) {
+                        // No track name in iXML for this channel, use Ch# format
+                        trackName = `Ch${ch + 1}`;
+                    }
+
+                    // Generate filename with numeric suffix (1-indexed)
+                    // Track name is preserved in metadata, not in filename
+                    const outputFilename = `${baseName}_${ch + 1}.wav`;
+                    
+                    // Calculate stats before encoding (avoid spread operator on large arrays to prevent stack overflow)
+                    let minVal = Infinity, maxVal = -Infinity, sumSquares = 0;
+                    for (let i = 0; i < monoChannelData.length; i++) {
+                        const sample = monoChannelData[i];
+                        minVal = Math.min(minVal, sample);
+                        maxVal = Math.max(maxVal, sample);
+                        sumSquares += sample * sample;
+                    }
+                    const monoStats = {
+                        length: monoChannelData.length,
+                        min: minVal,
+                        max: maxVal,
+                        rms: Math.sqrt(sumSquares / monoChannelData.length)
+                    };
+                    // Encode as WAV with selected bit depth
+                    const wavBlob = await this.encodeWAV(monoBuffer, bitDepth);
+
+                    let wavArrayBuffer = await wavBlob.arrayBuffer();
+
+                    // Add iXML metadata with correct track name
+                    if (ixmlString) {
+                        const updatedIXML = this.updateIXMLForMonoTrack(ixmlString, ch, trackName);
+                        wavArrayBuffer = this.injectIXMLChunk(wavArrayBuffer, updatedIXML);
+
+                    }
+
+                    // Add bEXT metadata - preserve original description fields and update track name
+                    let bextDescription = metadata.description || '';
+                    
+                    // Update sTRK1 to the current track's name (mono file only has one track)
+                    // Remove all sTRKx fields from original description
+                    bextDescription = bextDescription.replace(/sTRK\d+=[^\r\n]*/g, '').trim();
+                    
+                    // Add single sTRK1 field for this mono track
+                    if (bextDescription) {
+                        bextDescription += '\nsTRK1=' + trackName;
+                    } else {
+                        bextDescription = 'sTRK1=' + trackName;
+                    }
+                    
+                    const bextData = {
+                        description: bextDescription,
+                        originator: metadata.originator || '',
+                        originatorReference: metadata.originatorReference || '',
+                        originationDate: metadata.originationDate || '',
+                        originationTime: metadata.originationTime || '',
+                        timeReference: metadata.timeReference || 0
+                    };
+                    wavArrayBuffer = this.injectBextChunk(wavArrayBuffer, bextData);
+
+
+                    // Write file to destination
+                    const fileHandle = await destinationHandle.getFileHandle(outputFilename, { create: true });
+                    const writable = await fileHandle.createWritable();
+                    await writable.write(wavArrayBuffer);
+                    await writable.close();
                 }
-                const monoStats = {
-                    length: monoChannelData.length,
-                    min: minVal,
-                    max: maxVal,
-                    rms: Math.sqrt(sumSquares / monoChannelData.length)
-                };
-                // Encode as WAV with selected bit depth
-                const wavBlob = await this.encodeWAV(monoBuffer, bitDepth);
-
-                let wavArrayBuffer = await wavBlob.arrayBuffer();
-
-                // Add iXML metadata with correct track name
-                if (ixmlString) {
-                    const updatedIXML = this.updateIXMLForMonoTrack(ixmlString, ch, trackName);
-                    wavArrayBuffer = this.injectIXMLChunk(wavArrayBuffer, updatedIXML);
-
-                }
-
-                // Add bEXT metadata with track name
-                const bextData = {
-                    description: trackName,
-                    originator: metadata.originator || '',
-                    originatorReference: metadata.originatorReference || '',
-                    originationDate: metadata.originationDate || '',
-                    originationTime: metadata.originationTime || '',
-                    timeReference: metadata.timeReference || 0
-                };
-                wavArrayBuffer = this.injectBextChunk(wavArrayBuffer, bextData);
-
-
-                // Write file to destination
-                const fileHandle = await destinationHandle.getFileHandle(outputFilename, { create: true });
-                const writable = await fileHandle.createWritable();
-                await writable.write(wavArrayBuffer);
-                await writable.close();
+                
+                successCount++;
             }
 
-            this.showToast(`Successfully split into ${channels} mono files`, 'success', 3000);
+            this.showToast(`Successfully split ${successCount}/${totalFiles} file${totalFiles > 1 ? 's' : ''} into mono files`, 'success', 3000);
             this.closeSplitModal();
 
         } catch (err) {
             console.error('Error splitting file:', err);
-            this.showToast(`Failed to split file: ${err.message}`, 'error', 5000);
+            this.showToast(`Error during split: ${err.message}`, 'error', 3000);
         } finally {
             document.body.style.cursor = 'default';
         }
