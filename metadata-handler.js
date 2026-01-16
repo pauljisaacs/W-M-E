@@ -1042,67 +1042,99 @@ export class MetadataHandler {
 
         // Overwrite/Set fields with current metadata
 
-        // Sync Scene/Take/Tape/Notes into Description if they exist
-        // Sound Devices Format: sSCENE=SCENE sTAKE=TAKE sTAPE=TAPE sNOTE=NOTE
-        let desc = metadata.description || '';
-        console.log('Initial bEXT Description:', desc);
-        console.log('Syncing metadata:', { scene: metadata.scene, take: metadata.take, tape: metadata.tape, notes: metadata.notes });
+        // Rebuild Description from scratch using Sound Devices format
+        // This ensures clean output with no duplicates or garbage data
+        console.log('Building bEXT Description from metadata:', { 
+            scene: metadata.scene, 
+            take: metadata.take, 
+            tape: metadata.tape, 
+            notes: metadata.notes,
+            trackNames: metadata.trackNames 
+        });
 
-        // Helper to update or append a tag in the description
-        const updateTag = (tag, val) => {
-            if (val === undefined || val === null) return;
-
-            // Escape the tag to handle special regex characters
-            const escapedTag = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            // Match tag=VALUE until newline or end of string (allow spaces in values)
-            const regex = new RegExp(`\\b${escapedTag}=[^\\r\\n]*`, 'g');
-            
-            // Try to replace - if it returns the same string, the tag wasn't found
-            const newDesc = desc.replace(regex, `${tag}=${val}`);
-            
-            if (newDesc === desc && val !== '') {
-                // Tag not found, append it
-                const separator = (desc.endsWith('\n') || desc.endsWith('\r') || desc.endsWith(' ') || desc === '') ? '' : '\n';
-                desc = desc ? `${desc}${separator}${tag}=${val}` : `${tag}=${val}`;
-            } else {
-                desc = newDesc;
-            }
-        };
-
-        // Update Sound Devices style tags (always write, even if undefined - use empty string)
-        updateTag('sSCENE', metadata.scene || '');
-        updateTag('sTAKE', metadata.take || '');
-        updateTag('sTAPE', metadata.tape || '');
-        updateTag('sNOTE', metadata.notes || '');
-
-        // Update track names (sTRK1=, sTRK2=, etc.)
-        if (metadata.trackNames && metadata.trackNames.length > 0) {
-            for (let i = 0; i < metadata.trackNames.length; i++) {
-                const trackNum = i + 1;
-                updateTag(`sTRK${trackNum}`, metadata.trackNames[i] || '');
+        // Parse existing description to preserve unknown fields
+        const existingTags = {};
+        if (metadata.description) {
+            const lines = metadata.description.split(/[\r\n]+/);
+            for (const line of lines) {
+                const match = line.match(/^(\w+)=(.*)$/);
+                if (match) {
+                    existingTags[match[1]] = match[2];
+                }
             }
         }
 
-        // Update sSPEED tag if FPS changed
-        if (metadata.fps) {
-            // Format FPS for Sound Devices (e.g., 023.976-ND, 025.000-ND)
-            let fpsStr = parseFloat(metadata.fps).toFixed(3).padStart(7, '0');
+        // Build description with defined order and updated values
+        const descParts = [];
 
-            // Determine drop frame suffix
+        // sSPEED (if FPS is available)
+        if (metadata.fps) {
+            let fpsStr = parseFloat(metadata.fps).toFixed(3).padStart(7, '0');
             let suffix = '-ND'; // Default to Non-Drop
-            if (metadata.fps === '29.97df' || metadata.fps === '29.97' && metadata.fpsExact && metadata.fpsExact.denominator === 1001) {
-                // Check if it's explicitly drop frame or implied
+            if (metadata.fps === '29.97df' || (metadata.fps === '29.97' && metadata.fpsExact && metadata.fpsExact.denominator === 1001)) {
                 if (metadata.fps === '29.97df') suffix = '-DF';
             }
-
-            // Special handling for 23.98 -> 023.976
             if (metadata.fps === '23.98') {
                 fpsStr = '023.976';
             }
-
-            updateTag('sSPEED', `${fpsStr}${suffix}`);
-            console.log(`Updated sSPEED in bEXT: ${fpsStr}${suffix}`);
+            descParts.push(`sSPEED=${fpsStr}${suffix}`);
+        } else if (existingTags.sSPEED) {
+            descParts.push(`sSPEED=${existingTags.sSPEED}`);
         }
+
+        // sTAKE
+        if (metadata.take !== undefined && metadata.take !== null) {
+            descParts.push(`sTAKE=${metadata.take}`);
+        } else if (existingTags.sTAKE) {
+            descParts.push(`sTAKE=${existingTags.sTAKE}`);
+        }
+
+        // Preserve other Sound Devices fields we don't edit
+        const preserveFields = ['sUBITS', 'sSWVER', 'sFILENAME', 'sCIRCLED'];
+        for (const field of preserveFields) {
+            if (existingTags[field]) {
+                descParts.push(`${field}=${existingTags[field]}`);
+            }
+        }
+
+        // sSCENE
+        if (metadata.scene !== undefined && metadata.scene !== null) {
+            descParts.push(`sSCENE=${metadata.scene}`);
+        } else if (existingTags.sSCENE) {
+            descParts.push(`sSCENE=${existingTags.sSCENE}`);
+        }
+
+        // sTAPE
+        if (metadata.tape !== undefined && metadata.tape !== null) {
+            descParts.push(`sTAPE=${metadata.tape}`);
+        } else if (existingTags.sTAPE) {
+            descParts.push(`sTAPE=${existingTags.sTAPE}`);
+        }
+
+        // sNOTE
+        if (metadata.notes !== undefined && metadata.notes !== null) {
+            descParts.push(`sNOTE=${metadata.notes}`);
+        } else if (existingTags.sNOTE) {
+            descParts.push(`sNOTE=${existingTags.sNOTE}`);
+        }
+
+        // Track names (sTRK1=, sTRK2=, etc.)
+        if (metadata.trackNames && metadata.trackNames.length > 0) {
+            for (let i = 0; i < metadata.trackNames.length; i++) {
+                const trackNum = i + 1;
+                descParts.push(`sTRK${trackNum}=${metadata.trackNames[i] || ''}`);
+            }
+        } else {
+            // Preserve existing track names
+            for (let i = 1; i <= 16; i++) {
+                const field = `sTRK${i}`;
+                if (existingTags[field]) {
+                    descParts.push(`${field}=${existingTags[field]}`);
+                }
+            }
+        }
+
+        const desc = descParts.join('\n');
 
         // Also check for generic s= t= just in case (optional, but good for compatibility)
         // But since we saw sSCENE, we prioritize that.
@@ -1191,7 +1223,7 @@ export class MetadataHandler {
             setSpeedChild('TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_HI', hi);
             setSpeedChild('TIMESTAMP_SAMPLES_SINCE_MIDNIGHT_LO', lo);
 
-            // Track names (unchanged)
+            // Track names - for mix exports, rebuild track list from scratch
             if (metadata.trackNames && metadata.trackNames.length > 0) {
                 let trackList = xmlDoc.querySelector("TRACK_LIST");
                 if (!trackList) {
@@ -1200,29 +1232,36 @@ export class MetadataHandler {
                         xmlDoc.documentElement.appendChild(trackList);
                     }
                 }
+                
+                // Remove all existing tracks
                 const existingTracks = Array.from(trackList.querySelectorAll("TRACK"));
-                const maxCount = Math.max(existingTracks.length, metadata.trackNames.length);
-                for (let i = 0; i < maxCount; i++) {
-                    if (i < existingTracks.length) {
-                        if (i < metadata.trackNames.length) {
-                            const track = existingTracks[i];
-                            let nameEl = track.querySelector("NAME");
-                            if (!nameEl) {
-                                nameEl = xmlDoc.createElement("NAME");
-                                track.appendChild(nameEl);
-                            }
-                            nameEl.textContent = metadata.trackNames[i];
-                        }
-                    } else if (i < metadata.trackNames.length) {
-                        const newTrack = xmlDoc.createElement("TRACK");
-                        const channelIndex = xmlDoc.createElement("CHANNEL_INDEX");
-                        channelIndex.textContent = (i + 1).toString();
-                        newTrack.appendChild(channelIndex);
-                        const nameEl = xmlDoc.createElement("NAME");
-                        nameEl.textContent = metadata.trackNames[i];
-                        newTrack.appendChild(nameEl);
-                        trackList.appendChild(newTrack);
-                    }
+                existingTracks.forEach(track => track.remove());
+                
+                // Update or create TRACK_COUNT
+                let trackCount = trackList.querySelector("TRACK_COUNT");
+                if (!trackCount) {
+                    trackCount = xmlDoc.createElement("TRACK_COUNT");
+                    trackList.insertBefore(trackCount, trackList.firstChild);
+                }
+                trackCount.textContent = metadata.trackNames.length.toString();
+                
+                // Add new tracks based on metadata.trackNames
+                for (let i = 0; i < metadata.trackNames.length; i++) {
+                    const newTrack = xmlDoc.createElement("TRACK");
+                    
+                    const channelIndex = xmlDoc.createElement("CHANNEL_INDEX");
+                    channelIndex.textContent = (i + 1).toString();
+                    newTrack.appendChild(channelIndex);
+                    
+                    const interleaveIndex = xmlDoc.createElement("INTERLEAVE_INDEX");
+                    interleaveIndex.textContent = (i + 1).toString();
+                    newTrack.appendChild(interleaveIndex);
+                    
+                    const nameEl = xmlDoc.createElement("NAME");
+                    nameEl.textContent = metadata.trackNames[i];
+                    newTrack.appendChild(nameEl);
+                    
+                    trackList.appendChild(newTrack);
                 }
             }
 
@@ -1320,6 +1359,14 @@ export class MetadataHandler {
     }
 
     writeString(view, offset, str, length = null) {
+        // If length is specified, zero out the entire field first to prevent garbage data
+        if (length) {
+            for (let i = 0; i < length; i++) {
+                view.setUint8(offset + i, 0);
+            }
+        }
+        
+        // Write the string characters
         for (let i = 0; i < str.length; i++) {
             if (length && i >= length) break;
             view.setUint8(offset + i, str.charCodeAt(i));

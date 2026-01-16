@@ -300,12 +300,30 @@ export class AudioProcessor {
         chunks.push({ id: 'data', data: dataChunk });
 
         // 3. Copy or update metadata chunks from original buffer
-        // For region exports with new timeReference, copy metadata and let the caller create fresh iXML
+        // For mix exports or track name updates, regenerate metadata chunks
         if (originalBuffer) {
-            if (exportMetadata) {
+            if (exportMetadata && (exportMetadata.isMixExport || exportMetadata.trackNames)) {
+                // Track names have been updated (e.g., for mix export) - regenerate both bEXT and iXML
+                // Use metadata handler to create fresh chunks with updated track names
+                console.log('[createWavFile] Regenerating metadata for mix export - channels:', exportMetadata.channels, 'trackNames:', exportMetadata.trackNames);
+                if (this.metadataHandler) {
+                    const bextChunk = this.metadataHandler.createBextChunk(exportMetadata);
+                    if (bextChunk && bextChunk.byteLength > 0) {
+                        chunks.push({ id: 'bext', data: new Uint8Array(bextChunk) });
+                        console.log('[createWavFile] Added bEXT chunk:', bextChunk.byteLength, 'bytes');
+                    }
+                    const ixmlChunk = this.metadataHandler.createIXMLChunk(exportMetadata);
+                    if (ixmlChunk && ixmlChunk.byteLength > 0) {
+                        chunks.push({ id: 'iXML', data: new Uint8Array(ixmlChunk) });
+                        console.log('[createWavFile] Added iXML chunk:', ixmlChunk.byteLength, 'bytes');
+                    }
+                }
+            } else if (exportMetadata && exportMetadata.timeReference !== undefined) {
+                // Region export with timeReference update only
                 this.copyBextChunk(originalBuffer, chunks, exportMetadata);
                 // Don't copy iXML - let the caller create fresh one with proper TIMESTAMP_SAMPLES_SINCE_MIDNIGHT
             } else {
+                // Normal export - copy metadata as-is
                 this.copyMetadataChunks(originalBuffer, chunks);
             }
         }

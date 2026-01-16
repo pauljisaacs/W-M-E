@@ -817,8 +817,8 @@ export class Mixer {
         // Use the same dB curve as the channel faders
         this.masterFaderLevel = val;
         const dBCurve = [
-            [1.00, 10],
-            [0.75, 0],
+            [1.00, 0],
+            [0.75, -3],
             [0.50, -10],
             [0.40, -20],
             [0.30, -30],

@@ -60,6 +60,7 @@ class App {
         this.metadataHandler = new MetadataHandler();
         this.audioEngine = new AudioEngine();
         this.audioProcessor = new AudioProcessor();
+        this.audioProcessor.metadataHandler = this.metadataHandler; // Link metadata handler
         this.mixer = new Mixer(this.audioEngine.audioCtx,
             (index, name) => {
                 console.log(`Track ${index} renamed to ${name}`);
@@ -74,6 +75,7 @@ class App {
         );
         this.mixer.init('mixer-container');
         this.fileIO = new FileIO();
+        this.renameManager = new RenameManager(this); // Initialize rename utilities
 
         this.files = []; // Array of { fileHandle, metadata, fileObj }
         this.selectedIndices = new Set();
@@ -334,6 +336,11 @@ class App {
                     console.error('Error selecting directory:', err);
                 }
             }
+        });
+
+        // Combine rename field event listeners using RenameManager
+        this.renameManager.setupRenameFieldListeners('combine-rename', () => {
+            this.updateCombineFilenamePreviews();
         });
 
         const combineModal = document.getElementById('combine-modal');
@@ -3344,24 +3351,35 @@ class App {
 
             // Update mixer callbacks for this file (reuse existing mixer instance)
             this.mixer.onTrackNameChange = (trackIndex, newName) => {
-                // Find the current item in the source of truth by filename
-                // This is robust against sorting or index shifts
-                const activeItem = this.files.find(f => f.metadata.filename === item.metadata.filename);
-
-                if (activeItem) {
-                    if (!activeItem.metadata.trackNames) activeItem.metadata.trackNames = [];
-                    activeItem.metadata.trackNames[trackIndex] = newName;
-                    console.log(`Track ${trackIndex} renamed to ${newName} for ${activeItem.metadata.filename}`);
-
-                    // Enable save button
-                    document.getElementById('batch-save-btn').disabled = false;
+                // Apply track name change to all selected files in the batch
+                // This allows editing one file and having the change propagate to all selected files
+                let updatedCount = 0;
+                
+                for (const selectedIndex of this.selectedIndices) {
+                    const selectedItem = this.files[selectedIndex];
+                    if (!selectedItem) continue;
                     
-                    // Trigger auto-save if enabled
-                    if (this.autoSaveEnabled) {
-                        this.scheduleAutoSave();
+                    // Handle both regular files and sibling groups
+                    const targets = selectedItem.isGroup ? selectedItem.siblings : [selectedItem];
+                    
+                    for (const target of targets) {
+                        // Only update files with the same channel count to avoid mismatches
+                        if (target.metadata.channels === trackCount) {
+                            if (!target.metadata.trackNames) target.metadata.trackNames = [];
+                            target.metadata.trackNames[trackIndex] = newName;
+                            updatedCount++;
+                        }
                     }
-                } else {
-                    console.warn('Mixer callback error: Loaded file not found in current file list', item.metadata.filename);
+                }
+                
+                console.log(`Track ${trackIndex} renamed to "${newName}" for ${updatedCount} file(s)`);
+
+                // Enable save button
+                document.getElementById('batch-save-btn').disabled = false;
+                
+                // Trigger auto-save if enabled
+                if (this.autoSaveEnabled) {
+                    this.scheduleAutoSave();
                 }
             };
 
@@ -4651,6 +4669,38 @@ class App {
         return `${filename}${trackSuffix}.wav`;
     }
 
+    /**
+     * Show directory picker with standardized error handling
+     * @returns {Promise<FileSystemDirectoryHandle|null>} Directory handle or null if cancelled
+     */
+    async pickDirectory() {
+        try {
+            return await window.showDirectoryPicker();
+        } catch (err) {
+            if (err.name === 'AbortError') {
+                this.showToast('Directory selection cancelled', 'warning', 2000);
+                return null;
+            }
+            throw err;
+        }
+    }
+
+    /**
+     * Get directory handle, prompting user if not provided
+     * @param {FileSystemDirectoryHandle|null} currentHandle - Existing handle or null
+     * @returns {Promise<FileSystemDirectoryHandle>} Directory handle
+     * @throws {Error} If user cancels selection
+     */
+    async getOrPickDirectory(currentHandle) {
+        if (currentHandle) return currentHandle;
+        
+        const handle = await this.pickDirectory();
+        if (!handle) {
+            throw new Error('Directory selection cancelled');
+        }
+        return handle;
+    }
+
     // ========== End Multi-Process Helper Methods ==========
 
     openMultiProcessModal() {
@@ -4753,29 +4803,8 @@ class App {
         // Initialize state on modal open
         handleExtractModeChange();
         
-        // Handle custom field visibility for rename
-        const updateCustomFieldVisibility = () => {
-            const field1 = document.getElementById('mp-rename-field1').value;
-            const field2 = document.getElementById('mp-rename-field2').value;
-            const field3 = document.getElementById('mp-rename-field3').value;
-            
-            const custom1Input = document.getElementById('mp-rename-custom1');
-            const custom2Input = document.getElementById('mp-rename-custom2');
-            const custom3Input = document.getElementById('mp-rename-custom3');
-            
-            // Show/hide custom inputs below their respective selects
-            custom1Input.style.display = field1 === 'custom' ? 'block' : 'none';
-            custom2Input.style.display = field2 === 'custom' ? 'block' : 'none';
-            custom3Input.style.display = field3 === 'custom' ? 'block' : 'none';
-        };
-        
-        // Add change listeners to field selects
-        document.getElementById('mp-rename-field1').addEventListener('change', updateCustomFieldVisibility);
-        document.getElementById('mp-rename-field2').addEventListener('change', updateCustomFieldVisibility);
-        document.getElementById('mp-rename-field3').addEventListener('change', updateCustomFieldVisibility);
-        
-        // Initialize custom field visibility
-        updateCustomFieldVisibility();
+        // Handle custom field visibility for rename using RenameManager
+        this.renameManager.setupRenameFieldListeners('mp-rename', null);
         
         // Note: CSS already handles the disabled state with :not(:checked) ~ selector
         // This is just for any additional JavaScript-based interactivity if needed
@@ -4834,16 +4863,12 @@ class App {
         this.closeMultiProcessModal();
         
         // Get destination folder
-        let outputDirHandle = null;
-        try {
-            outputDirHandle = this.mpDestinationHandle || await window.showDirectoryPicker({
-                mode: 'readwrite'
-            });
-        } catch (err) {
-            if (err.name !== 'AbortError') {
-                alert('Failed to select output directory: ' + err.message);
+        let outputDirHandle = this.mpDestinationHandle;
+        if (!outputDirHandle) {
+            outputDirHandle = await this.pickDirectory();
+            if (!outputDirHandle) {
+                return; // User cancelled
             }
-            return;
         }
 
         // Collect all options
@@ -4883,7 +4908,17 @@ class App {
         const intermediateFiles = []; // Track intermediate files for cleanup
 
         try {
-            const selectedFiles = Array.from(this.selectedIndices).map(i => this.files[i]);
+            let selectedFiles = Array.from(this.selectedIndices).map(i => this.files[i]);
+
+            // STEP 0: Unwrap any group files to individual files (for all operations)
+            // This ensures rename, normalize, and combine all work with individual files
+            selectedFiles = selectedFiles.flatMap(file => {
+                if (file.isGroup && file.siblings) {
+                    // Unwrap sibling group into individual files
+                    return file.siblings;
+                }
+                return file;
+            });
 
             // STEP 1: Extract Audio
             if (options.extractAudio) {
@@ -4913,9 +4948,10 @@ class App {
                 console.log('[MultiProcess] Step 2: Combining to Poly...');
                 const combined = await this.mpCombineToPoly(processedFiles, options);
                 if (combined.success) {
-                    // Always mark previous files as intermediate when Combine runs
+                    // Mark previous files as intermediate when Combine runs
                     // (they are superseded by the combined output)
-                    if (!options.keepIntermediateFiles) {
+                    // ONLY mark if they're not the original selected files (i.e., they were created by Extract)
+                    if (!options.keepIntermediateFiles && options.extractAudio) {
                         processedFiles.forEach(f => {
                             if (!intermediateFiles.includes(f)) {
                                 intermediateFiles.push(f);
@@ -5453,6 +5489,19 @@ class App {
 
     async mpRename(fileList, options) {
         const results = [];
+        
+        // Build rename config from options
+        const config = {
+            field1: options.renameField1,
+            field2: options.renameField2,
+            field3: options.renameField3,
+            separator1: options.renameSeparator1,
+            separator2: options.renameSeparator2,
+            custom1: options.renameCustom1,
+            custom2: options.renameCustom2,
+            custom3: options.renameCustom3,
+            outputDirHandle: options.outputDirHandle
+        };
 
         for (const fileObj of fileList) {
             try {
@@ -5461,19 +5510,11 @@ class App {
                 const trackSuffixMatch = originalName.match(/(_\d+)\.wav$/);
                 const trackSuffix = trackSuffixMatch ? trackSuffixMatch[1] : '';
 
-                // Generate new filename using the flexible field-based pattern
-                const newFileName = await this.generateFlexibleFilename(
-                    fileObj.metadata, 
-                    options.renameField1,
-                    options.renameField2,
-                    options.renameField3,
-                    options.renameSeparator1, 
-                    options.renameSeparator2,
-                    options.renameCustom1,
-                    options.renameCustom2,
-                    options.renameCustom3,
-                    trackSuffix,
-                    options.outputDirHandle
+                // Generate new filename using RenameManager
+                const newFileName = await this.renameManager.generatePreviewFilename(
+                    fileObj.metadata,
+                    config,
+                    trackSuffix
                 );
 
                 console.log(`[MultiProcess] Renaming ${originalName} to ${newFileName}`);
@@ -5489,10 +5530,10 @@ class App {
                 const fileBlob = fileObj.file;
 
                 // Ensure unique filename to prevent overwrites with (1), (2), etc.
-                const uniqueFileName = await this.getUniqueFileNameWithParens(options.outputDirHandle, newFileName);
+                const uniqueFileName = await this.getUniqueFileNameWithParens(config.outputDirHandle, newFileName);
 
                 // Write to new file with the new name
-                const newFileHandle = await options.outputDirHandle.getFileHandle(uniqueFileName, { create: true });
+                const newFileHandle = await config.outputDirHandle.getFileHandle(uniqueFileName, { create: true });
                 const writable = await newFileHandle.createWritable();
                 await writable.write(fileBlob);
                 await writable.close();
@@ -5560,16 +5601,10 @@ class App {
     }
 
     async handleMPChooseDestination() {
-        try {
-            const directoryHandle = await window.showDirectoryPicker();
+        const directoryHandle = await this.pickDirectory();
+        if (directoryHandle) {
             document.getElementById('mp-destination-path').textContent = directoryHandle.name;
-            
-            // Store the directory handle for later use
             this.mpDestinationHandle = directoryHandle;
-        } catch (err) {
-            if (err.name !== 'AbortError') {
-                console.error('Error choosing destination:', err);
-            }
         }
     }
 
@@ -5812,37 +5847,11 @@ class App {
         if (this.selectedIndices.size === 0) return;
         document.getElementById('rename-modal').classList.add('active');
         
-        // Setup custom field visibility handlers
-        const updateCustomFieldVisibility = () => {
-            const field1 = document.getElementById('rename-field1').value;
-            const field2 = document.getElementById('rename-field2').value;
-            const field3 = document.getElementById('rename-field3').value;
-            
-            document.getElementById('rename-custom1').style.display = field1 === 'custom' ? 'block' : 'none';
-            document.getElementById('rename-custom2').style.display = field2 === 'custom' ? 'block' : 'none';
-            document.getElementById('rename-custom3').style.display = field3 === 'custom' ? 'block' : 'none';
-        };
+        // Setup rename field listeners using shared utility
+        this.renameManager.setupRenameFieldListeners('rename', () => {
+            this.updateRenamePreview();
+        });
         
-        // Add change listeners
-        document.getElementById('rename-field1').addEventListener('change', () => {
-            updateCustomFieldVisibility();
-            this.updateRenamePreview();
-        });
-        document.getElementById('rename-field2').addEventListener('change', () => {
-            updateCustomFieldVisibility();
-            this.updateRenamePreview();
-        });
-        document.getElementById('rename-field3').addEventListener('change', () => {
-            updateCustomFieldVisibility();
-            this.updateRenamePreview();
-        });
-        document.getElementById('rename-separator1').addEventListener('change', () => this.updateRenamePreview());
-        document.getElementById('rename-separator2').addEventListener('change', () => this.updateRenamePreview());
-        document.getElementById('rename-custom1').addEventListener('input', () => this.updateRenamePreview());
-        document.getElementById('rename-custom2').addEventListener('input', () => this.updateRenamePreview());
-        document.getElementById('rename-custom3').addEventListener('input', () => this.updateRenamePreview());
-        
-        updateCustomFieldVisibility();
         this.updateRenamePreview();
     }
 
@@ -5855,30 +5864,9 @@ class App {
 
         const firstIndex = this.selectedIndices.values().next().value;
         const file = this.files[firstIndex];
+        const config = this.renameManager.getRenameConfig('rename');
         
-        const field1 = document.getElementById('rename-field1').value;
-        const field2 = document.getElementById('rename-field2').value;
-        const field3 = document.getElementById('rename-field3').value;
-        const sep1 = document.getElementById('rename-separator1').value;
-        const sep2 = document.getElementById('rename-separator2').value;
-        const custom1 = document.getElementById('rename-custom1').value;
-        const custom2 = document.getElementById('rename-custom2').value;
-        const custom3 = document.getElementById('rename-custom3').value;
-
-        // Extract track suffix from original filename to show preview with suffix
-        const originalName = file.metadata.filename;
-        const trackSuffixMatch = originalName.match(/(_\d+)\.wav$/);
-        const trackSuffix = trackSuffixMatch ? trackSuffixMatch[1] : '';
-
-        const newName = await this.generateFlexibleFilename(
-            file.metadata,
-            field1, field2, field3,
-            sep1, sep2,
-            custom1, custom2, custom3,
-            trackSuffix
-        );
-        
-        document.getElementById('rename-preview').textContent = newName;
+        await this.renameManager.updateSinglePreview('rename-preview', file, config);
     }
 
     async applyRename() {
@@ -5886,66 +5874,11 @@ class App {
         document.body.style.cursor = 'wait';
 
         try {
-            const field1 = document.getElementById('rename-field1').value;
-            const field2 = document.getElementById('rename-field2').value;
-            const field3 = document.getElementById('rename-field3').value;
-            const sep1 = document.getElementById('rename-separator1').value;
-            const sep2 = document.getElementById('rename-separator2').value;
-            const custom1 = document.getElementById('rename-custom1').value;
-            const custom2 = document.getElementById('rename-custom2').value;
-            const custom3 = document.getElementById('rename-custom3').value;
-
+            const config = this.renameManager.getRenameConfig('rename');
             const indices = Array.from(this.selectedIndices);
-            let renamedCount = 0;
-            let failedCount = 0;
-            const renamedIndices = new Set();
-
-            for (const index of indices) {
-                const item = this.files[index];
-                
-                // Determine which files to rename: if it's a group, rename all siblings, otherwise just this file
-                const targetFiles = item.isGroup ? item.siblings : [item];
-
-                for (const targetItem of targetFiles) {
-                    // Extract track suffix from original filename (e.g., '_1', '_2', '_3')
-                    const originalName = targetItem.metadata.filename;
-                    const trackSuffixMatch = originalName.match(/(_\d+)\.wav$/);
-                    const trackSuffix = trackSuffixMatch ? trackSuffixMatch[1] : '';
-
-                    const newName = await this.generateFlexibleFilename(
-                        targetItem.metadata,
-                        field1, field2, field3,
-                        sep1, sep2,
-                        custom1, custom2, custom3,
-                        trackSuffix
-                    );
-
-                    if (originalName === newName) continue; // Skip if same
-
-                    console.log(`Renaming ${originalName} to ${newName}`);
-
-                    if (targetItem.handle && targetItem.handle.move) {
-                        await targetItem.handle.move(newName);
-                        targetItem.metadata.filename = newName;
-                        targetItem.file = await targetItem.handle.getFile(); // Refresh file object
-                        renamedCount++;
-                        renamedIndices.add(this.files.indexOf(targetItem));
-                    } else {
-                        console.warn(`File System Access API "move" not supported on ${originalName}.`);
-                        failedCount++;
-                    }
-                }
-                
-                // Update representative metadata for groups
-                if (item.isGroup && item.siblings && item.siblings.length > 0) {
-                    // Extract base name from first sibling's new filename (without suffix)
-                    const firstSiblingFilename = item.siblings[0].metadata.filename;
-                    const baseNameMatch = firstSiblingFilename.match(/^(.+?)(_\d+)?\.wav$/);
-                    const newBaseName = baseNameMatch ? baseNameMatch[1] : firstSiblingFilename.replace(/\.wav$/, '');
-                    // Update representative metadata to show the new base name with _X suffix
-                    item.metadata.filename = `${newBaseName}_X.wav`;
-                }
-            }
+            
+            const result = await this.renameManager.applyRenameToSelected(indices, config);
+            const { renamedCount, failedCount } = result;
 
             // Refresh UI
             const tbody = document.getElementById('file-list-body');
@@ -6209,48 +6142,29 @@ class App {
                 if (format === 'wav') {
                     const bitDepth = parseInt(document.getElementById('export-bitdepth').value);
                     const originalBuffer = await item.file.arrayBuffer();
-                    const wavBuffer = this.audioProcessor.createWavFile(renderedBuffer, bitDepth, originalBuffer, exportMetadata);
                     
-                    // For region exports, append fresh iXML chunk with proper TIMESTAMP_SAMPLES_SINCE_MIDNIGHT
-                    if (isRegionExport && exportMetadata) {
-                        // Create new metadata for the exported region
-                        const exportedMetadata = { ...item.metadata };
-                        exportedMetadata.timeReference = exportMetadata.timeReference;
-                        
-                        // Use metadata handler to create proper iXML chunk
-                        const ixmlChunk = this.metadataHandler.createIXMLChunk(exportedMetadata);
-                        
-                        // Append iXML chunk to the WAV file
-                        const wavView = new DataView(wavBuffer);
-                        const wavArray = new Uint8Array(wavBuffer);
-                        
-                        // Find the size of the RIFF file (excluding 8 bytes for 'RIFF' and size field)
-                        const riffSize = wavView.getUint32(4, true);
-                        const oldFileSize = riffSize + 8;
-                        const newFileSize = oldFileSize + 8 + ixmlChunk.byteLength; // 8 bytes for 'iXML' and size
-                        
-                        // Create new buffer with iXML chunk
-                        const newWavBuffer = new Uint8Array(newFileSize);
-                        newWavBuffer.set(wavArray);
-                        
-                        // Write iXML chunk header at the end
-                        const chunkOffset = oldFileSize;
-                        newWavBuffer[chunkOffset] = 0x69;     // 'i'
-                        newWavBuffer[chunkOffset + 1] = 0x58; // 'X'
-                        newWavBuffer[chunkOffset + 2] = 0x4D; // 'M'
-                        newWavBuffer[chunkOffset + 3] = 0x4C; // 'L'
-                        const chunkView = new DataView(newWavBuffer.buffer);
-                        chunkView.setUint32(chunkOffset + 4, ixmlChunk.byteLength, true);
-                        newWavBuffer.set(new Uint8Array(ixmlChunk), chunkOffset + 8);
-                        
-                        // Update RIFF size
-                        const newRiffSize = newFileSize - 8;
-                        chunkView.setUint32(4, newRiffSize, true);
-                        
-                        blob = new Blob([newWavBuffer.buffer], { type: 'audio/wav' });
-                    } else {
-                        blob = new Blob([wavBuffer], { type: 'audio/wav' });
+                    // Create updated metadata for mix export
+                    const mixMetadata = { ...item.metadata };
+                    if (exportMetadata) {
+                        // Region export - update timeReference
+                        mixMetadata.timeReference = exportMetadata.timeReference;
                     }
+                    
+                    // Update channel count and track names based on actual output
+                    const outputChannels = renderedBuffer.numberOfChannels;
+                    mixMetadata.channels = outputChannels;
+                    if (outputChannels === 1) {
+                        mixMetadata.trackNames = ['Mix'];
+                    } else if (outputChannels === 2) {
+                        mixMetadata.trackNames = ['Mix L', 'Mix R'];
+                    }
+                    
+                    // Flag this as a mix export requiring metadata regeneration
+                    mixMetadata.isMixExport = true;
+                    
+                    const wavBuffer = this.audioProcessor.createWavFile(renderedBuffer, bitDepth, originalBuffer, mixMetadata);
+                    
+                    blob = new Blob([wavBuffer], { type: 'audio/wav' });
                 } else if (format === 'mp3') {
                     if (typeof lamejs === 'undefined') {
                         alert('lamejs library not loaded. Please refresh the page.');
@@ -6988,25 +6902,19 @@ class App {
     /**
      * Update filename previews for all groups in combine modal
      */
-    updateCombineFilenamePreviews() {
+    async updateCombineFilenamePreviews() {
         if (!this.combineGroups || this.combineGroups.length === 0) {
             return;
         }
 
-        // Get current format settings
-        const field1 = document.getElementById('combine-rename-field1')?.value || 'scene';
-        const field2 = document.getElementById('combine-rename-field2')?.value || 'take';
-        const field3 = document.getElementById('combine-rename-field3')?.value || 'custom';
-        const sep1 = document.getElementById('combine-rename-separator1')?.value || 'T';
-        const sep2 = document.getElementById('combine-rename-separator2')?.value || '';
-        const custom1 = document.getElementById('combine-rename-custom1')?.value || '';
-        const custom2 = document.getElementById('combine-rename-custom2')?.value || '';
-        const custom3 = document.getElementById('combine-rename-custom3')?.value || '_poly';
-
+        // Get current config using RenameManager
+        const config = this.renameManager.getRenameConfig('combine-rename');
+        
         // Update each group's preview
-        this.combineGroups.forEach((group, groupIndex) => {
+        for (let groupIndex = 0; groupIndex < this.combineGroups.length; groupIndex++) {
+            const group = this.combineGroups[groupIndex];
             const previewElement = document.querySelector(`.combine-filename-preview[data-group-index="${groupIndex}"] .preview-name`);
-            if (!previewElement) return;
+            if (!previewElement) continue;
 
             // Create metadata for poly file
             const polyMetadata = {
@@ -7014,57 +6922,11 @@ class App {
                 channels: group.siblings.length
             };
 
-            // Generate preview filename synchronously (no directory handle needed for preview)
-            const getFieldValue = (fieldType, customValue) => {
-                if (fieldType === 'none') return null;
-                if (fieldType === 'custom') return customValue || null;
-                if (fieldType === 'project') return polyMetadata.project || null;
-                if (fieldType === 'tape') return polyMetadata.tape || null;
-                if (fieldType === 'scene') {
-                    const scene = polyMetadata.scene;
-                    if (scene && /^\d+$/.test(scene)) return scene.padStart(2, '0');
-                    return scene || null;
-                }
-                if (fieldType === 'take') {
-                    const take = polyMetadata.take;
-                    if (take && /^\d+$/.test(take)) return take.padStart(2, '0');
-                    return take || null;
-                }
-                return null;
-            };
-
-            const value1 = getFieldValue(field1, custom1);
-            const value2 = getFieldValue(field2, custom2);
-            const value3 = getFieldValue(field3, custom3);
-
-            let filename;
-            if (!value1 && !value2 && !value3) {
-                // Use DateTime fallback
-                const now = new Date();
-                const year = String(now.getFullYear()).slice(-2);
-                const month = String(now.getMonth() + 1).padStart(2, '0');
-                const day = String(now.getDate()).padStart(2, '0');
-                const hours = String(now.getHours()).padStart(2, '0');
-                const minutes = String(now.getMinutes()).padStart(2, '0');
-                const seconds = String(now.getSeconds()).padStart(2, '0');
-                filename = `${year}${month}${day}-${hours}${minutes}${seconds}-01.wav`;
-            } else {
-                // Build filename with separators
-                let parts = [];
-                if (value1) parts.push(value1);
-                if (value2) {
-                    if (parts.length > 0 && sep1) parts.push(sep1);
-                    parts.push(value2);
-                }
-                if (value3) {
-                    if (parts.length > 0 && sep2) parts.push(sep2);
-                    parts.push(value3);
-                }
-                filename = parts.join('') + '.wav';
-            }
+            // Generate preview filename using RenameManager (await the Promise)
+            const filename = await this.renameManager.generatePreviewFilename(polyMetadata, config, '');
 
             previewElement.textContent = filename;
-        });
+        }
     }
 
     /**
@@ -7171,18 +7033,17 @@ class App {
             // Output filename will be generated using the shared format, not stored here
         });
 
-        // Collect filename format settings from modal
-        const renameField1 = document.getElementById('combine-rename-field1').value;
-        const renameField2 = document.getElementById('combine-rename-field2').value;
-        const renameField3 = document.getElementById('combine-rename-field3').value;
-        const renameSeparator1 = document.getElementById('combine-rename-separator1').value;
-        const renameSeparator2 = document.getElementById('combine-rename-separator2').value;
-        const renameCustom1 = document.getElementById('combine-rename-custom1').value;
-        const renameCustom2 = document.getElementById('combine-rename-custom2').value;
-        const renameCustom3 = document.getElementById('combine-rename-custom3').value;
-        
         // Get shared destination handle
-        const destinationHandle = this.combineDestinationHandle;
+        let destinationHandle;
+        try {
+            destinationHandle = await this.getOrPickDirectory(this.combineDestinationHandle);
+        } catch (err) {
+            return; // User cancelled
+        }
+        
+        // Collect filename format settings from modal using RenameManager
+        const renameConfig = this.renameManager.getRenameConfig('combine-rename');
+        renameConfig.outputDirHandle = destinationHandle;
 
         this.closeCombineModal();
 
@@ -7264,19 +7125,11 @@ class App {
                     trackNames: trackNames
                 };
 
-                // Generate output filename using shared format
-                const outputFilename = await this.generateFlexibleFilename(
+                // Generate output filename using RenameManager
+                const outputFilename = await this.renameManager.generatePreviewFilename(
                     polyMetadata,
-                    renameField1,
-                    renameField2,
-                    renameField3,
-                    renameSeparator1,
-                    renameSeparator2,
-                    renameCustom1,
-                    renameCustom2,
-                    renameCustom3,
-                    '', // no track suffix for poly files
-                    destinationHandle
+                    renameConfig,
+                    '' // no track suffix for poly files
                 );
 
                 // Update metadata with generated filename
@@ -7289,33 +7142,18 @@ class App {
                     polyMetadata
                 );
 
-                // Save file
+                // Save file to destination directory
                 const suggestedName = outputFilename;
                 let handle;
                 
                 try {
-                    if (destinationHandle) {
-                        // Save to selected directory with unique filename
-                        const uniqueFileName = await this.getUniqueFileNameWithParens(destinationHandle, suggestedName);
-                        handle = await destinationHandle.getFileHandle(uniqueFileName, { create: true });
-                        
-                        const writable = await handle.createWritable();
-                        await writable.write(finalBlob);
-                        await writable.close();
-                    } else {
-                        // Show save dialog
-                        handle = await window.showSaveFilePicker({
-                            suggestedName: suggestedName,
-                            types: [{
-                                description: 'WAV Audio',
-                                accept: { 'audio/wav': ['.wav'] }
-                            }]
-                        });
-
-                        const writable = await handle.createWritable();
-                        await writable.write(finalBlob);
-                        await writable.close();
-                    }
+                    // destinationHandle is guaranteed to be set (was asked for at start if needed)
+                    const uniqueFileName = await this.getUniqueFileNameWithParens(destinationHandle, suggestedName);
+                    handle = await destinationHandle.getFileHandle(uniqueFileName, { create: true });
+                    
+                    const writable = await handle.createWritable();
+                    await writable.write(finalBlob);
+                    await writable.close();
 
                     console.log(`✓ Combined file saved: ${outputFilename}`);
 
@@ -7431,7 +7269,7 @@ class App {
             : `${fileCount} files: ${fileList}`;
         // Show 'Same as source files' if no folder is selected
         document.getElementById('split-folder-path').textContent = 'Same as source files';
-        document.getElementById('split-confirm-btn').disabled = true;
+        document.getElementById('split-confirm-btn').disabled = false;
 
         // Update bit depth selector to show first file's bit depth
         const bitDepthSelect = document.getElementById('split-bitdepth');
@@ -7469,21 +7307,16 @@ class App {
      * Select destination folder for split files
      */
     async selectSplitFolder() {
-        try {
-            const dirHandle = await window.showDirectoryPicker();
+        const dirHandle = await this.pickDirectory();
+        if (dirHandle) {
             this.splitFileData.destinationHandle = dirHandle;
             document.getElementById('split-folder-path').textContent = dirHandle.name;
             document.getElementById('split-confirm-btn').disabled = false;
-        } catch (err) {
-            // If user cancels, revert to 'Same as source files'
-            if (err.name === 'AbortError') {
-                this.splitFileData.destinationHandle = null;
-                document.getElementById('split-folder-path').textContent = 'Same as source files';
-                document.getElementById('split-confirm-btn').disabled = true;
-            } else {
-                console.error('Error selecting folder:', err);
-                alert('Failed to select folder');
-            }
+        } else {
+            // User cancelled - revert to 'Same as source files'
+            this.splitFileData.destinationHandle = null;
+            document.getElementById('split-folder-path').textContent = 'Same as source files';
+            document.getElementById('split-confirm-btn').disabled = false;
         }
     }
 
@@ -7491,8 +7324,8 @@ class App {
      * Process split operation
      */
     async processSplitFile() {
-        if (!this.splitFileData || !this.splitFileData.destinationHandle) {
-            alert('Please select a destination folder first.');
+        if (!this.splitFileData) {
+            alert('No split data available.');
             return;
         }
 
@@ -7501,6 +7334,14 @@ class App {
             const { files, destinationHandle } = this.splitFileData;
             const totalFiles = files.length;
             let successCount = 0;
+
+            // If "Same as source files" mode, ask user once before processing all files
+            let defaultSaveDirectory;
+            try {
+                defaultSaveDirectory = await this.getOrPickDirectory(destinationHandle);
+            } catch (err) {
+                return; // User cancelled
+            }
 
             // Process each poly file
             for (let fileIdx = 0; fileIdx < files.length; fileIdx++) {
@@ -7555,9 +7396,7 @@ class App {
 
                 // Split each channel into a separate file
                 const baseName = metadata.filename.replace(/\.wav$/i, '');
-                
 
-                
                 for (let ch = 0; ch < channels; ch++) {
                     // Create mono audio buffer for this channel
                     const monoBuffer = this.audioEngine.audioCtx.createBuffer(
@@ -7640,7 +7479,12 @@ class App {
 
 
                     // Write file to destination
-                    const fileHandle = await destinationHandle.getFileHandle(outputFilename, { create: true });
+                    let fileHandle;
+                    if (defaultSaveDirectory) {
+                        // Save to selected/determined directory
+                        fileHandle = await defaultSaveDirectory.getFileHandle(outputFilename, { create: true });
+                    }
+                    
                     const writable = await fileHandle.createWritable();
                     await writable.write(wavArrayBuffer);
                     await writable.close();

@@ -415,8 +415,8 @@ export class AudioEngine {
         // Helper function to convert master fader level to gain
         const getMasterGain = (faderLevel) => {
             const dBCurve = [
-                [1.00, 10],
-                [0.75, 0],
+                [1.00, 0],
+                [0.75, -3],
                 [0.50, -10],
                 [0.40, -20],
                 [0.30, -30],
@@ -562,8 +562,8 @@ export class AudioEngine {
         // Helper function to convert master fader level to gain
         const getMasterGain = (faderLevel) => {
             const dBCurve = [
-                [1.00, 10],
-                [0.75, 0],
+                [1.00, 0],
+                [0.75, -3],
                 [0.50, -10],
                 [0.40, -20],
                 [0.30, -30],
