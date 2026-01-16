@@ -219,17 +219,6 @@ class App {
             }
         });
 
-        // Rename Modal Inputs
-        document.querySelectorAll('input[name="rename-pattern"]').forEach(radio => {
-            radio.addEventListener('change', (e) => {
-                const isProject = e.target.value === 'project-scene-take';
-                document.getElementById('sep1-group').style.display = isProject ? 'flex' : 'none';
-                this.updateRenamePreview();
-            });
-        });
-        document.getElementById('rename-sep1').addEventListener('change', () => this.updateRenamePreview());
-        document.getElementById('rename-sep2').addEventListener('change', () => this.updateRenamePreview());
-
         // Export controls
         document.getElementById('export-btn').addEventListener('click', () => this.openExportModal());
         document.getElementById('cancel-export-btn').addEventListener('click', () => this.closeExportModal());
@@ -331,33 +320,6 @@ class App {
         document.getElementById('combine-close-btn').addEventListener('click', () => this.closeCombineModal());
         document.getElementById('combine-cancel-btn').addEventListener('click', () => this.closeCombineModal());
         document.getElementById('combine-confirm-btn').addEventListener('click', () => this.processCombineFiles());
-
-        // Combine filename format field toggles
-        ['combine-rename-field1', 'combine-rename-field2', 'combine-rename-field3'].forEach((fieldId, index) => {
-            const customIndex = index + 1;
-            document.getElementById(fieldId).addEventListener('change', (e) => {
-                const customInput = document.getElementById(`combine-rename-custom${customIndex}`);
-                if (e.target.value === 'custom') {
-                    customInput.style.display = 'inline-block';
-                } else {
-                    customInput.style.display = 'none';
-                }
-                // Update filename previews
-                this.updateCombineFilenamePreviews();
-            });
-        });
-
-        // Add input listeners for custom text fields and separators
-        ['combine-rename-custom1', 'combine-rename-custom2', 'combine-rename-custom3'].forEach(id => {
-            document.getElementById(id).addEventListener('input', () => {
-                this.updateCombineFilenamePreviews();
-            });
-        });
-        ['combine-rename-separator1', 'combine-rename-separator2'].forEach(id => {
-            document.getElementById(id).addEventListener('change', () => {
-                this.updateCombineFilenamePreviews();
-            });
-        });
 
         // Combine destination folder selector
         document.getElementById('combine-select-dir-btn').addEventListener('click', async () => {
@@ -1312,9 +1274,23 @@ class App {
             tr.style.color = '#ff6b6b'; // Red text for files missing iXML
             tr.title = 'Missing iXML chunk - use Repair iXML to add it';
         }
+        
+        // Add indicator for large files that can't be edited
+        const item = this.files[index];
+        const isLargeFile = item.file && item.file.size > 2 * 1024 * 1024 * 1024;
+        if (isLargeFile) {
+            const fileSizeGB = (item.file.size / 1024 / 1024 / 1024).toFixed(2);
+            tr.style.opacity = '0.7';
+            tr.title = `Large file (${fileSizeGB} GB) - Metadata editing not supported (browser memory limitation)`;
+        }
 
         const createCell = (key, val, editable = true) => {
             const td = document.createElement('td');
+            
+            // Check if this is a large file (>2GB) and disable editing
+            if (isLargeFile) {
+                editable = false;
+            }
 
             // Special handling for FPS - dropdown
             if (key === 'fps') {
@@ -1426,7 +1402,6 @@ class App {
         // Indices: 0: Channels, 1: BitDepth, 2: SampleRate, 3: Filename, 4: Format, 5: Scene, 6: Take, 7: Duration, 8: TCStart, 9: FPS, 10: FileSize, 11: Tape, 12: Project, 13: EndTC, 14: Notes
         
         // Format channel display with Mono/Poly indicator
-        const item = this.files[index];
         const channelCount = metadata.channels || 0;
         
         // For sibling groups, check if all siblings are mono (1 channel each)
@@ -1907,6 +1882,30 @@ class App {
     async saveSelected() {
         if (this.selectedIndices.size === 0) return;
 
+        // Check for large files that can't be saved (>2GB browser memory limit)
+        const MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024; // 2GB
+        const largeFiles = [];
+        
+        for (const index of this.selectedIndices) {
+            const item = this.files[index];
+            const targets = item.isGroup ? item.siblings : [item];
+            
+            for (const target of targets) {
+                if (target.file.size > MAX_FILE_SIZE) {
+                    largeFiles.push({
+                        name: target.metadata.filename,
+                        size: (target.file.size / 1024 / 1024 / 1024).toFixed(2)
+                    });
+                }
+            }
+        }
+        
+        if (largeFiles.length > 0) {
+            const fileList = largeFiles.map(f => `• ${f.name} (${f.size} GB)`).join('\n');
+            alert(`Cannot save files larger than 2GB due to browser memory limitations:\n\n${fileList}\n\nMetadata editing is not supported for files over 2GB.`);
+            return;
+        }
+
         // Apply pending edits first
         if (this.pendingEdits) {
             for (const index of this.selectedIndices) {
@@ -2168,10 +2167,10 @@ class App {
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
                 ctx.fillStyle = '#ffcf44';
                 ctx.font = '16px Inter';
-                ctx.fillText(`Playback unavailable - File too large (${fileSizeGB.toFixed(2)} GB)`, 20, 30);
+                ctx.fillText(`Waveform unavailable for files larger than 2GB`, 20, 30);
                 ctx.fillStyle = '#888';
                 ctx.font = '14px Inter';
-                ctx.fillText('You can still edit and save metadata for this file', 20, 55);
+                ctx.fillText('You can still play and view metadata for this file', 20, 55);
 
                 this.currentlyLoadedFileIndex = index;
                 // Update TC counter display to new take's TC Start
@@ -5812,6 +5811,38 @@ class App {
     openRenameModal() {
         if (this.selectedIndices.size === 0) return;
         document.getElementById('rename-modal').classList.add('active');
+        
+        // Setup custom field visibility handlers
+        const updateCustomFieldVisibility = () => {
+            const field1 = document.getElementById('rename-field1').value;
+            const field2 = document.getElementById('rename-field2').value;
+            const field3 = document.getElementById('rename-field3').value;
+            
+            document.getElementById('rename-custom1').style.display = field1 === 'custom' ? 'block' : 'none';
+            document.getElementById('rename-custom2').style.display = field2 === 'custom' ? 'block' : 'none';
+            document.getElementById('rename-custom3').style.display = field3 === 'custom' ? 'block' : 'none';
+        };
+        
+        // Add change listeners
+        document.getElementById('rename-field1').addEventListener('change', () => {
+            updateCustomFieldVisibility();
+            this.updateRenamePreview();
+        });
+        document.getElementById('rename-field2').addEventListener('change', () => {
+            updateCustomFieldVisibility();
+            this.updateRenamePreview();
+        });
+        document.getElementById('rename-field3').addEventListener('change', () => {
+            updateCustomFieldVisibility();
+            this.updateRenamePreview();
+        });
+        document.getElementById('rename-separator1').addEventListener('change', () => this.updateRenamePreview());
+        document.getElementById('rename-separator2').addEventListener('change', () => this.updateRenamePreview());
+        document.getElementById('rename-custom1').addEventListener('input', () => this.updateRenamePreview());
+        document.getElementById('rename-custom2').addEventListener('input', () => this.updateRenamePreview());
+        document.getElementById('rename-custom3').addEventListener('input', () => this.updateRenamePreview());
+        
+        updateCustomFieldVisibility();
         this.updateRenamePreview();
     }
 
@@ -5819,42 +5850,35 @@ class App {
         document.getElementById('rename-modal').classList.remove('active');
     }
 
-    updateRenamePreview() {
+    async updateRenamePreview() {
         if (this.selectedIndices.size === 0) return;
 
         const firstIndex = this.selectedIndices.values().next().value;
         const file = this.files[firstIndex];
-        const pattern = document.querySelector('input[name="rename-pattern"]:checked').value;
-        const sep1 = document.getElementById('rename-sep1').value;
-        const sep2 = document.getElementById('rename-sep2').value;
+        
+        const field1 = document.getElementById('rename-field1').value;
+        const field2 = document.getElementById('rename-field2').value;
+        const field3 = document.getElementById('rename-field3').value;
+        const sep1 = document.getElementById('rename-separator1').value;
+        const sep2 = document.getElementById('rename-separator2').value;
+        const custom1 = document.getElementById('rename-custom1').value;
+        const custom2 = document.getElementById('rename-custom2').value;
+        const custom3 = document.getElementById('rename-custom3').value;
 
         // Extract track suffix from original filename to show preview with suffix
         const originalName = file.metadata.filename;
         const trackSuffixMatch = originalName.match(/(_\d+)\.wav$/);
         const trackSuffix = trackSuffixMatch ? trackSuffixMatch[1] : '';
 
-        const newName = this.generateFilename(file.metadata, pattern, sep1, sep2, trackSuffix);
+        const newName = await this.generateFlexibleFilename(
+            file.metadata,
+            field1, field2, field3,
+            sep1, sep2,
+            custom1, custom2, custom3,
+            trackSuffix
+        );
+        
         document.getElementById('rename-preview').textContent = newName;
-    }
-
-    generateFilename(metadata, pattern, sep1, sep2, trackSuffix = '') {
-        const scene = metadata.scene || 'SCENE';
-        const take = metadata.take || 'TAKE';
-        const project = metadata.project || 'PROJECT';
-
-        let name = '';
-        if (pattern === 'project-scene-take') {
-            name = `${project}${sep1}${scene}${sep2}${take}`;
-        } else {
-            name = `${scene}${sep1}${take}`;
-        }
-
-        // Append track suffix if provided (for sibling files)
-        if (trackSuffix) {
-            name += trackSuffix;
-        }
-
-        return `${name}.wav`;
     }
 
     async applyRename() {
@@ -5862,9 +5886,14 @@ class App {
         document.body.style.cursor = 'wait';
 
         try {
-            const pattern = document.querySelector('input[name="rename-pattern"]:checked').value;
-            const sep1 = document.getElementById('rename-sep1').value;
-            const sep2 = document.getElementById('rename-sep2').value;
+            const field1 = document.getElementById('rename-field1').value;
+            const field2 = document.getElementById('rename-field2').value;
+            const field3 = document.getElementById('rename-field3').value;
+            const sep1 = document.getElementById('rename-separator1').value;
+            const sep2 = document.getElementById('rename-separator2').value;
+            const custom1 = document.getElementById('rename-custom1').value;
+            const custom2 = document.getElementById('rename-custom2').value;
+            const custom3 = document.getElementById('rename-custom3').value;
 
             const indices = Array.from(this.selectedIndices);
             let renamedCount = 0;
@@ -5883,7 +5912,13 @@ class App {
                     const trackSuffixMatch = originalName.match(/(_\d+)\.wav$/);
                     const trackSuffix = trackSuffixMatch ? trackSuffixMatch[1] : '';
 
-                    const newName = this.generateFilename(targetItem.metadata, pattern, sep1, sep2, trackSuffix);
+                    const newName = await this.generateFlexibleFilename(
+                        targetItem.metadata,
+                        field1, field2, field3,
+                        sep1, sep2,
+                        custom1, custom2, custom3,
+                        trackSuffix
+                    );
 
                     if (originalName === newName) continue; // Skip if same
 

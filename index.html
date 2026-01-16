@@ -305,51 +305,82 @@
     <!-- Scripts -->
     <!-- Rename Modal -->
     <div id="rename-modal" class="modal">
-        <div class="modal-content small-modal">
+        <div class="modal-content multi-process-modal">
             <div class="modal-header">
-                <h3>Batch Rename</h3>
+                <h3>Rename</h3>
                 <button class="close-modal">&times;</button>
             </div>
             <div class="modal-body">
-                <div class="input-group">
-                    <label>Pattern:</label>
-                    <div class="radio-group">
-                        <label><input type="radio" name="rename-pattern" value="scene-take" checked>
-                            [Scene][Sep2][Take]</label>
-                        <label><input type="radio" name="rename-pattern" value="project-scene-take">
-                            [Project][Sep1][Scene][Sep2][Take]</label>
+                <div class="mp-inline-options">
+                    <div class="mp-input-group">
+                        <label>Field 1:</label>
+                        <select id="rename-field1" class="mp-field-select" style="min-width: 90px;">
+                            <option value="none">None</option>
+                            <option value="project">Project</option>
+                            <option value="tape">Tape</option>
+                            <option value="scene">Scene</option>
+                            <option value="take">Take</option>
+                            <option value="custom">Custom</option>
+                        </select>
+                        <input type="text" id="rename-custom1" placeholder="custom text" style="min-width: 90px; display: none;">
+                    </div>
+                    <div class="mp-input-group">
+                        <label>Sep 1:</label>
+                        <select id="rename-separator1" style="min-width: 60px;">
+                            <option value="" selected>None</option>
+                            <option value="T">T</option>
+                            <option value="-">-</option>
+                            <option value="_">_</option>
+                            <option value="=">=</option>
+                            <option value="~">~</option>
+                            <option value="+">+</option>
+                            <option value=",">,</option>
+                            <option value=".">.</option>
+                        </select>
+                    </div>
+                    <div class="mp-input-group">
+                        <label>Field 2:</label>
+                        <select id="rename-field2" class="mp-field-select" style="min-width: 90px;">
+                            <option value="none">None</option>
+                            <option value="project">Project</option>
+                            <option value="tape">Tape</option>
+                            <option value="scene" selected>Scene</option>
+                            <option value="take">Take</option>
+                            <option value="custom">Custom</option>
+                        </select>
+                        <input type="text" id="rename-custom2" placeholder="custom text" style="min-width: 90px; display: none;">
+                    </div>
+                    <div class="mp-input-group">
+                        <label>Sep 2:</label>
+                        <select id="rename-separator2" style="min-width: 60px;">
+                            <option value="">None</option>
+                            <option value="T" selected>T</option>
+                            <option value="-">-</option>
+                            <option value="_">_</option>
+                            <option value="=">=</option>
+                            <option value="~">~</option>
+                            <option value="+">+</option>
+                            <option value=",">,</option>
+                            <option value=".">.</option>
+                        </select>
+                    </div>
+                    <div class="mp-input-group">
+                        <label>Field 3:</label>
+                        <select id="rename-field3" class="mp-field-select" style="min-width: 90px;">
+                            <option value="none">None</option>
+                            <option value="project">Project</option>
+                            <option value="tape">Tape</option>
+                            <option value="scene">Scene</option>
+                            <option value="take" selected>Take</option>
+                            <option value="custom">Custom</option>
+                        </select>
+                        <input type="text" id="rename-custom3" placeholder="custom text" style="min-width: 90px; display: none;">
                     </div>
                 </div>
-
-                <div class="input-group" id="sep1-group" style="display: none;">
-                    <label for="rename-sep1">Separator 1 (Proj-Scene):</label>
-                    <select id="rename-sep1">
-                        <option value="-">-</option>
-                        <option value="_">_</option>
-                        <option value="+">+</option>
-                        <option value=";">;</option>
-                        <option value=":">:</option>
-                        <option value="=">=</option>
-                        <option value="">(None)</option>
-                    </select>
-                </div>
-
-                <div class="input-group">
-                    <label for="rename-sep2">Separator 2 (Scene-Take):</label>
-                    <select id="rename-sep2">
-                        <option value="T">T</option>
-                        <option value="-">-</option>
-                        <option value="_">_</option>
-                        <option value="+">+</option>
-                        <option value=";">;</option>
-                        <option value=":">:</option>
-                        <option value="=">=</option>
-                    </select>
-                </div>
-
+                
                 <div class="preview-box">
                     <label>Preview:</label>
-                    <div id="rename-preview" class="preview-text">Select a file to see preview</div>
+                    <div id="rename-preview" class="preview-text">Select fields to see preview</div>
                 </div>
             </div>
             <div class="modal-footer">
