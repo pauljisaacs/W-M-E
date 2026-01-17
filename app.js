@@ -15,6 +15,32 @@ document.addEventListener('DOMContentLoaded', () => {
             aboutBtn.addEventListener('click', () => {
                 document.getElementById('about-modal').classList.add('active');
             });
+            
+            // Add sidebar toggle button
+            const sidebarToggleBtn = document.createElement('button');
+            sidebarToggleBtn.id = 'sidebar-toggle-btn';
+            sidebarToggleBtn.innerHTML = '⊟'; // Sidebar panel icon
+            sidebarToggleBtn.title = 'Toggle Info Sidebar';
+            sidebarToggleBtn.style.marginLeft = '1em';
+            sidebarToggleBtn.style.background = 'none';
+            sidebarToggleBtn.style.border = 'none';
+            sidebarToggleBtn.style.color = 'var(--text-main)';
+            sidebarToggleBtn.style.fontSize = '1.5rem';
+            sidebarToggleBtn.style.cursor = 'pointer';
+            sidebarToggleBtn.style.padding = '0.0rem 0.0rem';
+            sidebarToggleBtn.style.transition = 'color 0.2s';
+            sidebarToggleBtn.style.transform = 'rotate(90deg)';
+            sidebarToggleBtn.addEventListener('mouseenter', () => {
+                sidebarToggleBtn.style.color = 'var(--accent-primary)';
+            });
+            sidebarToggleBtn.addEventListener('mouseleave', () => {
+                sidebarToggleBtn.style.color = 'var(--text-main)';
+            });
+            header.appendChild(sidebarToggleBtn);
+            sidebarToggleBtn.addEventListener('click', () => {
+                const sidebar = document.getElementById('info-sidebar');
+                sidebar.classList.toggle('open');
+            });
         }
     } else {
         // If help menu exists, add About item
@@ -2356,6 +2382,112 @@ class App {
         
         // Enable split button if exactly one poly file is selected (not a sibling group)
         safeSetDisabled('split-btn', !isPolySelected);
+        
+        // Update sidebar with selected files info
+        this.updateSidebar();
+    }
+
+    updateSidebar() {
+        const sidebarContent = document.getElementById('sidebar-content');
+        if (!sidebarContent) return;
+
+        // Collect all selected files (both parent and children)
+        const selectedFiles = [];
+        
+        // Add parent files
+        for (const index of this.selectedIndices) {
+            const file = this.files[index];
+            if (file) {
+                selectedFiles.push({
+                    file,
+                    isChild: false,
+                    index
+                });
+            }
+        }
+        
+        // Add child files
+        for (const [key, _] of this.selectedChildren) {
+            const [parentIndexStr, siblingOrderStr] = key.split(':');
+            const parentIndex = parseInt(parentIndexStr);
+            const siblingOrder = parseInt(siblingOrderStr);
+            const parent = this.files[parentIndex];
+            
+            if (parent && parent.isGroup && parent.siblingFiles && parent.siblingFiles[siblingOrder]) {
+                selectedFiles.push({
+                    file: parent.siblingFiles[siblingOrder],
+                    isChild: true,
+                    parentIndex,
+                    siblingOrder
+                });
+            }
+        }
+
+        // Clear sidebar if no files selected
+        if (selectedFiles.length === 0) {
+            sidebarContent.innerHTML = '<p class="sidebar-empty">No takes selected</p>';
+            return;
+        }
+
+        // Build sidebar HTML
+        let html = '';
+        selectedFiles.forEach(({ file, isChild, index, parentIndex, siblingOrder }) => {
+            const metadata = file.metadata || {};
+            const filename = file.fileHandle?.name || file.fileObj?.name || 'Unknown';
+            
+            html += `
+                <div class="sidebar-take-item">
+                    <div class="sidebar-take-title">${this.escapeHtml(filename)}</div>
+                    <div class="sidebar-take-details">
+                        ${metadata.scene ? `<div class="sidebar-detail-row">
+                            <span class="sidebar-detail-label">Scene:</span>
+                            <span class="sidebar-detail-value">${this.escapeHtml(metadata.scene)}</span>
+                        </div>` : ''}
+                        ${metadata.take ? `<div class="sidebar-detail-row">
+                            <span class="sidebar-detail-label">Take:</span>
+                            <span class="sidebar-detail-value">${this.escapeHtml(metadata.take)}</span>
+                        </div>` : ''}
+                        ${metadata.channels ? `<div class="sidebar-detail-row">
+                            <span class="sidebar-detail-label">Channels:</span>
+                            <span class="sidebar-detail-value">${metadata.channels}</span>
+                        </div>` : ''}
+                        ${metadata.sampleRate ? `<div class="sidebar-detail-row">
+                            <span class="sidebar-detail-label">Sample Rate:</span>
+                            <span class="sidebar-detail-value">${metadata.sampleRate} Hz</span>
+                        </div>` : ''}
+                        ${metadata.bitDepth ? `<div class="sidebar-detail-row">
+                            <span class="sidebar-detail-label">Bit Depth:</span>
+                            <span class="sidebar-detail-value">${metadata.bitDepth}-bit</span>
+                        </div>` : ''}
+                        ${metadata.duration ? `<div class="sidebar-detail-row">
+                            <span class="sidebar-detail-label">Duration:</span>
+                            <span class="sidebar-detail-value">${metadata.duration}</span>
+                        </div>` : ''}
+                        ${metadata.tcStart ? `<div class="sidebar-detail-row">
+                            <span class="sidebar-detail-label">TC Start:</span>
+                            <span class="sidebar-detail-value">${this.escapeHtml(metadata.tcStart)}</span>
+                        </div>` : ''}
+                        ${metadata.project ? `<div class="sidebar-detail-row">
+                            <span class="sidebar-detail-label">Project:</span>
+                            <span class="sidebar-detail-value">${this.escapeHtml(metadata.project)}</span>
+                        </div>` : ''}
+                        ${metadata.tape ? `<div class="sidebar-detail-row">
+                            <span class="sidebar-detail-label">Tape:</span>
+                            <span class="sidebar-detail-value">${this.escapeHtml(metadata.tape)}</span>
+                        </div>` : ''}
+                    </div>
+                </div>
+            `;
+        });
+        
+        sidebarContent.innerHTML = html;
+    }
+
+    escapeHtml(text) {
+        if (!text) return '';
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
     }
 
     updateSaveButtonState() {
