@@ -132,6 +132,9 @@ class App {
         // Initialize mixer with 8 default channels
         this.mixer.buildUI(8);
 
+        // Reset fader heights to default after initial mixer setup
+        this.resetFaderHeights();
+
         // Initialize UI button states
         this.updateSelectionUI();
 
@@ -2204,13 +2207,30 @@ class App {
                 // Clear waveform with informative message
                 const canvas = document.getElementById('waveform-canvas');
                 const ctx = canvas.getContext('2d');
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                
+                // Ensure canvas has proper dimensions from its container
+                const container = canvas.parentElement;
+                const containerWidth = container.offsetWidth || container.clientWidth;
+                const containerHeight = container.offsetHeight || container.clientHeight;
+                
+                // Set canvas dimensions to match container (prevent scaling/blur)
+                if (containerWidth > 0 && containerHeight > 0) {
+                    canvas.width = containerWidth;
+                    canvas.height = containerHeight;
+                } else {
+                    // Fallback if container isn't sized yet
+                    canvas.width = 800;
+                    canvas.height = 200;
+                }
+                
+                // Clear and draw message
+                ctx.fillStyle = '#121212';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
                 ctx.fillStyle = '#ffcf44';
                 ctx.font = '16px Inter';
-                ctx.fillText(`Waveform unavailable for files larger than 2GB`, 20, 30);
-                ctx.fillStyle = '#888';
-                ctx.font = '14px Inter';
-                ctx.fillText('You can still play and view metadata for this file', 20, 55);
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('Waveform and metadata editing unavailable for files > 2GB (browser limitation). You can still view metadata.', canvas.width / 2, canvas.height / 2);
 
                 this.currentlyLoadedFileIndex = index;
                 // Update TC counter display to new take's TC Start
@@ -3571,6 +3591,9 @@ class App {
 
             // Build mixer UI for this file (reuses existing mixer container)
             this.mixer.buildUI(trackCount, trackNames);
+
+            // Reset fader heights to default after mixer rebuild
+            this.resetFaderHeights();
 
             // Render Waveform (initial)
             this.audioEngine.renderWaveform(canvas, buffer, this.mixer.channels, this.cueMarkers, this.selectedCueMarkerId);
@@ -7967,6 +7990,27 @@ class App {
         return newBuffer.buffer;
     }
 
+    resetFaderHeights(height = 100) {
+        const mixerContainer = document.getElementById('mixer-container');
+        if (!mixerContainer) return;
+
+        const faderContainers = mixerContainer.querySelectorAll('.fader-container');
+        const meterScales = mixerContainer.querySelectorAll('.meter-scale');
+        const masterMeterCanvases = mixerContainer.querySelectorAll('.master-meter-left, .master-meter-right');
+
+        faderContainers.forEach(el => {
+            el.style.setProperty('height', `${height}px`, 'important');
+        });
+
+        meterScales.forEach(el => {
+            el.style.setProperty('height', `${height}px`, 'important');
+        });
+
+        masterMeterCanvases.forEach(el => {
+            el.style.setProperty('height', `${height}px`, 'important');
+        });
+    }
+
     initFaderResizeDivider() {
         const divider = document.getElementById('fader-resize-divider');
         const mixerContainer = document.getElementById('mixer-container');
@@ -7993,22 +8037,8 @@ class App {
             // Clamp between 100px and 300px
             newHeight = Math.max(100, Math.min(300, newHeight));
 
-            // Update all fader containers, meter scales, and master meters
-            const faderContainers = mixerContainer.querySelectorAll('.fader-container');
-            const meterScales = mixerContainer.querySelectorAll('.meter-scale');
-            const masterMeterCanvases = mixerContainer.querySelectorAll('.master-meter-left, .master-meter-right');
-
-            faderContainers.forEach(el => {
-                el.style.height = `${newHeight}px`;
-            });
-
-            meterScales.forEach(el => {
-                el.style.height = `${newHeight}px`;
-            });
-
-            masterMeterCanvases.forEach(el => {
-                el.style.height = `${newHeight}px`;
-            });
+            // Update all fader heights
+            this.resetFaderHeights(newHeight);
         });
 
         document.addEventListener('mouseup', () => {
