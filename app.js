@@ -201,7 +201,7 @@ class App {
         document.getElementById('confirm-normalize-btn').addEventListener('click', () => this.applyNormalize());
 
         const normalizeModal = document.getElementById('normalize-modal');
-        normalizeModal.querySelector('.close-modal').addEventListener('click', () => this.closeNormalizeModal());
+        normalizeModal.querySelector('.modal-close').addEventListener('click', () => this.closeNormalizeModal());
         normalizeModal.addEventListener('click', (e) => {
             if (e.target.id === 'normalize-modal') {
                 this.closeNormalizeModal();
@@ -214,7 +214,7 @@ class App {
         document.getElementById('confirm-rename-btn').addEventListener('click', () => this.applyRename());
 
         const renameModal = document.getElementById('rename-modal');
-        renameModal.querySelector('.close-modal').addEventListener('click', () => this.closeRenameModal());
+        renameModal.querySelector('.modal-close').addEventListener('click', () => this.closeRenameModal());
         renameModal.addEventListener('click', (e) => {
             if (e.target.id === 'rename-modal') {
                 this.closeRenameModal();
@@ -227,7 +227,7 @@ class App {
         document.getElementById('confirm-export-btn').addEventListener('click', () => this.handleExport());
 
         const exportModal = document.getElementById('export-modal');
-        exportModal.querySelector('.close-modal').addEventListener('click', () => this.closeExportModal());
+        exportModal.querySelector('.modal-close').addEventListener('click', () => this.closeExportModal());
         exportModal.addEventListener('click', (e) => {
             if (e.target.id === 'export-modal') {
                 this.closeExportModal();
@@ -246,7 +246,7 @@ class App {
         document.getElementById('confirm-export-tc-range-btn').addEventListener('click', () => this.handleExportTCRange());
 
         const exportTCRangeModal = document.getElementById('export-tc-range-modal');
-        exportTCRangeModal.querySelector('.close-modal').addEventListener('click', () => this.closeExportTCRangeModal());
+        exportTCRangeModal.querySelector('.modal-close').addEventListener('click', () => this.closeExportTCRangeModal());
         exportTCRangeModal.addEventListener('click', (e) => {
             if (e.target.id === 'export-tc-range-modal') {
                 this.closeExportTCRangeModal();
@@ -266,7 +266,7 @@ class App {
         document.getElementById('choose-csv-btn').addEventListener('click', () => this.handleChooseCSV());
 
         const conformCSVModal = document.getElementById('conform-csv-modal');
-        conformCSVModal.querySelector('.close-modal').addEventListener('click', () => this.closeConformCSVModal());
+        conformCSVModal.querySelector('.modal-close').addEventListener('click', () => this.closeConformCSVModal());
         conformCSVModal.addEventListener('click', (e) => {
             if (e.target.id === 'conform-csv-modal') {
                 this.closeConformCSVModal();
@@ -281,7 +281,7 @@ class App {
         document.getElementById('mp-destination-btn').addEventListener('click', () => this.handleMPChooseDestination());
 
         const multiProcessModal = document.getElementById('multi-process-modal');
-        multiProcessModal.querySelector('.close-modal').addEventListener('click', () => this.closeMultiProcessModal());
+        multiProcessModal.querySelector('.modal-close').addEventListener('click', () => this.closeMultiProcessModal());
         multiProcessModal.addEventListener('click', (e) => {
             if (e.target.id === 'multi-process-modal') {
                 this.closeMultiProcessModal();
