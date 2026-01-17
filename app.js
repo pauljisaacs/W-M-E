@@ -304,6 +304,9 @@ class App {
         document.getElementById('save-mix-btn').addEventListener('click', () => this.saveMixerSettingsToFile());
         document.getElementById('load-mix-btn').addEventListener('click', () => this.loadMixerSettingsFromFile());
 
+        // Fader resize divider
+        this.initFaderResizeDivider();
+
         // Cue Marker Modal controls
         document.getElementById('cue-close-btn').addEventListener('click', () => this.closeCueMarkerModal());
         document.getElementById('cue-cancel-btn').addEventListener('click', () => this.closeCueMarkerModal());
@@ -7831,6 +7834,58 @@ class App {
 
         return newBuffer.buffer;
     }
+
+    initFaderResizeDivider() {
+        const divider = document.getElementById('fader-resize-divider');
+        const mixerContainer = document.getElementById('mixer-container');
+        if (!divider || !mixerContainer) return;
+
+        let isResizing = false;
+        let startY = 0;
+        let startHeight = 100;
+
+        divider.addEventListener('mousedown', (e) => {
+            isResizing = true;
+            startY = e.clientY;
+            startHeight = parseInt(getComputedStyle(mixerContainer.querySelector('.fader-container')).height) || 160;
+            document.body.style.cursor = 'ns-resize';
+            e.preventDefault();
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!isResizing) return;
+
+            const deltaY = e.clientY - startY;
+            let newHeight = startHeight - deltaY;
+
+            // Clamp between 100px and 300px
+            newHeight = Math.max(100, Math.min(300, newHeight));
+
+            // Update all fader containers, meter scales, and master meters
+            const faderContainers = mixerContainer.querySelectorAll('.fader-container');
+            const meterScales = mixerContainer.querySelectorAll('.meter-scale');
+            const masterMeterCanvases = mixerContainer.querySelectorAll('.master-meter-left, .master-meter-right');
+
+            faderContainers.forEach(el => {
+                el.style.height = `${newHeight}px`;
+            });
+
+            meterScales.forEach(el => {
+                el.style.height = `${newHeight}px`;
+            });
+
+            masterMeterCanvases.forEach(el => {
+                el.style.height = `${newHeight}px`;
+            });
+        });
+
+        document.addEventListener('mouseup', () => {
+            if (isResizing) {
+                isResizing = false;
+                document.body.style.cursor = 'auto';
+            }
+        });
+    }
 }
 
 // Wait for DOM to load before initializing app
@@ -7866,6 +7921,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         };
     }
+
     const exitBtn = document.getElementById('exit-report-btn');
     if (exitBtn) {
         exitBtn.onclick = () => {
@@ -7876,14 +7932,15 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         };
     }
-    // Optional: close on outside click
-    const soundReportModal = document.getElementById('sound-report-modal');
-    if (soundReportModal) {
-        soundReportModal.addEventListener('click', (e) => {
-            if (e.target === soundReportModal) {
-                soundReportModal.style.display = 'none';
-                soundReportModal.classList.remove('active');
-            }
-        });
-    }
 });
+
+// Optional: close on outside click
+const soundReportModal = document.getElementById('sound-report-modal');
+if (soundReportModal) {
+    soundReportModal.addEventListener('click', (e) => {
+        if (e.target === soundReportModal) {
+            soundReportModal.style.display = 'none';
+            soundReportModal.classList.remove('active');
+        }
+    });
+}

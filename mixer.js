@@ -16,6 +16,42 @@ export class Mixer {
         this.sessionStartTime = 0; // Shared start time for all automation in a recording session
         this.automationRecorders = [];
         this.automationPlayers = [];
+
+        // dB curve mapping points: [slider, dB]
+        this.dBCurve = [
+            [1.00, 10],
+            [0.75, 0],
+            [0.50, -10],
+            [0.40, -20],
+            [0.30, -30],
+            [0.20, -40],
+            [0.10, -55],
+            [0.05, -70],
+            [0.02, -80],
+            [0.00, -Infinity]
+        ];
+    }
+
+    sliderToDb(slider) {
+        if (slider <= 0) return -Infinity;
+        for (let j = 1; j < this.dBCurve.length; ++j) {
+            if (slider >= this.dBCurve[j][0]) {
+                const [x1, y1] = this.dBCurve[j-1];
+                const [x2, y2] = this.dBCurve[j];
+                // Linear interpolation in slider domain
+                return y1 + (y2 - y1) * (slider - x1) / (x2 - x1);
+            }
+        }
+        return this.dBCurve[this.dBCurve.length-1][1];
+    }
+
+    dbToGain(db) {
+        if (!isFinite(db)) return 0;
+        return Math.pow(10, db / 20);
+    }
+
+    sliderToGain(slider) {
+        return this.dbToGain(this.sliderToDb(slider));
     }
 
     async init(containerId) {
@@ -103,6 +139,57 @@ export class Mixer {
                 this.isTouchingFader[idx] = true;
             } else if (input.classList.contains('pan-knob')) {
                 this.isTouchingPan[idx] = true;
+            }
+        });
+        
+        // Double-click volume fader to set to 0.0 dB
+        this.container.addEventListener('dblclick', (e) => {
+            const input = e.target;
+            
+            if (input.classList.contains('volume-fader')) {
+                const idx = parseInt(input.dataset.idx);
+                if (isNaN(idx)) return;
+                
+                input.value = 0.75; // 0.75 slider value = 0.0 dB
+                this.setVolume(idx, 0.75);
+                
+                // Update gain box display
+                const gainBox = this.container.querySelector(`.channel-gain-box[data-idx="${idx}"]`);
+                if (gainBox) {
+                    gainBox.textContent = '0.0 dB';
+                }
+                
+                // Trigger automation recording if armed
+                if (this.automationRecorders[idx] && this.automationRecorders[idx].isArmed && this.isRecording) {
+                    if (!this.automationRecorders[idx].isRecording) {
+                        this.automationRecorders[idx].start(this.sessionStartTime);
+                    }
+                    this.automationRecorders[idx].recordPoint(this.currentTime, 0.75);
+                }
+                return;
+            }
+            
+            // Double-click master fader to set to 0.0 dB
+            if (input.classList.contains('master-fader')) {
+                input.value = 0.75; // 0.75 slider value = 0.0 dB
+                this.setMasterVolume(0.75);
+                return;
+            }
+            
+            if (input.classList.contains('pan-knob')) {
+                const idx = parseInt(input.dataset.idx);
+                if (isNaN(idx)) return;
+                
+                input.value = 0;
+                this.setPan(idx, 0);
+                
+                // Trigger automation recording if armed
+                if (this.panAutomationRecorders[idx] && this.panAutomationRecorders[idx].isArmed && this.isRecording) {
+                    if (!this.panAutomationRecorders[idx].isRecording) {
+                        this.panAutomationRecorders[idx].start(this.sessionStartTime);
+                    }
+                    this.panAutomationRecorders[idx].recordPoint(this.currentTime, 0);
+                }
             }
         });
         
@@ -215,8 +302,16 @@ export class Mixer {
         
         // Prevent master fader from stealing focus
         const masterFader = masterStrip.querySelector('.master-fader');
+        
+        // Double-click master fader to reset to 0 dB
+        masterFader.addEventListener('dblclick', (e) => {
+            e.stopPropagation();
+            masterFader.value = 0.75;
+            this.setMasterVolume(0.75);
+        });
+        
         masterFader.addEventListener('mousedown', (e) => {
-            e.preventDefault();
+            // Don't preventDefault - we need to allow dblclick events to register
             // Still allow the fader to work, just don't take focus
             const updateValue = (event) => {
                 const rect = masterFader.getBoundingClientRect();
@@ -240,6 +335,68 @@ export class Mixer {
             document.addEventListener('mousemove', onMouseMove);
             document.addEventListener('mouseup', onMouseUp);
         });
+
+        // Click master dB label to edit via typing
+        const masterDbLabel = masterStrip.querySelector('.master-db-label');
+        if (masterDbLabel) {
+            masterDbLabel.addEventListener('click', () => {
+                const currentDb = this.sliderToDb(parseFloat(masterFader.value));
+                const currentValue = isFinite(currentDb) ? currentDb.toFixed(1) : '-∞';
+                
+                const input = document.createElement('input');
+                input.type = 'text';
+                input.value = currentValue;
+                input.style.width = '100%';
+                input.style.textAlign = 'center';
+                input.style.padding = '2px';
+                input.style.fontSize = '0.7rem';
+                input.style.border = '1px solid var(--accent-primary)';
+                input.style.background = 'var(--bg-panel)';
+                input.style.color = 'var(--text-main)';
+                
+                masterDbLabel.textContent = '';
+                masterDbLabel.appendChild(input);
+                input.focus();
+                input.select();
+                
+                const finishEdit = () => {
+                    const dbValue = parseFloat(input.value);
+                    if (!isNaN(dbValue)) {
+                        // Find slider value that corresponds to this dB
+                        let sliderVal = 0.75; // default
+                        
+                        // Use inverse interpolation to find slider value
+                        for (let j = 1; j < this.dBCurve.length; ++j) {
+                            const [x1, y1] = this.dBCurve[j-1];
+                            const [x2, y2] = this.dBCurve[j];
+                            if (dbValue >= y2 && dbValue <= y1) {
+                                // Interpolate slider value
+                                sliderVal = x1 + (x2 - x1) * (dbValue - y1) / (y2 - y1);
+                                break;
+                            }
+                        }
+                        
+                        sliderVal = Math.max(0, Math.min(1, sliderVal));
+                        masterFader.value = sliderVal;
+                        this.setMasterVolume(sliderVal);
+                    } else {
+                        const db = this.sliderToDb(parseFloat(masterFader.value));
+                        masterDbLabel.textContent = isFinite(db) ? `${db.toFixed(1)} dB` : '-∞ dB';
+                    }
+                };
+                
+                input.addEventListener('blur', finishEdit);
+                input.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        finishEdit();
+                    } else if (e.key === 'Escape') {
+                        const db = this.sliderToDb(parseFloat(masterFader.value));
+                        masterDbLabel.textContent = isFinite(db) ? `${db.toFixed(1)} dB` : '-∞ dB';
+                    }
+                });
+            });
+        }
 
         // Create channels
         for (let i = 0; i < trackCount; i++) {
@@ -278,7 +435,10 @@ export class Mixer {
                     <input type="range" orient="vertical" min="0" max="1" step="0.001" value="0.75" data-idx="${i}" class="volume-fader">
                 </div>
                 <div class="channel-gain-box" data-idx="${i}">0.0 dB</div>
-                <input type="range" min="-1" max="1" step="0.1" value="${i % 2 === 0 ? -1 : 1}" data-idx="${i}" class="pan-knob" title="Pan">
+                <div class="pan-container">
+                    <div class="pan-value-box" data-idx="${i}">${i % 2 === 0 ? 'L50' : 'R50'}</div>
+                    <input type="range" min="-1" max="1" step="0.1" value="${i % 2 === 0 ? -1 : 1}" data-idx="${i}" class="pan-knob" title="Pan">
+                </div>
             `;
 
             this.container.appendChild(strip);
@@ -300,31 +460,12 @@ export class Mixer {
                 [0.02, -80],
                 [0.00, -Infinity]
             ];
-            function sliderToDb(slider) {
-                if (slider <= 0) return -Infinity;
-                for (let j = 1; j < dBCurve.length; ++j) {
-                    if (slider >= dBCurve[j][0]) {
-                        const [x1, y1] = dBCurve[j-1];
-                        const [x2, y2] = dBCurve[j];
-                        // Linear interpolation in slider domain
-                        return y1 + (y2 - y1) * (slider - x1) / (x2 - x1);
-                    }
-                }
-                return dBCurve[dBCurve.length-1][1];
-            }
-            function dbToGain(db) {
-                if (!isFinite(db)) return 0;
-                return Math.pow(10, db / 20);
-            }
-            function sliderToGain(slider) {
-                return dbToGain(sliderToDb(slider));
-            }
             // Update gain box and gain node
             const updateGainBoxAndNode = (sliderVal) => {
-                const db = sliderToDb(sliderVal);
+                const db = this.sliderToDb(sliderVal);
                 gainBox.textContent = isFinite(db) ? `${db.toFixed(1)} dB` : '-∞ dB';
                 if (this.channels[i] && this.channels[i].gainNode) {
-                    this.channels[i].gainNode.gain.value = sliderToGain(sliderVal);
+                    this.channels[i].gainNode.gain.value = this.sliderToGain(sliderVal);
                 }
             };
             fader.addEventListener('input', (e) => {
@@ -332,6 +473,63 @@ export class Mixer {
             });
             // Initialize gain box and node
             updateGainBoxAndNode(parseFloat(fader.value));
+            
+            // Click gain box to edit via typing
+            gainBox.addEventListener('click', () => {
+                const currentDb = this.sliderToDb(parseFloat(fader.value));
+                const currentValue = isFinite(currentDb) ? currentDb.toFixed(1) : '-∞';
+                
+                const input = document.createElement('input');
+                input.type = 'text';
+                input.value = currentValue;
+                input.style.width = '100%';
+                input.style.textAlign = 'center';
+                input.style.padding = '2px';
+                input.style.fontSize = '0.7rem';
+                input.style.border = '1px solid var(--accent-primary)';
+                input.style.background = 'var(--bg-panel)';
+                input.style.color = 'var(--text-main)';
+                
+                gainBox.textContent = '';
+                gainBox.appendChild(input);
+                input.focus();
+                input.select();
+                
+                const finishEdit = () => {
+                    const dbValue = parseFloat(input.value);
+                    if (!isNaN(dbValue)) {
+                        // Find slider value that corresponds to this dB
+                        let sliderVal = 0.75; // default
+                        
+                        // Use inverse interpolation to find slider value
+                        for (let j = 1; j < this.dBCurve.length; ++j) {
+                            const [x1, y1] = this.dBCurve[j-1];
+                            const [x2, y2] = this.dBCurve[j];
+                            if (dbValue >= y2 && dbValue <= y1) {
+                                // Interpolate slider value
+                                sliderVal = x1 + (x2 - x1) * (dbValue - y1) / (y2 - y1);
+                                break;
+                            }
+                        }
+                        
+                        sliderVal = Math.max(0, Math.min(1, sliderVal));
+                        fader.value = sliderVal;
+                        updateGainBoxAndNode(sliderVal);
+                    } else {
+                        updateGainBoxAndNode(parseFloat(fader.value));
+                    }
+                };
+                
+                input.addEventListener('blur', finishEdit);
+                input.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        finishEdit();
+                    } else if (e.key === 'Escape') {
+                        updateGainBoxAndNode(parseFloat(fader.value));
+                    }
+                });
+            });
             const nameDiv = strip.querySelector('.channel-name');
             nameDiv.addEventListener('blur', (e) => {
                 if (this.onTrackNameChange) {
@@ -816,41 +1014,14 @@ export class Mixer {
     setMasterVolume(val) {
         // Use the same dB curve as the channel faders
         this.masterFaderLevel = val;
-        const dBCurve = [
-            [1.00, 0],
-            [0.75, -3],
-            [0.50, -10],
-            [0.40, -20],
-            [0.30, -30],
-            [0.20, -40],
-            [0.10, -55],
-            [0.05, -70],
-            [0.02, -80],
-            [0.00, -Infinity]
-        ];
-        function sliderToDb(slider) {
-            if (slider <= 0) return -Infinity;
-            for (let j = 1; j < dBCurve.length; ++j) {
-                if (slider >= dBCurve[j][0]) {
-                    const [x1, y1] = dBCurve[j-1];
-                    const [x2, y2] = dBCurve[j];
-                    return y1 + (y2 - y1) * (slider - x1) / (x2 - x1);
-                }
-            }
-            return dBCurve[dBCurve.length-1][1];
-        }
-        function dbToGain(db) {
-            if (!isFinite(db)) return 0;
-            return Math.pow(10, db / 20);
-        }
-        const gainVal = dbToGain(sliderToDb(val));
+        const gainVal = this.dbToGain(this.sliderToDb(val));
         if (this.masterGain && this.audioCtx && !this.masterMuted) {
             this.masterGain.gain.setTargetAtTime(gainVal, this.audioCtx.currentTime, 0.005);
         }
         // Update dB label
         const dbLabel = this.container.querySelector('.master-db-label');
         if (dbLabel) {
-            const db = sliderToDb(val);
+            const db = this.sliderToDb(val);
             dbLabel.textContent = isFinite(db) ? `${db.toFixed(1)} dB` : '-∞ dB';
         }
     }
@@ -859,6 +1030,25 @@ export class Mixer {
         const ch = this.channels[idx];
         if (ch.panNode) {
             ch.panNode.pan.value = val;
+        }
+        
+        // Update pan display value
+        const panValueBox = this.container.querySelector(`.pan-value-box[data-idx="${idx}"]`);
+        if (panValueBox) {
+            const displayVal = this.formatPanValue(val);
+            panValueBox.textContent = displayVal;
+        }
+    }
+    
+    formatPanValue(val) {
+        // val ranges from -1 (left) to 1 (right)
+        const absVal = Math.abs(val);
+        if (absVal < 0.05) {
+            return 'C'; // Center
+        } else if (val < 0) {
+            return `L${Math.round(Math.abs(val) * 100)}`; // Left percentage
+        } else {
+            return `R${Math.round(val * 100)}`; // Right percentage
         }
     }
 
