@@ -243,7 +243,10 @@
         <div id="diagnostics-modal" class="modal">
             <div class="modal-content">
                 <div class="modal-header">
-                    <h2>Diagnostics</h2>
+                    <div>
+                        <h2>Diagnostics</h2>
+                        <p id="diagnostics-filename-indicator" style="font-size: 0.85rem; color: var(--text-secondary); margin: 0.5rem 0 0 0; font-weight: normal;">No file selected</p>
+                    </div>
                     <button class="modal-close" id="diagnostics-close-btn">&times;</button>
                 </div>
                 <div class="modal-body">
@@ -1032,7 +1035,7 @@
                 <span style="margin-left:0.5em;">Export format</span>
             </div>
             <button id="create-report-btn" class="btn primary">Create Report</button>
-            <button id="exit-report-btn" class="btn secondary">Exit</button>
+            <button id="exit-report-btn" class="btn secondary">Close</button>
         </div>
     </div>
 </div>

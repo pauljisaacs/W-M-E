@@ -2152,6 +2152,10 @@ class App {
         // Clear region selection when switching takes
         this.clearRegion();
 
+        // Refresh diagnostics modal if it's open and selection changed
+        if (document.getElementById('diagnostics-modal').classList.contains('active')) {
+            this.refreshDiagnosticsDisplay();
+        }
 
         // Load Audio for the clicked file (if selected and not already loaded)
         if (this.selectedIndices.has(index) && this.currentlyLoadedFileIndex !== index) {
@@ -2885,6 +2889,8 @@ class App {
         // Default to iXML tab and populate it
         this.switchToIXMLTab();
         this.viewIXML();
+        // Update filename indicator for currently selected file
+        this.updateDiagnosticsFilenameIndicator();
         document.getElementById('diagnostics-modal').classList.add('active');
     }
 
@@ -2915,6 +2921,31 @@ class App {
         }
         
         return null;
+    }
+
+    refreshDiagnosticsDisplay() {
+        // Update filename indicator
+        this.updateDiagnosticsFilenameIndicator();
+        
+        // Check which tab is currently active and refresh that tab's content
+        if (document.getElementById('ixml-tab-btn').classList.contains('active')) {
+            this.viewIXML();
+        } else if (document.getElementById('bext-tab-btn').classList.contains('active')) {
+            this.viewBEXT();
+        }
+    }
+
+    updateDiagnosticsFilenameIndicator() {
+        const item = this.getSelectedFileForDiagnostics();
+        const indicator = document.getElementById('diagnostics-filename-indicator');
+        
+        if (!indicator) return; // Modal might not be in DOM
+        
+        if (item && item.metadata) {
+            indicator.textContent = `Viewing: ${item.metadata.filename}`;
+        } else {
+            indicator.textContent = 'No file selected';
+        }
     }
 
     closeDiagnosticsModal() {
