@@ -802,6 +802,18 @@ td:nth-child(15) {
     background-color: #3d3d3d;
 }
 
+.btn-icon:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    color: var(--text-muted);
+    transform: none !important;
+}
+
+.btn-icon:disabled:hover {
+    background-color: transparent;
+    transform: none !important;
+}
+
 #loop-btn {
     font-size: 1.6rem;
     line-height: 1;

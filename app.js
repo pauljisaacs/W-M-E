@@ -108,6 +108,7 @@ class App {
         this.selectedChildren = new Map(); // Track selected child files: "parentIndex:siblingOrder" -> true
         this.lastSelectedIndex = -1; // For shift-click range selection
         this.currentlyLoadedFileIndex = -1; // Track which file is currently loaded
+        this.isLoadingAudio = false; // Track if audio is currently loading
         this.columnOrder = [3, 12, 11, 0, 1, 2, 4, 5, 6, 7, 8, 13, 9, 10, 14]; // Default order: Filename, Project, Tape, Channels, BitDepth, SampleRate, Format, Scene, Take, Duration, TC Start, End TC, FPS, FileSize, Notes
         this.sortColumn = null;
         this.sortDirection = 'asc';
@@ -540,8 +541,8 @@ class App {
                 }
             }
 
-            // Spacebar for play/pause (only if not typing in an editable field)
-            if (e.code === 'Space' && !this.isEditingText(e.target)) {
+            // Spacebar for play/pause (only if not typing in an editable field and not loading)
+            if (e.code === 'Space' && !this.isEditingText(e.target) && !this.isLoadingAudio) {
                 e.preventDefault();
                 this.togglePlay();
             }
@@ -2191,12 +2192,40 @@ class App {
 
         // Load Audio for the clicked file (if selected and not already loaded)
         if (this.selectedIndices.has(index) && this.currentlyLoadedFileIndex !== index) {
+            // Stop playback if currently playing
+            if (this.audioEngine.isPlaying) {
+                this.audioEngine.stop();
+            }
+            
+            // Reset playback position to start
+            this.audioEngine.seek(0);
+            
+            // Reset playhead visual cursor to start of waveform
+            const playhead = document.getElementById('playhead');
+            if (playhead) {
+                playhead.style.left = '0%';
+            }
+
             const item = this.files[index];
             const fileSizeGB = item.file.size / (1024 * 1024 * 1024);
 
             // Skip audio loading for files > 2GB (browser memory limit)
             if (item.file.size > 2 * 1024 * 1024 * 1024) {
                 console.warn(`File ${item.metadata.filename} is ${fileSizeGB.toFixed(2)} GB - skipping audio loading (Metadata Only mode)`);
+
+                // Clear the audio buffer so playback doesn't use old file's audio
+                this.audioEngine.buffer = null;
+
+                // Hide playback controls (not applicable for >2GB files)
+                const playBtn = document.getElementById('play-btn');
+                const stopBtn = document.getElementById('stop-btn');
+                const loopBtn = document.getElementById('loop-btn');
+                const timeDisplays = document.querySelectorAll('.time-display');
+                
+                if (playBtn) playBtn.style.display = 'none';
+                if (stopBtn) stopBtn.style.display = 'none';
+                if (loopBtn) loopBtn.style.display = 'none';
+                timeDisplays.forEach(el => el.style.display = 'none');
 
                 // Update UI to show metadata-only mode
                 const playerFilename = document.getElementById('player-filename');
@@ -2453,7 +2482,7 @@ class App {
         let html = '';
         selectedFiles.forEach(({ file, isChild, index, parentIndex, siblingOrder }) => {
             const metadata = file.metadata || {};
-            const filename = file.fileHandle?.name || file.fileObj?.name || 'Unknown';
+            const filename = metadata.filename || file.fileHandle?.name || file.fileObj?.name || 'Unknown';
             
             html += `
                 <div class="sidebar-take-item">
@@ -3343,6 +3372,11 @@ class App {
         const totalSize = targetFiles.reduce((acc, f) => acc + f.file.size, 0);
         const totalSizeMB = (totalSize / (1024 * 1024)).toFixed(1);
 
+        // Mark as loading and disable play button
+        this.isLoadingAudio = true;
+        const playBtn = document.getElementById('play-btn');
+        playBtn.disabled = true;
+
         const loadingOverlay = document.getElementById('loading-overlay');
         const progressFill = document.getElementById('progress-fill');
         const progressText = document.getElementById('progress-text');
@@ -3516,6 +3550,17 @@ class App {
             this.audioEngine.setupRouting(); // Initialize routing graph
             console.log('Mixer connected successfully');
 
+            // Show playback controls (hidden for >2GB files)
+            const playBtn = document.getElementById('play-btn');
+            const stopBtn = document.getElementById('stop-btn');
+            const loopBtn = document.getElementById('loop-btn');
+            const timeDisplays = document.querySelectorAll('.time-display');
+            
+            if (playBtn) playBtn.style.display = 'flex';
+            if (stopBtn) stopBtn.style.display = 'flex';
+            if (loopBtn) loopBtn.style.display = 'flex';
+            timeDisplays.forEach(el => el.style.display = 'flex');
+
             // Update Time Display
             document.getElementById('total-time').textContent = item.metadata.duration || '00:00:00';
 
@@ -3528,8 +3573,19 @@ class App {
                 playerFilename.textContent = item.metadata.filename;
             }
 
+            // Mark loading complete and re-enable play button
+            this.isLoadingAudio = false;
+            playBtn.disabled = false;
+            
+            // Reset play button to show play icon (in case previous file was playing)
+            playBtn.textContent = '▶';
+
         } catch (err) {
             console.error('Error loading audio:', err);
+
+            // Mark loading complete and re-enable play button even if loading fails
+            this.isLoadingAudio = false;
+            playBtn.disabled = false;
 
             // Handle large file errors gracefully
             const playerFilename = document.getElementById('player-filename');
@@ -5980,6 +6036,17 @@ class App {
             tbody.innerHTML = '';
             this.files.forEach((file, i) => this.addTableRow(i, file.metadata));
             this.updateSelectionUI();
+
+            // Update player filename display if currently loaded file was renamed
+            if (this.currentlyLoadedFileIndex !== null && indices.includes(this.currentlyLoadedFileIndex)) {
+                const playerFilename = document.getElementById('player-filename');
+                if (playerFilename) {
+                    const loadedFile = this.files[this.currentlyLoadedFileIndex];
+                    if (loadedFile && loadedFile.metadata) {
+                        playerFilename.textContent = loadedFile.metadata.filename;
+                    }
+                }
+            }
 
             if (failedCount > 0) {
                 alert(`Renamed ${renamedCount} files. Failed to rename ${failedCount} files (Browser may not support renaming local files directly).`);
