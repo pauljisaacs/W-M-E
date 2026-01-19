@@ -2483,6 +2483,7 @@ class App {
         selectedFiles.forEach(({ file, isChild, index, parentIndex, siblingOrder }) => {
             const metadata = file.metadata || {};
             const filename = metadata.filename || file.fileHandle?.name || file.fileObj?.name || 'Unknown';
+            const uniqueId = `${index}-${siblingOrder || 0}`;
             
             html += `
                 <div class="sidebar-take-item">
@@ -2524,12 +2525,32 @@ class App {
                             <span class="sidebar-detail-label">Tape:</span>
                             <span class="sidebar-detail-value">${this.escapeHtml(metadata.tape)}</span>
                         </div>` : ''}
+                        ${metadata.trackNames ? `<div class="sidebar-detail-row">
+                            <div style="display: flex; align-items: flex-start; gap: 0.5rem;">
+                                <span class="sidebar-detail-label">Track Names:</span>
+                                <button class="track-names-toggle" data-track-id="${uniqueId}" style="background: none; border: none; cursor: pointer; color: var(--text-secondary); font-size: 0.8em; padding: 0; line-height: 1; transform: rotate(-90deg); transition: transform 0.2s; margin-top: 0.15rem;">▼</button>
+                            </div>
+                            <span class="sidebar-detail-value track-names-content" id="track-names-${uniqueId}" style="display: none;">${Array.isArray(metadata.trackNames) ? metadata.trackNames.map(name => this.escapeHtml(name)).join('<br/>') : this.escapeHtml(metadata.trackNames)}</span>
+                        </div>` : ''}
                     </div>
                 </div>
             `;
         });
         
         sidebarContent.innerHTML = html;
+        
+        // Attach click handlers for track names toggle buttons
+        sidebarContent.querySelectorAll('.track-names-toggle').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const trackId = btn.dataset.trackId;
+                const content = document.getElementById(`track-names-${trackId}`);
+                const isHidden = content.style.display === 'none';
+                content.style.display = isHidden ? '' : 'none';
+                btn.style.transform = isHidden ? 'rotate(0deg)' : 'rotate(-90deg)';
+            });
+        });
     }
 
     escapeHtml(text) {
@@ -2565,7 +2586,7 @@ class App {
         document.getElementById('batch-scene').value = '';
         document.getElementById('batch-take').value = '';
         document.getElementById('batch-project').value = '';
-        document.getElementById('batch-tape').value = '';
+        document.getElementById('batch-track-names').value = '';
         document.getElementById('batch-notes').value = '';
 
         modal.classList.add('active');

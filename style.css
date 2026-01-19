@@ -144,6 +144,19 @@
     color: var(--text-main);
     text-align: right;
 }
+
+.track-names-toggle {
+    transition: transform 0.2s ease-in-out;
+}
+
+.track-names-content {
+    display: block;
+    margin-top: 0.3rem;
+    padding-left: 1rem;
+    font-size: 0.8rem;
+    line-height: 1.4;
+    color: var(--text-main);
+}
 /* Channel Gain Box */
 .channel-gain-box {
     margin: 0.25rem 0 0.1rem 0;
