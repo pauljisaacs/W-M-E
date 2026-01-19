@@ -3153,7 +3153,7 @@ class App {
             
             // First try to use cached bEXT data from metadata
             if (item.metadata && item.metadata.bextRaw) {
-                const bextData = this.formatBEXTDisplay(item.metadata.bextRaw);
+                const bextData = this.metadataHandler.formatBEXTDisplay(item.metadata.bextRaw);
                 content.textContent = bextData || 'No bEXT data found in this file.';
                 return;
             }
@@ -3172,7 +3172,7 @@ class App {
                 const arrayBuffer = await slice.arrayBuffer();
                 
                 // Parse from this tail section
-                const bextData = this.extractBEXT(arrayBuffer, true);
+                const bextData = this.metadataHandler.getBEXTChunk(arrayBuffer, true);
                 
                 if (bextData) {
                     content.textContent = bextData;
@@ -3192,7 +3192,7 @@ class App {
                 }
 
                 const arrayBuffer = await item.file.arrayBuffer();
-                const bextData = this.extractBEXT(arrayBuffer);
+                const bextData = this.metadataHandler.getBEXTChunk(arrayBuffer);
 
                 if (bextData) {
                     content.textContent = bextData;
@@ -3206,100 +3206,6 @@ class App {
             console.error('Error reading bEXT:', err);
             const content = document.getElementById('bext-content');
             content.textContent = `Error reading bEXT: ${err.message}\n\nThis may occur on very large files or due to file access restrictions.`;
-        }
-    }
-
-    extractBEXT(arrayBuffer, isTailOnly = false) {
-        const view = new DataView(arrayBuffer);
-        let offset = isTailOnly ? 0 : 12; // Skip RIFF header only if reading full file
-
-        // For tail-only mode, search from the beginning of the slice (which is already the tail)
-        // Look for bext chunk within this buffer
-        while (offset < view.byteLength - 8) {
-            // Safely read chunk ID
-            if (offset + 8 > view.byteLength) break;
-            
-            const chunkId = String.fromCharCode(
-                view.getUint8(offset),
-                view.getUint8(offset + 1),
-                view.getUint8(offset + 2),
-                view.getUint8(offset + 3)
-            );
-            const chunkSize = view.getUint32(offset + 4, true);
-
-            if (chunkId === 'bext') {
-                // Found bEXT chunk
-                return this.formatBEXTDisplay({ view, offset });
-            }
-
-            offset += 8 + chunkSize;
-        }
-
-        return null; // No bEXT found
-    }
-
-    formatBEXTDisplay(bextInfo) {
-        try {
-            let view, chunkOffset;
-            
-            if (bextInfo.view) {
-                // Called from extractBEXT with view and offset
-                view = bextInfo.view;
-                chunkOffset = bextInfo.offset + 8;
-            } else if (bextInfo instanceof Uint8Array) {
-                // Called with raw bext buffer from metadata.bextRaw
-                view = new DataView(bextInfo.buffer, bextInfo.byteOffset, bextInfo.byteLength);
-                chunkOffset = 0; // The buffer starts at the bext chunk data (no chunk header)
-            } else {
-                // Unknown format
-                return String(bextInfo);
-            }
-
-            // Helper to read string
-            const readStr = (off, len) => {
-                let s = '';
-                for (let i = 0; i < len; i++) {
-                    if (off + i >= view.byteLength) break;
-                    const c = view.getUint8(off + i);
-                    if (c === 0) break;
-                    s += String.fromCharCode(c);
-                }
-                return s;
-            };
-
-            const description = readStr(chunkOffset, 256);
-            const originator = readStr(chunkOffset + 256, 32);
-            const originatorRef = readStr(chunkOffset + 288, 32);
-            const date = readStr(chunkOffset + 320, 10);
-            const time = readStr(chunkOffset + 330, 8);
-
-            const timeRefLow = view.getUint32(chunkOffset + 338, true);
-            const timeRefHigh = view.getUint32(chunkOffset + 342, true);
-            const timeRef = (BigInt(timeRefHigh) << 32n) | BigInt(timeRefLow);
-
-            const version = view.getUint16(chunkOffset + 346, true);
-
-            // Format output
-            let output = `Description: ${description}\n`;
-            output += `Originator: ${originator}\n`;
-            output += `Originator Reference: ${originatorRef}\n`;
-            output += `Origination Date: ${date}\n`;
-            output += `Origination Time: ${time}\n`;
-            output += `Time Reference: ${timeRef.toString()} samples\n`;
-            output += `Version: ${version}\n`;
-
-            // Coding History
-            if (chunkOffset + 602 < view.byteLength) {
-                const history = readStr(chunkOffset + 602, Math.min(1000, view.byteLength - chunkOffset - 602));
-                if (history) {
-                    output += `\nCoding History:\n${history}`;
-                }
-            }
-
-            return output;
-        } catch (err) {
-            console.error('Error formatting bEXT display:', err);
-            return null;
         }
     }
 
@@ -7637,8 +7543,8 @@ class App {
 
                     // Add iXML metadata with correct track name
                     if (ixmlString) {
-                        const updatedIXML = this.updateIXMLForMonoTrack(ixmlString, ch, trackName);
-                        wavArrayBuffer = this.injectIXMLChunk(wavArrayBuffer, updatedIXML);
+                        const updatedIXML = this.metadataHandler.updateIXMLForMonoTrack(ixmlString, ch, trackName);
+                        wavArrayBuffer = this.metadataHandler.injectIXMLChunk(wavArrayBuffer, updatedIXML);
 
                     }
 
@@ -7664,7 +7570,7 @@ class App {
                         originationTime: metadata.originationTime || '',
                         timeReference: metadata.timeReference || 0
                     };
-                    wavArrayBuffer = this.injectBextChunk(wavArrayBuffer, bextData);
+                    wavArrayBuffer = this.metadataHandler.injectBextChunk(wavArrayBuffer, bextData);
 
 
                     // Write file to destination
@@ -7696,300 +7602,6 @@ class App {
     /**
      * Update iXML to contain only the track info for a specific channel
      */
-    updateIXMLForMonoTrack(ixmlString, channelIndex, trackName) {
-        try {
-            const parser = new DOMParser();
-            const xmlDoc = parser.parseFromString(ixmlString, 'text/xml');
-            
-            // Find the TRACK_LIST
-            const trackList = xmlDoc.querySelector('TRACK_LIST');
-            if (trackList) {
-                // Update track count to 1
-                const trackCount = trackList.querySelector('TRACK_COUNT');
-                if (trackCount) {
-                    trackCount.textContent = '1';
-                }
-
-                // Keep only the track for this channel
-                const tracks = trackList.querySelectorAll('TRACK');
-                if (tracks[channelIndex]) {
-                    // Remove all tracks
-                    tracks.forEach(track => track.remove());
-                    
-                    // Add back only this channel's track with updated channel index
-                    const singleTrack = xmlDoc.createElement('TRACK');
-                    const channelIndexEl = xmlDoc.createElement('CHANNEL_INDEX');
-                    channelIndexEl.textContent = '1';
-                    const interleaveIndexEl = xmlDoc.createElement('INTERLEAVE_INDEX');
-                    interleaveIndexEl.textContent = '1';
-                    const nameEl = xmlDoc.createElement('NAME');
-                    nameEl.textContent = trackName;
-                    
-                    singleTrack.appendChild(channelIndexEl);
-                    singleTrack.appendChild(interleaveIndexEl);
-                    singleTrack.appendChild(nameEl);
-                    trackList.appendChild(singleTrack);
-                }
-            }
-
-            const serializer = new XMLSerializer();
-            return serializer.serializeToString(xmlDoc);
-        } catch (err) {
-            console.error('Error updating iXML for mono track:', err);
-            return ixmlString;
-        }
-    }
-
-    /**
-     * Encode AudioBuffer to WAV blob
-     */
-    async encodeWAV(audioBuffer, bitDepth = 16) {
-        const numberOfChannels = audioBuffer.numberOfChannels;
-        const sampleRate = audioBuffer.sampleRate;
-        const format = 1; // PCM
-
-        const bytesPerSample = bitDepth / 8;
-        const blockAlign = numberOfChannels * bytesPerSample;
-        
-        const samples = audioBuffer.getChannelData(0);
-        const dataLength = samples.length * blockAlign;
-        const buffer = new ArrayBuffer(44 + dataLength);
-        const view = new DataView(buffer);
-
-
-
-        // WAV header
-        const writeString = (offset, string) => {
-            for (let i = 0; i < string.length; i++) {
-                view.setUint8(offset + i, string.charCodeAt(i));
-            }
-        };
-
-        writeString(0, 'RIFF');
-        view.setUint32(4, 36 + dataLength, true);
-        writeString(8, 'WAVE');
-        writeString(12, 'fmt ');
-        view.setUint32(16, 16, true); // fmt chunk size
-        view.setUint16(20, format, true);
-        view.setUint16(22, numberOfChannels, true);
-        view.setUint32(24, sampleRate, true);
-        view.setUint32(28, sampleRate * blockAlign, true); // byte rate
-        view.setUint16(32, blockAlign, true);
-        view.setUint16(34, bitDepth, true);
-        writeString(36, 'data');
-        view.setUint32(40, dataLength, true);
-
-        // Write audio data with bit-depth appropriate scaling
-        const offset = 44;
-        const maxSample = Math.pow(2, bitDepth - 1) - 1;
-        
-        let minWritten = Infinity, maxWritten = -Infinity, samplesWritten = 0;
-        
-        for (let i = 0; i < samples.length; i++) {
-            const sample = Math.max(-1, Math.min(1, samples[i]));
-            const intSample = Math.round(sample < 0 ? sample * (maxSample + 1) : sample * maxSample);
-            
-            minWritten = Math.min(minWritten, intSample);
-            maxWritten = Math.max(maxWritten, intSample);
-            samplesWritten++;
-            
-            if (bitDepth === 16) {
-                view.setInt16(offset + (i * 2), intSample, true);
-            } else if (bitDepth === 24) {
-                // 24-bit samples are written as 3 bytes in little-endian
-                const byte1 = intSample & 0xFF;
-                const byte2 = (intSample >> 8) & 0xFF;
-                const byte3 = (intSample >> 16) & 0xFF;
-                view.setUint8(offset + (i * 3), byte1);
-                view.setUint8(offset + (i * 3) + 1, byte2);
-                view.setUint8(offset + (i * 3) + 2, byte3);
-            } else if (bitDepth === 32) {
-                // 32-bit samples as signed integers
-                view.setInt32(offset + (i * 4), intSample, true);
-            } else {
-                console.warn(`[encodeWAV] Unsupported bit depth: ${bitDepth}, falling back to 16-bit`);
-                view.setInt16(offset + (i * 2), intSample, true);
-            }
-        }
-        
-        return new Blob([buffer], { type: 'audio/wav' });
-    }
-
-    /**
-     * Inject bEXT chunk into WAV buffer (returns new buffer)
-     */
-    /**
-     * Inject iXML chunk into WAV buffer (returns new buffer)
-     */
-    injectIXMLChunk(originalBuffer, ixmlString) {
-        const view = new DataView(originalBuffer);
-        const chunks = [];
-        let offset = 12;
-
-        // Parse all chunks except iXML
-        while (offset < view.byteLength - 8) {
-            const chunkId = String.fromCharCode(
-                view.getUint8(offset),
-                view.getUint8(offset + 1),
-                view.getUint8(offset + 2),
-                view.getUint8(offset + 3)
-            );
-            const chunkSize = view.getUint32(offset + 4, true);
-
-            if (chunkId !== 'iXML') {
-                const chunkData = new Uint8Array(originalBuffer, offset, 8 + chunkSize + (chunkSize % 2));
-                chunks.push(chunkData);
-            }
-
-            offset += 8 + chunkSize;
-            if (chunkSize % 2 !== 0) offset++;
-        }
-
-        // Create new iXML chunk
-        const ixmlBytes = new TextEncoder().encode(ixmlString);
-        const ixmlChunkSize = ixmlBytes.length;
-        const ixmlChunk = new Uint8Array(8 + ixmlChunkSize + (ixmlChunkSize % 2));
-        const ixmlView = new DataView(ixmlChunk.buffer);
-
-        ixmlView.setUint8(0, 'i'.charCodeAt(0));
-        ixmlView.setUint8(1, 'X'.charCodeAt(0));
-        ixmlView.setUint8(2, 'M'.charCodeAt(0));
-        ixmlView.setUint8(3, 'L'.charCodeAt(0));
-        ixmlView.setUint32(4, ixmlChunkSize, true);
-        ixmlChunk.set(ixmlBytes, 8);
-
-        chunks.push(ixmlChunk);
-
-        // Calculate total size
-        const totalDataSize = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
-        const newFileSize = 12 + totalDataSize;
-        const newBuffer = new Uint8Array(newFileSize);
-        const newView = new DataView(newBuffer.buffer);
-
-        // Write RIFF header
-        newView.setUint8(0, 'R'.charCodeAt(0));
-        newView.setUint8(1, 'I'.charCodeAt(0));
-        newView.setUint8(2, 'F'.charCodeAt(0));
-        newView.setUint8(3, 'F'.charCodeAt(0));
-        newView.setUint32(4, newFileSize - 8, true);
-        newView.setUint8(8, 'W'.charCodeAt(0));
-        newView.setUint8(9, 'A'.charCodeAt(0));
-        newView.setUint8(10, 'V'.charCodeAt(0));
-        newView.setUint8(11, 'E'.charCodeAt(0));
-
-        // Write all chunks
-        let writeOffset = 12;
-        for (const chunk of chunks) {
-            newBuffer.set(chunk, writeOffset);
-            writeOffset += chunk.byteLength;
-        }
-
-        return newBuffer.buffer;
-    }
-
-    /**
-     * Inject bEXT chunk into WAV buffer (returns new buffer)
-     */
-    injectBextChunk(originalBuffer, bextData) {
-        const view = new DataView(originalBuffer);
-        const chunks = [];
-        let offset = 12;
-
-        // Parse all chunks except bext
-        while (offset < view.byteLength - 8) {
-            const chunkId = String.fromCharCode(
-                view.getUint8(offset),
-                view.getUint8(offset + 1),
-                view.getUint8(offset + 2),
-                view.getUint8(offset + 3)
-            );
-            const chunkSize = view.getUint32(offset + 4, true);
-
-            if (chunkId !== 'bext') {
-                const chunkData = new Uint8Array(originalBuffer, offset, 8 + chunkSize + (chunkSize % 2));
-                chunks.push(chunkData);
-            }
-
-            offset += 8 + chunkSize;
-            if (chunkSize % 2 !== 0) offset++;
-        }
-
-        // Create new bEXT chunk (minimum size is 602 bytes)
-        const bextChunk = new Uint8Array(610); // 8 header + 602 data
-        const bextView = new DataView(bextChunk.buffer);
-
-        // Chunk ID and size
-        bextView.setUint8(0, 'b'.charCodeAt(0));
-        bextView.setUint8(1, 'e'.charCodeAt(0));
-        bextView.setUint8(2, 'x'.charCodeAt(0));
-        bextView.setUint8(3, 't'.charCodeAt(0));
-        bextView.setUint32(4, 602, true);
-
-        const encoder = new TextEncoder();
-
-        // Description (256 bytes)
-        if (bextData.description) {
-            const descBytes = encoder.encode(bextData.description.substring(0, 255));
-            bextChunk.set(descBytes, 8);
-        }
-
-        // Originator (32 bytes)
-        if (bextData.originator) {
-            const origBytes = encoder.encode(bextData.originator.substring(0, 31));
-            bextChunk.set(origBytes, 8 + 256);
-        }
-
-        // Originator Reference (32 bytes)
-        if (bextData.originatorReference) {
-            const origRefBytes = encoder.encode(bextData.originatorReference.substring(0, 31));
-            bextChunk.set(origRefBytes, 8 + 256 + 32);
-        }
-
-        // Origination Date (10 bytes, YYYY-MM-DD)
-        if (bextData.originationDate) {
-            const dateBytes = encoder.encode(bextData.originationDate.substring(0, 10));
-            bextChunk.set(dateBytes, 8 + 256 + 32 + 32);
-        }
-
-        // Origination Time (8 bytes, HH:MM:SS)
-        if (bextData.originationTime) {
-            const timeBytes = encoder.encode(bextData.originationTime.substring(0, 8));
-            bextChunk.set(timeBytes, 8 + 256 + 32 + 32 + 10);
-        }
-
-        // Time Reference (8 bytes, 64-bit unsigned int)
-        const timeRef = bextData.timeReference || 0;
-        bextView.setBigUint64(8 + 256 + 32 + 32 + 10 + 8, BigInt(timeRef), true);
-
-        chunks.push(bextChunk);
-
-        // Calculate total size
-        const totalDataSize = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
-        const newFileSize = 12 + totalDataSize;
-        const newBuffer = new Uint8Array(newFileSize);
-        const newView = new DataView(newBuffer.buffer);
-
-        // Write RIFF header
-        newView.setUint8(0, 'R'.charCodeAt(0));
-        newView.setUint8(1, 'I'.charCodeAt(0));
-        newView.setUint8(2, 'F'.charCodeAt(0));
-        newView.setUint8(3, 'F'.charCodeAt(0));
-        newView.setUint32(4, newFileSize - 8, true);
-        newView.setUint8(8, 'W'.charCodeAt(0));
-        newView.setUint8(9, 'A'.charCodeAt(0));
-        newView.setUint8(10, 'V'.charCodeAt(0));
-        newView.setUint8(11, 'E'.charCodeAt(0));
-
-        // Write all chunks
-        let writeOffset = 12;
-        for (const chunk of chunks) {
-            newBuffer.set(chunk, writeOffset);
-            writeOffset += chunk.byteLength;
-        }
-
-        return newBuffer.buffer;
-    }
-
     resetFaderHeights(height = 100) {
         const mixerContainer = document.getElementById('mixer-container');
         if (!mixerContainer) return;

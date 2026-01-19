@@ -1872,5 +1872,421 @@ export class MetadataHandler {
 
         return trackNames;
     }
+
+    /**
+     * Inject iXML chunk into WAV buffer (returns new buffer)
+     * Removes existing iXML chunk and injects the new one
+     * @param {ArrayBuffer} originalBuffer - Original WAV file buffer
+     * @param {string} ixmlString - iXML content as string
+     * @returns {ArrayBuffer} New WAV buffer with updated iXML
+     */
+    injectIXMLChunk(originalBuffer, ixmlString) {
+        const view = new DataView(originalBuffer);
+        const chunks = [];
+        let offset = 12;
+
+        // Parse all chunks except iXML
+        while (offset < view.byteLength - 8) {
+            const chunkId = String.fromCharCode(
+                view.getUint8(offset),
+                view.getUint8(offset + 1),
+                view.getUint8(offset + 2),
+                view.getUint8(offset + 3)
+            );
+            const chunkSize = view.getUint32(offset + 4, true);
+
+            if (chunkId !== 'iXML') {
+                const chunkData = new Uint8Array(originalBuffer, offset, 8 + chunkSize + (chunkSize % 2));
+                chunks.push(chunkData);
+            }
+
+            offset += 8 + chunkSize;
+            if (chunkSize % 2 !== 0) offset++;
+        }
+
+        // Create new iXML chunk
+        const ixmlBytes = new TextEncoder().encode(ixmlString);
+        const ixmlChunkSize = ixmlBytes.length;
+        const ixmlChunk = new Uint8Array(8 + ixmlChunkSize + (ixmlChunkSize % 2));
+        const ixmlView = new DataView(ixmlChunk.buffer);
+
+        ixmlView.setUint8(0, 'i'.charCodeAt(0));
+        ixmlView.setUint8(1, 'X'.charCodeAt(0));
+        ixmlView.setUint8(2, 'M'.charCodeAt(0));
+        ixmlView.setUint8(3, 'L'.charCodeAt(0));
+        ixmlView.setUint32(4, ixmlChunkSize, true);
+        ixmlChunk.set(ixmlBytes, 8);
+
+        chunks.push(ixmlChunk);
+
+        // Calculate total size
+        const totalDataSize = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+        const newFileSize = 12 + totalDataSize;
+        const newBuffer = new Uint8Array(newFileSize);
+        const newView = new DataView(newBuffer.buffer);
+
+        // Write RIFF header
+        newView.setUint8(0, 'R'.charCodeAt(0));
+        newView.setUint8(1, 'I'.charCodeAt(0));
+        newView.setUint8(2, 'F'.charCodeAt(0));
+        newView.setUint8(3, 'F'.charCodeAt(0));
+        newView.setUint32(4, newFileSize - 8, true);
+        newView.setUint8(8, 'W'.charCodeAt(0));
+        newView.setUint8(9, 'A'.charCodeAt(0));
+        newView.setUint8(10, 'V'.charCodeAt(0));
+        newView.setUint8(11, 'E'.charCodeAt(0));
+
+        // Write all chunks
+        let writeOffset = 12;
+        for (const chunk of chunks) {
+            newBuffer.set(chunk, writeOffset);
+            writeOffset += chunk.byteLength;
+        }
+
+        return newBuffer.buffer;
+    }
+
+    /**
+     * Inject bEXT chunk into WAV buffer (returns new buffer)
+     * Removes existing bext chunk and injects the new one
+     * @param {ArrayBuffer} originalBuffer - Original WAV file buffer
+     * @param {Object} bextData - bEXT metadata object with fields
+     * @returns {ArrayBuffer} New WAV buffer with updated bEXT
+     */
+    injectBextChunk(originalBuffer, bextData) {
+        const view = new DataView(originalBuffer);
+        const chunks = [];
+        let offset = 12;
+
+        // Parse all chunks except bext
+        while (offset < view.byteLength - 8) {
+            const chunkId = String.fromCharCode(
+                view.getUint8(offset),
+                view.getUint8(offset + 1),
+                view.getUint8(offset + 2),
+                view.getUint8(offset + 3)
+            );
+            const chunkSize = view.getUint32(offset + 4, true);
+
+            if (chunkId !== 'bext') {
+                const chunkData = new Uint8Array(originalBuffer, offset, 8 + chunkSize + (chunkSize % 2));
+                chunks.push(chunkData);
+            }
+
+            offset += 8 + chunkSize;
+            if (chunkSize % 2 !== 0) offset++;
+        }
+
+        // Create new bEXT chunk (minimum size is 602 bytes)
+        const bextChunk = new Uint8Array(610); // 8 header + 602 data
+        const bextView = new DataView(bextChunk.buffer);
+
+        // Chunk ID and size
+        bextView.setUint8(0, 'b'.charCodeAt(0));
+        bextView.setUint8(1, 'e'.charCodeAt(0));
+        bextView.setUint8(2, 'x'.charCodeAt(0));
+        bextView.setUint8(3, 't'.charCodeAt(0));
+        bextView.setUint32(4, 602, true);
+
+        const encoder = new TextEncoder();
+
+        // Description (256 bytes)
+        if (bextData.description) {
+            const descBytes = encoder.encode(bextData.description.substring(0, 255));
+            bextChunk.set(descBytes, 8);
+        }
+
+        // Originator (32 bytes)
+        if (bextData.originator) {
+            const origBytes = encoder.encode(bextData.originator.substring(0, 31));
+            bextChunk.set(origBytes, 8 + 256);
+        }
+
+        // Originator Reference (32 bytes)
+        if (bextData.originatorReference) {
+            const origRefBytes = encoder.encode(bextData.originatorReference.substring(0, 31));
+            bextChunk.set(origRefBytes, 8 + 256 + 32);
+        }
+
+        // Origination Date (10 bytes, YYYY-MM-DD)
+        if (bextData.originationDate) {
+            const dateBytes = encoder.encode(bextData.originationDate.substring(0, 10));
+            bextChunk.set(dateBytes, 8 + 256 + 32 + 32);
+        }
+
+        // Origination Time (8 bytes, HH:MM:SS)
+        if (bextData.originationTime) {
+            const timeBytes = encoder.encode(bextData.originationTime.substring(0, 8));
+            bextChunk.set(timeBytes, 8 + 256 + 32 + 32 + 10);
+        }
+
+        // Time Reference (8 bytes, 64-bit unsigned int)
+        const timeRef = bextData.timeReference || 0;
+        bextView.setBigUint64(8 + 256 + 32 + 32 + 10 + 8, BigInt(timeRef), true);
+
+        chunks.push(bextChunk);
+
+        // Calculate total size
+        const totalDataSize = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+        const newFileSize = 12 + totalDataSize;
+        const newBuffer = new Uint8Array(newFileSize);
+        const newView = new DataView(newBuffer.buffer);
+
+        // Write RIFF header
+        newView.setUint8(0, 'R'.charCodeAt(0));
+        newView.setUint8(1, 'I'.charCodeAt(0));
+        newView.setUint8(2, 'F'.charCodeAt(0));
+        newView.setUint8(3, 'F'.charCodeAt(0));
+        newView.setUint32(4, newFileSize - 8, true);
+        newView.setUint8(8, 'W'.charCodeAt(0));
+        newView.setUint8(9, 'A'.charCodeAt(0));
+        newView.setUint8(10, 'V'.charCodeAt(0));
+        newView.setUint8(11, 'E'.charCodeAt(0));
+
+        // Write all chunks
+        let writeOffset = 12;
+        for (const chunk of chunks) {
+            newBuffer.set(chunk, writeOffset);
+            writeOffset += chunk.byteLength;
+        }
+
+        return newBuffer.buffer;
+    }
+
+    /**
+     * Update iXML for a mono track (used during split operations)
+     * Modifies the TRACK_LIST to contain only the specified channel
+     * @param {string} ixmlString - Original iXML content
+     * @param {number} channelIndex - Zero-based channel index to keep
+     * @param {string} trackName - Name for the track
+     * @returns {string} Updated iXML string
+     */
+    updateIXMLForMonoTrack(ixmlString, channelIndex, trackName) {
+        try {
+            const parser = new DOMParser();
+            const xmlDoc = parser.parseFromString(ixmlString, 'text/xml');
+            
+            // Find the TRACK_LIST
+            const trackList = xmlDoc.querySelector('TRACK_LIST');
+            if (trackList) {
+                // Update track count to 1
+                const trackCount = trackList.querySelector('TRACK_COUNT');
+                if (trackCount) {
+                    trackCount.textContent = '1';
+                }
+
+                // Keep only the track for this channel
+                const tracks = trackList.querySelectorAll('TRACK');
+                if (tracks[channelIndex]) {
+                    // Remove all tracks
+                    tracks.forEach(track => track.remove());
+                    
+                    // Add back only this channel's track with updated channel index
+                    const singleTrack = xmlDoc.createElement('TRACK');
+                    const channelIndexEl = xmlDoc.createElement('CHANNEL_INDEX');
+                    channelIndexEl.textContent = '1';
+                    const interleaveIndexEl = xmlDoc.createElement('INTERLEAVE_INDEX');
+                    interleaveIndexEl.textContent = '1';
+                    const nameEl = xmlDoc.createElement('NAME');
+                    nameEl.textContent = trackName;
+                    
+                    singleTrack.appendChild(channelIndexEl);
+                    singleTrack.appendChild(interleaveIndexEl);
+                    singleTrack.appendChild(nameEl);
+                    trackList.appendChild(singleTrack);
+                }
+            }
+
+            const serializer = new XMLSerializer();
+            return serializer.serializeToString(xmlDoc);
+        } catch (err) {
+            console.error('Error updating iXML for mono track:', err);
+            return ixmlString;
+        }
+    }
+
+    /**
+     * Extract and format bEXT chunk from WAV buffer
+     * @param {ArrayBuffer} arrayBuffer - WAV file buffer
+     * @param {boolean} isTailOnly - Whether buffer is from file tail (skip RIFF header)
+     * @returns {string|null} Formatted bEXT display string or null if not found
+     */
+    getBEXTChunk(arrayBuffer, isTailOnly = false) {
+        const view = new DataView(arrayBuffer);
+        let offset = isTailOnly ? 0 : 12; // Skip RIFF header only if reading full file
+
+        // For tail-only mode, search from the beginning of the slice (which is already the tail)
+        // Look for bext chunk within this buffer
+        while (offset < view.byteLength - 8) {
+            // Safely read chunk ID
+            if (offset + 8 > view.byteLength) break;
+            
+            const chunkId = String.fromCharCode(
+                view.getUint8(offset),
+                view.getUint8(offset + 1),
+                view.getUint8(offset + 2),
+                view.getUint8(offset + 3)
+            );
+            const chunkSize = view.getUint32(offset + 4, true);
+
+            if (chunkId === 'bext') {
+                // Found bEXT chunk
+                return this.formatBEXTDisplay({ view, offset });
+            }
+
+            offset += 8 + chunkSize;
+        }
+
+        return null; // No bEXT found
+    }
+
+    /**
+     * Format bEXT chunk data for display
+     * @param {Object} bextInfo - Object with view and offset, or Uint8Array of raw bext data
+     * @returns {string|null} Formatted bEXT display string
+     */
+    formatBEXTDisplay(bextInfo) {
+        try {
+            let view, chunkOffset;
+            
+            if (bextInfo.view) {
+                // Called from getBEXTChunk with view and offset
+                view = bextInfo.view;
+                chunkOffset = bextInfo.offset + 8;
+            } else if (bextInfo instanceof Uint8Array) {
+                // Called with raw bext buffer from metadata.bextRaw
+                view = new DataView(bextInfo.buffer, bextInfo.byteOffset, bextInfo.byteLength);
+                chunkOffset = 0; // The buffer starts at the bext chunk data (no chunk header)
+            } else {
+                // Unknown format
+                return String(bextInfo);
+            }
+
+            // Helper to read string
+            const readStr = (off, len) => {
+                let s = '';
+                for (let i = 0; i < len; i++) {
+                    if (off + i >= view.byteLength) break;
+                    const c = view.getUint8(off + i);
+                    if (c === 0) break;
+                    s += String.fromCharCode(c);
+                }
+                return s;
+            };
+
+            const description = readStr(chunkOffset, 256);
+            const originator = readStr(chunkOffset + 256, 32);
+            const originatorRef = readStr(chunkOffset + 288, 32);
+            const date = readStr(chunkOffset + 320, 10);
+            const time = readStr(chunkOffset + 330, 8);
+
+            const timeRefLow = view.getUint32(chunkOffset + 338, true);
+            const timeRefHigh = view.getUint32(chunkOffset + 342, true);
+            const timeRef = (BigInt(timeRefHigh) << 32n) | BigInt(timeRefLow);
+
+            const version = view.getUint16(chunkOffset + 346, true);
+
+            // Format output
+            let output = `Description: ${description}\n`;
+            output += `Originator: ${originator}\n`;
+            output += `Originator Reference: ${originatorRef}\n`;
+            output += `Origination Date: ${date}\n`;
+            output += `Origination Time: ${time}\n`;
+            output += `Time Reference: ${timeRef.toString()} samples\n`;
+            output += `Version: ${version}\n`;
+
+            // Coding History
+            if (chunkOffset + 602 < view.byteLength) {
+                const history = readStr(chunkOffset + 602, Math.min(1000, view.byteLength - chunkOffset - 602));
+                if (history) {
+                    output += `\nCoding History:\n${history}`;
+                }
+            }
+
+            return output;
+        } catch (err) {
+            console.error('Error formatting bEXT display:', err);
+            return null;
+        }
+    }
+
+    /**
+     * Unified method to save WAV with metadata
+     * Creates new WAV with audio data and metadata chunks (rewrite approach)
+     * @param {ArrayBuffer} audioBuffer - Raw audio PCM data
+     * @param {Object} wavInfo - {sampleRate, numChannels, bitDepth}
+     * @param {Object} metadata - Metadata object with bEXT/iXML fields
+     * @returns {Blob} WAV file blob
+     */
+    async saveWavWithMetadata(audioBuffer, wavInfo, metadata) {
+        const { sampleRate, numChannels, bitDepth } = wavInfo;
+        const format = 1; // PCM
+        const bytesPerSample = bitDepth / 8;
+        const blockAlign = numChannels * bytesPerSample;
+        const dataSize = audioBuffer.byteLength;
+
+        // Create bEXT and iXML chunks
+        const bextChunk = this.createBextChunk(metadata);
+        const ixmlChunk = this.createIXMLChunk(metadata);
+
+        // Calculate total file size
+        const fmtChunkSize = 16;
+        const totalSize = 12 + // RIFF header + WAVE
+                         8 + fmtChunkSize + // fmt chunk
+                         8 + dataSize + (dataSize % 2) + // data chunk (with padding)
+                         8 + bextChunk.byteLength + (bextChunk.byteLength % 2) + // bext chunk
+                         8 + ixmlChunk.byteLength + (ixmlChunk.byteLength % 2); // iXML chunk
+
+        const buffer = new ArrayBuffer(totalSize);
+        const view = new DataView(buffer);
+        let offset = 0;
+
+        // RIFF header
+        this.writeString(view, offset, 'RIFF'); offset += 4;
+        view.setUint32(offset, totalSize - 8, true); offset += 4;
+        this.writeString(view, offset, 'WAVE'); offset += 4;
+
+        // fmt chunk
+        this.writeString(view, offset, 'fmt '); offset += 4;
+        view.setUint32(offset, fmtChunkSize, true); offset += 4;
+        view.setUint16(offset, format, true); offset += 2;
+        view.setUint16(offset, numChannels, true); offset += 2;
+        view.setUint32(offset, sampleRate, true); offset += 4;
+        view.setUint32(offset, sampleRate * blockAlign, true); offset += 4; // byte rate
+        view.setUint16(offset, blockAlign, true); offset += 2;
+        view.setUint16(offset, bitDepth, true); offset += 2;
+
+        // data chunk
+        this.writeString(view, offset, 'data'); offset += 4;
+        view.setUint32(offset, dataSize, true); offset += 4;
+        new Uint8Array(buffer).set(new Uint8Array(audioBuffer), offset);
+        offset += dataSize;
+        if (dataSize % 2 !== 0) {
+            view.setUint8(offset, 0);
+            offset++;
+        }
+
+        // bext chunk
+        this.writeString(view, offset, 'bext'); offset += 4;
+        view.setUint32(offset, bextChunk.byteLength, true); offset += 4;
+        new Uint8Array(buffer).set(new Uint8Array(bextChunk), offset);
+        offset += bextChunk.byteLength;
+        if (bextChunk.byteLength % 2 !== 0) {
+            view.setUint8(offset, 0);
+            offset++;
+        }
+
+        // iXML chunk
+        this.writeString(view, offset, 'iXML'); offset += 4;
+        view.setUint32(offset, ixmlChunk.byteLength, true); offset += 4;
+        new Uint8Array(buffer).set(new Uint8Array(ixmlChunk), offset);
+        offset += ixmlChunk.byteLength;
+        if (ixmlChunk.byteLength % 2 !== 0) {
+            view.setUint8(offset, 0);
+            offset++;
+        }
+
+        return new Blob([buffer], { type: 'audio/wav' });
+    }
 }
 
