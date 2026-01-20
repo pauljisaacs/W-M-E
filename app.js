@@ -4947,6 +4947,12 @@ class App {
         const extractAudioCheckbox = document.getElementById('mp-extract-audio');
         const extractOptions = document.getElementById('mp-extract-options');
         
+        // Handle Create Summed Mix checkbox and placement
+        const createMixCheckbox = document.getElementById('mp-create-mix');
+        const mixOptions = document.getElementById('mp-mix-options');
+        const mixPlacementSelect = document.getElementById('mp-mix-placement');
+        const combinePolyCheckbox = document.getElementById('mp-combine-poly');
+        
         // Handle Normalize checkbox
         const normalizeCheckbox = document.getElementById('mp-normalize');
         const normalizeOptions = document.getElementById('mp-normalize-options');
@@ -4958,6 +4964,26 @@ class App {
         // Radio buttons for Extract Audio mode
         const tcRangeRadio = document.getElementById('mp-tc-range');
         const conformCSVRadio = document.getElementById('mp-conform-csv');
+        
+        // Mix placement change handler
+        const handleMixPlacementChange = () => {
+            if (createMixCheckbox.checked && mixPlacementSelect.value === 'embed') {
+                // Auto-enable Combine to Poly when embedding mix
+                combinePolyCheckbox.checked = true;
+                combinePolyCheckbox.disabled = true;
+                combinePolyCheckbox.parentElement.style.opacity = '0.7';
+                combinePolyCheckbox.parentElement.title = 'Required for embedding mix';
+            } else {
+                // Re-enable Combine to Poly
+                combinePolyCheckbox.disabled = false;
+                combinePolyCheckbox.parentElement.style.opacity = '1';
+                combinePolyCheckbox.parentElement.title = '';
+            }
+        };
+        
+        // Add event listeners for mix checkbox and placement select
+        createMixCheckbox.addEventListener('change', handleMixPlacementChange);
+        mixPlacementSelect.addEventListener('change', handleMixPlacementChange);
         
         // Extract mode change handler (Rename is always available)
         const handleExtractModeChange = () => {
@@ -4974,6 +5000,7 @@ class App {
         
         // Initialize state on modal open
         handleExtractModeChange();
+        handleMixPlacementChange();
         
         // Handle custom field visibility for rename using RenameManager
         this.renameManager.setupRenameFieldListeners('mp-rename', null);
@@ -5051,6 +5078,8 @@ class App {
             tcEnd: extractAudio ? document.getElementById('mp-tc-end').value : null,
             prePostRoll: extractAudio ? parseInt(document.getElementById('mp-prepost-roll').value) : 0,
             csvEntries: extractAudio && this.mpCSVEntries ? this.mpCSVEntries : null,
+            createSummedMix: document.getElementById('mp-create-mix').checked,
+            mixPlacement: document.getElementById('mp-mix-placement').value,
             combineToPoly,
             normalize,
             normalizeLevel: normalize ? parseFloat(document.getElementById('mp-normalize-level').value) : -1.0,
@@ -5115,10 +5144,35 @@ class App {
                 return;
             }
 
-            // STEP 2: Combine to Poly (if enabled and multiple files)
+            // STEP 2: Create Summed Mono Mix (if enabled and multiple files)
+            let mixFiles = null;
+            if (options.createSummedMix && processedFiles.length > 1) {
+                console.log('[MultiProcess] Step 2: Creating Summed Mono Mix...');
+                const mixResults = await this.mpCreateSummedMix(processedFiles, options);
+                successCount += mixResults.filter(f => f.success).length;
+                failCount += mixResults.filter(f => !f.success).length;
+                
+                // Store mix files for Combine step
+                mixFiles = mixResults.filter(f => f.success);
+                
+                // Mark as intermediate if not keeping separate and more processing follows
+                if (!options.keepIntermediateFiles && options.mixPlacement === 'embed' && options.combineToPoly) {
+                    mixResults.forEach(f => {
+                        if (f.success) intermediateFiles.push(f.fileObj);
+                    });
+                }
+                
+                // If mix placement is 'separate', add to processedFiles for further processing
+                if (options.mixPlacement === 'separate') {
+                    const mixFileObjs = mixResults.filter(f => f.success).map(f => f.fileObj);
+                    processedFiles = [...processedFiles, ...mixFileObjs];
+                }
+            }
+
+            // STEP 3: Combine to Poly (if enabled and multiple files)
             if (options.combineToPoly && processedFiles.length > 1) {
-                console.log('[MultiProcess] Step 2: Combining to Poly...');
-                const combined = await this.mpCombineToPoly(processedFiles, options);
+                console.log('[MultiProcess] Step 3: Combining to Poly...');
+                const combined = await this.mpCombineToPoly(processedFiles, options, mixFiles);
                 if (combined.success) {
                     // Mark previous files as intermediate when Combine runs
                     // (they are superseded by the combined output)
@@ -5139,9 +5193,9 @@ class App {
                 }
             }
 
-            // STEP 3: Normalize
+            // STEP 4: Normalize
             if (options.normalize) {
-                console.log('[MultiProcess] Step 3: Normalizing Audio...');
+                console.log('[MultiProcess] Step 4: Normalizing Audio...');
                 const previousFiles = [...processedFiles]; // Save reference to previous files
                 const normalized = await this.mpNormalize(processedFiles, options);
                 successCount += normalized.filter(f => f.success).length;
@@ -5159,9 +5213,9 @@ class App {
                 }
             }
 
-            // STEP 4: Rename
+            // STEP 5: Rename
             if (options.rename) {
-                console.log('[MultiProcess] Step 4: Renaming Files...');
+                console.log('[MultiProcess] Step 5: Renaming Files...');
                 const previousFiles = [...processedFiles]; // Save reference to previous files
                 const renamed = await this.mpRename(processedFiles, options);
                 successCount += renamed.filter(f => f.success).length;
@@ -5390,9 +5444,166 @@ class App {
         return results;
     }
 
-    async mpCombineToPoly(fileList, options) {
-        // Validate we have at least 2 files
-        if (fileList.length < 2) {
+    async mpCreateSummedMix(fileList, options) {
+        /**
+         * Create summed mono mix for each group of files
+         * Groups are determined by TC Start + audioDataSize (matching takes)
+         * Applies √N attenuation to prevent clipping
+         */
+        const results = [];
+
+        try {
+            // Group files by TC Start + audioDataSize (same as mpCombineToPoly)
+            const groups = new Map();
+            fileList.forEach(file => {
+                const key = `${file.metadata.tcStart}_${file.metadata.audioDataSize}`;
+                if (!groups.has(key)) {
+                    groups.set(key, []);
+                }
+                groups.get(key).push(file);
+            });
+
+            // Filter to only groups with 2+ files (single file can't be mixed)
+            const validGroups = Array.from(groups.values()).filter(group => group.length >= 2);
+
+            if (validGroups.length === 0) {
+                console.warn('[MultiProcess] No valid groups found for mixing (each group needs 2+ files)');
+                return results;
+            }
+
+            console.log(`[MultiProcess] Creating summed mono mix for ${validGroups.length} group(s)...`);
+
+            for (let groupIndex = 0; groupIndex < validGroups.length; groupIndex++) {
+                const group = validGroups[groupIndex];
+                const channelCount = group.length;
+                
+                console.log(`[MultiProcess] Mixing group ${groupIndex + 1}/${validGroups.length} (${channelCount} channels)...`);
+
+                try {
+                    // Load all audio buffers for this group
+                    const audioBuffers = await Promise.all(
+                        group.map(async (file) => {
+                            const arrayBuffer = await file.file.arrayBuffer();
+                            return await this.audioEngine.audioCtx.decodeAudioData(arrayBuffer.slice(0));
+                        })
+                    );
+
+                    // Validate all buffers have same duration and sample rate
+                    const firstBuffer = audioBuffers[0];
+                    const sampleRate = firstBuffer.sampleRate;
+                    const duration = firstBuffer.duration;
+                    const length = firstBuffer.length;
+
+                    const allMatch = audioBuffers.every(buf => 
+                        buf.sampleRate === sampleRate && buf.length === length
+                    );
+
+                    if (!allMatch) {
+                        console.error('[MultiProcess] Cannot mix - files have different sample rates or lengths');
+                        results.push({ success: false, error: 'Mismatched sample rates or durations in group' });
+                        continue;
+                    }
+
+                    // Create offline context for rendering
+                    const OfflineAudioContext = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+                    const offlineCtx = new OfflineAudioContext(1, length, sampleRate); // Mono output
+
+                    // Calculate attenuation: 0.9 / √N for safety headroom
+                    const attenuation = 0.9 / Math.sqrt(channelCount);
+                    console.log(`[MultiProcess] Applying attenuation: ${attenuation.toFixed(3)} (${(20 * Math.log10(attenuation)).toFixed(2)} dB) for ${channelCount} channels`);
+
+                    // Create source nodes for each channel with attenuation
+                    for (let i = 0; i < audioBuffers.length; i++) {
+                        const source = offlineCtx.createBufferSource();
+                        source.buffer = audioBuffers[i];
+                        
+                        const gainNode = offlineCtx.createGain();
+                        gainNode.gain.value = attenuation;
+                        
+                        source.connect(gainNode);
+                        gainNode.connect(offlineCtx.destination);
+                        source.start(0);
+                    }
+
+                    // Render the mix
+                    const mixedBuffer = await offlineCtx.startRendering();
+
+                    // Determine bit depth
+                    let bitDepth = 24;
+                    if (options.outputBitDepth !== 'same') {
+                        bitDepth = options.outputBitDepth === '32f' ? 32 : parseInt(options.outputBitDepth);
+                    } else {
+                        bitDepth = group[0].metadata.bitDepth || 24;
+                    }
+
+                    // Create output filename: SceneTake_mix.wav
+                    const baseMetadata = group[0].metadata;
+                    const scene = baseMetadata.scene || 'Scene';
+                    const take = baseMetadata.take || 'Take';
+                    const baseFileName = `${scene}${take}_mix.wav`;
+                    const fileName = await this.getUniqueFileName(options.outputDirHandle, baseFileName);
+
+                    // Prepare metadata (inherit from first file in group)
+                    const mixMetadata = {
+                        ...baseMetadata,
+                        channels: 1,
+                        trackNames: ['Mix'],
+                        bitDepth: bitDepth,
+                        filename: fileName,
+                        isMixExport: true // Flag for metadata regeneration
+                    };
+
+                    // Create WAV file with metadata
+                    const originalBuffer = await group[0].file.arrayBuffer();
+                    const wavBuffer = this.audioProcessor.createWavFile(
+                        mixedBuffer, 
+                        bitDepth, 
+                        originalBuffer, 
+                        mixMetadata
+                    );
+
+                    const blob = new Blob([wavBuffer], { type: 'audio/wav' });
+
+                    // Save file
+                    const fileHandle = await options.outputDirHandle.getFileHandle(fileName, { create: true });
+                    const writable = await fileHandle.createWritable();
+                    await writable.write(blob);
+                    await writable.close();
+
+                    // Parse and create file object
+                    const newFile = await fileHandle.getFile();
+                    const metadata = await this.metadataHandler.parseFile(newFile);
+                    const fileObj = {
+                        handle: fileHandle,
+                        metadata: metadata,
+                        file: newFile,
+                        isGroup: false,
+                        mixGroup: group // Store reference to source files for combining
+                    };
+
+                    this.files.push(fileObj);
+                    results.push({ success: true, fileObj, sourceGroup: group });
+
+                    console.log(`[MultiProcess] Created mix: ${fileName}`);
+
+                } catch (err) {
+                    console.error(`[MultiProcess] Mix creation failed for group ${groupIndex + 1}:`, err);
+                    results.push({ success: false, error: err.message });
+                }
+            }
+
+            console.log(`[MultiProcess] Successfully created ${results.filter(r => r.success).length} mix file(s)`);
+            return results;
+
+        } catch (err) {
+            console.error('[MultiProcess] Create Summed Mix failed:', err);
+            return results;
+        }
+    }
+
+    async mpCombineToPoly(fileList, options, mixFiles = null) {
+        // Validate we have at least 2 files (or 1 if we have a mix to prepend)
+        if (!mixFiles && fileList.length < 2) {
             console.warn('[MultiProcess] Cannot combine - need at least 2 files');
             return { success: false, error: 'Need at least 2 files to combine' };
         }
@@ -5424,28 +5635,60 @@ class App {
 
             console.log(`[MultiProcess] Found ${validGroups.length} group(s) to combine (${fileList.length} total files)`);
 
+            // Create a map of mixFiles by their source group for quick lookup
+            const mixFileMap = new Map();
+            if (mixFiles && mixFiles.length > 0) {
+                mixFiles.forEach(mixResult => {
+                    if (mixResult.success && mixResult.sourceGroup) {
+                        // Use same key as groups (TC Start + audioDataSize from first file)
+                        const firstFile = mixResult.sourceGroup[0];
+                        const key = `${firstFile.metadata.tcStart}_${firstFile.metadata.audioDataSize}`;
+                        mixFileMap.set(key, mixResult.fileObj);
+                    }
+                });
+            }
+
             // Process each group and collect results
             const createdFiles = [];
 
             for (let groupIndex = 0; groupIndex < validGroups.length; groupIndex++) {
                 const group = validGroups[groupIndex];
-                console.log(`[MultiProcess] Combining group ${groupIndex + 1}/${validGroups.length} (${group.length} files)...`);
+                
+                // Check if there's a mix file for this group
+                const firstFile = group[0];
+                const groupKey = `${firstFile.metadata.tcStart}_${firstFile.metadata.audioDataSize}`;
+                const mixFile = mixFileMap.get(groupKey);
+                
+                const hashedChannelCount = mixFile ? group.length + 1 : group.length;
+                console.log(`[MultiProcess] Combining group ${groupIndex + 1}/${validGroups.length} (${hashedChannelCount} channels${mixFile ? ' with mix on Ch 1' : ''})...`);
 
-                // Load all file buffers for this group
-                const fileBuffers = await Promise.all(
-                    group.map(f => f.file.arrayBuffer())
-                );
+                // Prepare arrays for combining
+                const fileBuffers = [];
+                const trackNames = [];
 
-                // Extract track names from metadata
-                const trackNames = group.map((f, i) => {
-                    if (f.metadata.trackNames && f.metadata.trackNames.length > 0) {
-                        return f.metadata.trackNames[0];
+                // If mix file exists, add it first (interleave 0 / Ch 1)
+                if (mixFile) {
+                    const mixBuffer = await mixFile.file.arrayBuffer();
+                    fileBuffers.push(mixBuffer);
+                    trackNames.push('Mix');
+                }
+
+                // Add all original group files
+                for (let i = 0; i < group.length; i++) {
+                    const fileBuffer = await group[i].file.arrayBuffer();
+                    fileBuffers.push(fileBuffer);
+                    
+                    // Extract track name from metadata
+                    const file = group[i];
+                    if (file.metadata.trackNames && file.metadata.trackNames.length > 0) {
+                        trackNames.push(file.metadata.trackNames[0]);
+                    } else {
+                        trackNames.push(`Ch${mixFile ? i + 2 : i + 1}`);
                     }
-                    return `Ch${i + 1}`;
-                });
+                }
 
-                // Use first file's metadata as base
-                const baseMetadata = group[0].metadata;
+                // Use first file's metadata as base (or mix file if present)
+                const baseMetadata = mixFile ? mixFile.metadata : group[0].metadata;
 
                 // Combine audio files using existing audioProcessor method
                 const combinedBlob = await this.audioProcessor.combineToPolyphonic(
@@ -5465,7 +5708,7 @@ class App {
                 // Prepare metadata for polyphonic file
                 const polyMetadata = {
                     ...baseMetadata,
-                    channels: group.length,
+                    channels: fileBuffers.length,
                     trackNames: trackNames,
                     bitDepth: bitDepth
                 };
