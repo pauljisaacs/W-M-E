@@ -1535,7 +1535,7 @@ class App {
         // Highlight files that need iXML repair
         if (metadata.needsIXMLRepair) {
             tr.style.color = '#ff6b6b'; // Red text for files needing repair
-            tr.title = 'This file has an incomplete or corrupted iXML chunk and needs repair';
+            tr.title = 'This file has an incomplete or missing iXML chunk. Use Repair iXML in Diagnostics to fix it.';
         }
 
         // Make parent rows focusable for keyboard navigation
