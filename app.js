@@ -309,12 +309,23 @@ class App {
         document.getElementById('multi-process-process-btn').addEventListener('click', () => this.handleMultiProcess());
         document.getElementById('mp-choose-csv-btn').addEventListener('click', () => this.handleMPChooseCSV());
         document.getElementById('mp-destination-btn').addEventListener('click', () => this.handleMPChooseDestination());
+        document.getElementById('mp-channel-order-btn').addEventListener('click', () => this.openMPChannelOrderModal());
 
         const multiProcessModal = document.getElementById('multi-process-modal');
         multiProcessModal.querySelector('.modal-close').addEventListener('click', () => this.closeMultiProcessModal());
         multiProcessModal.addEventListener('click', (e) => {
             if (e.target.id === 'multi-process-modal') {
                 this.closeMultiProcessModal();
+            }
+        });
+
+        // Multi-Process Channel Order Modal
+        const mpChannelOrderModal = document.getElementById('mp-channel-order-modal');
+        document.getElementById('mp-channel-order-close-btn').addEventListener('click', () => this.closeMPChannelOrderModal());
+        document.getElementById('mp-channel-order-close-btn-footer').addEventListener('click', () => this.closeMPChannelOrderModal());
+        mpChannelOrderModal.addEventListener('click', (e) => {
+            if (e.target.id === 'mp-channel-order-modal') {
+                this.closeMPChannelOrderModal();
             }
         });
 
@@ -2586,7 +2597,7 @@ class App {
         document.getElementById('batch-scene').value = '';
         document.getElementById('batch-take').value = '';
         document.getElementById('batch-project').value = '';
-        document.getElementById('batch-track-names').value = '';
+        document.getElementById('batch-tape').value = '';
         document.getElementById('batch-notes').value = '';
 
         modal.classList.add('active');
@@ -5016,6 +5027,199 @@ class App {
         }
     }
 
+    openMPChannelOrderModal() {
+        // Initialize channel order if not already set
+        if (!this.mpChannelOrder) {
+            this.mpChannelOrder = [];
+        }
+
+        const container = document.getElementById('mp-channel-preview-container');
+        container.innerHTML = '';
+
+        let trackDisplayNames = [];
+        let previewMode = 'none'; // 'none', 'selected-mono', 'sibling-group'
+
+        if (this.selectedIndices.size > 0) {
+            const selectedFiles = Array.from(this.selectedIndices).map(idx => this.files[idx]);
+            
+            // SCENARIO 1: Check if selected files are all individual mono files (pre-conform)
+            const allIndividualMono = selectedFiles.every(f => 
+                f && !f.isGroup && f.metadata && f.metadata.channels === 1
+            );
+
+            if (allIndividualMono && selectedFiles.length >= 2) {
+                // User has selected individual mono files (likely pre-conform)
+                previewMode = 'selected-mono';
+                trackDisplayNames = selectedFiles.map((file, index) => {
+                    // Use filename as identifier (track names may not exist yet)
+                    const filename = file.metadata.filename.replace(/\.[^/.]+$/, '');
+                    return `${filename} (Ch ${index + 1})`;
+                });
+            }
+
+            // SCENARIO 2: Check for existing sibling groups (post-conform or auto-grouped)
+            if (previewMode === 'none') {
+                // Collect all mono files (expand groups if necessary)
+                const monoFiles = [];
+                selectedFiles.forEach(file => {
+                    if (file && file.isGroup && file.siblings) {
+                        // If it's a group, add all its siblings
+                        file.siblings.forEach(sibling => {
+                            if (sibling && sibling.metadata && sibling.metadata.channels === 1) {
+                                monoFiles.push(sibling);
+                            }
+                        });
+                    } else if (file && !file.isGroup && file.metadata && file.metadata.channels === 1) {
+                        // If it's an individual mono file, add it
+                        monoFiles.push(file);
+                    }
+                });
+                
+                if (monoFiles.length >= 2) {
+                    // Group by TC Start + audioDataSize (same logic as combine)
+                    const groups = new Map();
+                    monoFiles.forEach(file => {
+                        const key = `${file.metadata.tcStart}_${file.metadata.audioDataSize}`;
+                        if (!groups.has(key)) {
+                            groups.set(key, []);
+                        }
+                        groups.get(key).push(file);
+                    });
+
+                    // Get first group with 2+ files
+                    const validGroups = Array.from(groups.values()).filter(group => group.length >= 2);
+                    
+                    if (validGroups.length > 0) {
+                        previewMode = 'sibling-group';
+                        const firstGroup = validGroups[0];
+                        
+                        // Extract track names from first group
+                        trackDisplayNames = firstGroup.map((file, index) => {
+                            let trackName = '';
+                            if (file.metadata.trackNames && file.metadata.trackNames.length > 0) {
+                                trackName = file.metadata.trackNames[0];
+                            } else {
+                                // Use filename as fallback
+                                trackName = file.metadata.filename.replace(/\.[^/.]+$/, '');
+                            }
+                            return `${trackName} (Ch ${index + 1})`;
+                        });
+                    }
+                }
+            }
+        }
+
+        // Build UI based on mode
+        let previewHTML;
+        
+        if (previewMode === 'none') {
+            // No valid selection - show helpful message
+            previewHTML = `
+                <div style="padding: 1rem;">
+                    <p style="margin-top: 0; margin-bottom: 1rem; font-weight: 600;">Channel Preview</p>
+                    <div style="padding: 2rem; background: var(--bg-secondary); border-radius: 4px; text-align: center; color: var(--text-muted);">
+                        <p style="margin: 0; color: orange; font-size: 0.95rem;">Select monophonic files (2+) to arrange channel order.</p>
+                    </div>
+                </div>
+            `;
+        } else {
+            // Build draggable list
+            let channelItemsHTML = '';
+            for (let i = 0; i < trackDisplayNames.length; i++) {
+                channelItemsHTML += `
+                    <div class="mp-channel-item" draggable="true" data-channel="${i}" style="padding: 0.75rem; background: var(--bg-primary); border-radius: 4px; cursor: move; display: flex; align-items: center; gap: 0.5rem;">
+                        <span style="font-weight: 600; color: var(--accent-primary);">⋮⋮</span>
+                        <span>${this.escapeHtml(trackDisplayNames[i])}</span>
+                    </div>
+                `;
+            }
+
+            const previewTitle = previewMode === 'selected-mono' 
+                ? 'Channel Preview (from selected files)' 
+                : 'Channel Preview (from first sibling group)';
+
+            const warningBanner = previewMode === 'selected-mono' 
+                ? `<div style="padding: 0.75rem; margin-bottom: 1rem; background: rgba(255, 207, 68, 0.1); border-left: 3px solid #ffcf44; border-radius: 4px; color: #ffcf44; font-size: 0.9em;">
+                       ⚠️ This order will apply to <strong>all groups</strong> created after CSV conform
+                   </div>` 
+                : '';
+
+            previewHTML = `
+                <div style="padding: 1rem;">
+                    <p style="margin-top: 0; margin-bottom: 1rem; font-weight: 600;">${previewTitle}</p>
+                    ${warningBanner}
+                    <div id="mp-channel-list" style="display: flex; flex-direction: column; gap: 0.5rem;">
+                        ${channelItemsHTML}
+                    </div>
+                    <p style="font-size: 0.85rem; margin-top: 1rem; color: var(--text-muted);">Drag to reorder channels. This order will be applied to all groups.</p>
+                </div>
+            `;
+        }
+
+        container.innerHTML = previewHTML;
+
+        // Add drag handlers (only if there are draggable items)
+        if (previewMode !== 'none') {
+            this.setupMPChannelDragHandlers();
+        }
+
+        const modal = document.getElementById('mp-channel-order-modal');
+        modal.classList.add('active');
+    }
+
+    closeMPChannelOrderModal() {
+        const modal = document.getElementById('mp-channel-order-modal');
+        if (modal) {
+            modal.classList.remove('active');
+        }
+    }
+
+    setupMPChannelDragHandlers() {
+        const channelList = document.getElementById('mp-channel-list');
+        if (!channelList) return;
+
+        const items = channelList.querySelectorAll('.mp-channel-item');
+
+        items.forEach(item => {
+            item.addEventListener('dragstart', (e) => {
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/plain', item.dataset.channel);
+                item.classList.add('dragging');
+            });
+
+            item.addEventListener('dragend', (e) => {
+                item.classList.remove('dragging');
+            });
+
+            item.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                const dragging = channelList.querySelector('.mp-channel-item.dragging');
+                if (dragging && dragging !== item) {
+                    const rect = item.getBoundingClientRect();
+                    const midpoint = rect.top + rect.height / 2;
+                    if (e.clientY < midpoint) {
+                        channelList.insertBefore(dragging, item);
+                    } else {
+                        channelList.insertBefore(dragging, item.nextSibling);
+                    }
+                }
+            });
+        });
+    }
+
+    getMPChannelOrder() {
+        // Get current channel order from the modal
+        const channelList = document.getElementById('mp-channel-list');
+        if (!channelList) return null;
+
+        const items = Array.from(channelList.querySelectorAll('.mp-channel-item'));
+        return items.map((item, newIndex) => ({
+            originalIndex: parseInt(item.dataset.channel),
+            newIndex: newIndex
+        }));
+    }
+
     async handleMultiProcess() {
         // Validate at least one process is selected
         const extractAudio = document.getElementById('mp-extract-audio').checked;
@@ -5081,6 +5285,7 @@ class App {
             createSummedMix: document.getElementById('mp-create-mix').checked,
             mixPlacement: document.getElementById('mp-mix-placement').value,
             combineToPoly,
+            channelOrder: combineToPoly ? this.getMPChannelOrder() : null,
             normalize,
             normalizeLevel: normalize ? parseFloat(document.getElementById('mp-normalize-level').value) : -1.0,
             rename,
@@ -5684,6 +5889,32 @@ class App {
                         trackNames.push(file.metadata.trackNames[0]);
                     } else {
                         trackNames.push(`Ch${mixFile ? i + 2 : i + 1}`);
+                    }
+                }
+
+                // Apply custom channel order if provided
+                if (options.channelOrder && options.channelOrder.length > 0) {
+                    const orderedBuffers = [];
+                    const orderedTrackNames = [];
+                    
+                    // If mix file exists, it stays at position 0 (don't reorder it)
+                    const startIdx = mixFile ? 1 : 0;
+                    
+                    options.channelOrder.forEach(orderMap => {
+                        if (startIdx + orderMap.originalIndex < fileBuffers.length) {
+                            orderedBuffers[startIdx + orderMap.newIndex] = fileBuffers[startIdx + orderMap.originalIndex];
+                            orderedTrackNames[startIdx + orderMap.newIndex] = trackNames[startIdx + orderMap.originalIndex];
+                        }
+                    });
+                    
+                    // Replace with ordered arrays
+                    if (mixFile) {
+                        fileBuffers[0] = fileBuffers[0]; // Keep mix at position 0
+                        fileBuffers.splice(1, group.length, ...orderedBuffers.slice(1));
+                        trackNames.splice(1, group.length, ...orderedTrackNames.slice(1));
+                    } else {
+                        fileBuffers.splice(0, group.length, ...orderedBuffers);
+                        trackNames.splice(0, group.length, ...orderedTrackNames);
                     }
                 }
 
@@ -7867,16 +8098,25 @@ class App {
                         max: maxVal,
                         rms: Math.sqrt(sumSquares / monoChannelData.length)
                     };
-                    // Encode as WAV with selected bit depth
-                    const wavBlob = await this.encodeWAV(monoBuffer, bitDepth);
+                    
+                    // Prepare metadata for the mono split file
+                    const splitMetadata = {
+                        ...metadata,
+                        channels: 1,
+                        trackNames: [trackName],
+                        bitDepth: bitDepth
+                    };
+                    
+                    // Create WAV file using audioProcessor
+                    const wavArrayBuffer = this.audioProcessor.createWavFile(monoBuffer, bitDepth, null, splitMetadata);
 
-                    let wavArrayBuffer = await wavBlob.arrayBuffer();
+                    // Convert to mutable copy for chunk injection
+                    let wavBuffer = new Uint8Array(wavArrayBuffer);
 
                     // Add iXML metadata with correct track name
                     if (ixmlString) {
                         const updatedIXML = this.metadataHandler.updateIXMLForMonoTrack(ixmlString, ch, trackName);
-                        wavArrayBuffer = this.metadataHandler.injectIXMLChunk(wavArrayBuffer, updatedIXML);
-
+                        wavBuffer = new Uint8Array(this.metadataHandler.injectIXMLChunk(wavBuffer.buffer, updatedIXML));
                     }
 
                     // Add bEXT metadata - preserve original description fields and update track name
@@ -7901,7 +8141,7 @@ class App {
                         originationTime: metadata.originationTime || '',
                         timeReference: metadata.timeReference || 0
                     };
-                    wavArrayBuffer = this.metadataHandler.injectBextChunk(wavArrayBuffer, bextData);
+                    wavBuffer = new Uint8Array(this.metadataHandler.injectBextChunk(wavBuffer.buffer, bextData));
 
 
                     // Write file to destination
@@ -7912,7 +8152,7 @@ class App {
                     }
                     
                     const writable = await fileHandle.createWritable();
-                    await writable.write(wavArrayBuffer);
+                    await writable.write(wavBuffer);
                     await writable.close();
                 }
                 

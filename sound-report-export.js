@@ -78,9 +78,15 @@ async function exportSoundReportPDF() {
   const { jsPDF } = window.jspdf;
   const headerFields = getSoundReportHeaderValues();
   const { files, maxTracks } = getSoundReportTakeListData();
+  const notesSeperateLine = document.getElementById('report-notes-separate-line')?.checked;
+  
   // Prepare column headers
-  const colHeaders = ['Filename','Scene','Take','TC Start','Duration']
-    .concat(Array.from({length:maxTracks},(_,i)=>`Track ${i+1}`)).concat(['Notes']);
+  let colHeaders = ['Filename','Scene','Take','TC Start','Duration']
+    .concat(Array.from({length:maxTracks},(_,i)=>`Track ${i+1}`));
+  if (!notesSeperateLine) {
+    colHeaders.push('Notes');
+  }
+  
   // Create a temp doc for measuring
   const tempDoc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
   tempDoc.setFontSize(11);
@@ -91,7 +97,9 @@ async function exportSoundReportPDF() {
     let vals = [md.filename||'',md.scene||'',md.take||'',md.tcStart||'',md.duration||''];
     const tracks = md.trackNames||[];
     for (let i=0;i<maxTracks;i++) vals.push(tracks[i]||'');
-    vals.push(md.notes||'');
+    if (!notesSeperateLine) {
+      vals.push(md.notes||'');
+    }
     vals.forEach((v,j) => {
       const w = tempDoc.getTextWidth(String(v)) + 16;
       if (w > colWidths[j]) colWidths[j] = w;
@@ -132,8 +140,6 @@ async function exportSoundReportPDF() {
   colHeaders.forEach((h,j)=>{ doc.setFillColor(220,220,220); doc.rect(x,tableY, colWidths[j],20,'F'); doc.text(h, x+4, tableY+14); x+=colWidths[j]; });
   tableY += 20;
   // Table rows
-  const notesNewline = document.getElementById('report-notes-newline')?.checked;
-  const tracksNewline = document.getElementById('report-tracks-newline')?.checked;
   files.forEach((file, rowIdx) => {
     x = tableX;
     const md = file.metadata;
@@ -144,23 +150,23 @@ async function exportSoundReportPDF() {
     let vals = [md.filename||'',md.scene||'',md.take||'',md.tcStart||'',md.duration||''];
     const tracks = md.trackNames||[];
     for (let i=0;i<maxTracks;i++) vals.push(tracks[i]||'');
-    vals.push(md.notes||'');
+    if (!notesSeperateLine) {
+      vals.push(md.notes||'');
+    }
     vals.forEach((v,j)=>{ doc.setTextColor(30,30,30); doc.text(String(v), x+4, tableY+14, {maxWidth:colWidths[j]-8}); x+=colWidths[j]; });
     tableY += 20;
-    // New line logic
-    if (tracksNewline || notesNewline) {
-      let extra = '';
-      if (tracksNewline) extra += tracks.filter(Boolean).join(' | ');
-      if (tracksNewline && notesNewline) extra += '\n';
-      if (notesNewline) extra += md.notes||'';
-      if (extra) {
-        doc.setFontSize(9);
-        doc.setTextColor(120,120,120);
-        doc.text(extra, tableX+4, tableY+12, {maxWidth:colWidths.reduce((a,b)=>a+b,0)-8});
-        doc.setFontSize(11);
-        doc.setTextColor(30,30,30);
-        tableY += 16;
-      }
+    
+    // Notes on separate line if enabled
+    if (notesSeperateLine && (md.notes||'')) {
+      // Draw notes row with same stripe color as main row
+      if (rowIdx%2===1) doc.setFillColor(240,240,240); else doc.setFillColor(255,255,255);
+      doc.rect(x = tableX, tableY, colWidths.reduce((a,b)=>a+b,0), 20, 'F');
+      doc.setFontSize(9);
+      doc.setTextColor(80,80,80);
+      doc.text('Notes: ' + (md.notes||''), tableX+4, tableY+14, {maxWidth:colWidths.reduce((a,b)=>a+b,0)-8});
+      doc.setFontSize(11);
+      doc.setTextColor(30,30,30);
+      tableY += 20;
     }
   });
   
