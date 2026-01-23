@@ -12,6 +12,7 @@ export class Mixer {
         this.stereoLinks = {}; // Track stereo link state: { 0: true } means channels 0-1 are linked
         this.stereoLinkModes = {}; // 'stereo', 'ms', or undefined (unlinked)
         this.selectedLinkPair = null; // For modal interaction
+        this.msDecoderNodes = {}; // Store MS decoder nodes for each pair
 
         // Automation state
         this.isRecording = false;
@@ -1070,15 +1071,40 @@ export class Mixer {
 
     setPan(idx, val) {
         const ch = this.channels[idx];
-        if (ch.panNode) {
-            ch.panNode.pan.value = val;
-        }
         
-        // Update pan display value
-        const panValueBox = this.container.querySelector(`.pan-value-box[data-idx="${idx}"]`);
-        if (panValueBox) {
-            const displayVal = this.formatPanValue(val);
-            panValueBox.textContent = displayVal;
+        // Check if this channel is part of an MS linked pair
+        const isOddChannelInMSPair = (idx % 2 === 0) && this.stereoLinkModes[idx] === 'ms';
+        const isEvenChannelInMSPair = (idx % 2 === 1) && this.stereoLinkModes[idx - 1] === 'ms';
+        
+        if (isOddChannelInMSPair) {
+            // Odd channel in MS mode: pan controls balance
+            this.updateMSBalance(idx, val);
+            const panValueBox = this.container.querySelector(`.pan-value-box[data-idx="${idx}"]`);
+            if (panValueBox) {
+                panValueBox.textContent = this.formatPanValue(val);
+            }
+        } else if (isEvenChannelInMSPair) {
+            // Even channel in MS mode: pan controls width (0.0 to 2.0)
+            const oddChannelIndex = idx - 1;
+            this.updateMSWidth(oddChannelIndex, val);
+            const panValueBox = this.container.querySelector(`.pan-value-box[data-idx="${idx}"]`);
+            if (panValueBox) {
+                // Display width as percentage (0-200)
+                const width = (val + 1) * 100; // Maps -1→0, 0→100, 1→200
+                panValueBox.textContent = Math.round(width).toString();
+            }
+        } else {
+            // Normal mode: standard stereo panning
+            if (ch.panNode) {
+                ch.panNode.pan.value = val;
+            }
+            
+            // Update pan display value
+            const panValueBox = this.container.querySelector(`.pan-value-box[data-idx="${idx}"]`);
+            if (panValueBox) {
+                const displayVal = this.formatPanValue(val);
+                panValueBox.textContent = displayVal;
+            }
         }
     }
     
@@ -1092,6 +1118,153 @@ export class Mixer {
         } else {
             return `R${Math.round(val * 100)}`; // Right percentage
         }
+    }
+
+    createMSDecoder(oddChannelIndex) {
+        // Create MS decoder audio graph for a channel pair
+        const evenChannelIndex = oddChannelIndex + 1;
+        const oddCh = this.channels[oddChannelIndex];
+        const evenCh = this.channels[evenChannelIndex];
+
+        if (!oddCh || !evenCh || !this.audioCtx) return null;
+
+        // Disconnect existing routing
+        if (oddCh.analyserNode && oddCh.panNode) {
+            oddCh.analyserNode.disconnect();
+        }
+        if (evenCh.analyserNode && evenCh.panNode) {
+            evenCh.analyserNode.disconnect();
+        }
+
+        // Create MS decoder nodes
+        // M and S signals go through splitters to create L and R
+        const mSplitter = this.audioCtx.createChannelSplitter(1);
+        const sSplitter = this.audioCtx.createChannelSplitter(1);
+
+        // Gains for MS matrix: L = (M + w·S)/√2, R = (M - w·S)/√2
+        const sqrt2 = Math.sqrt(2);
+        const mToLGain = this.audioCtx.createGain();
+        const mToRGain = this.audioCtx.createGain();
+        const sToLGain = this.audioCtx.createGain();
+        const sToRGain = this.audioCtx.createGain();
+
+        mToLGain.gain.value = 1 / sqrt2;
+        mToRGain.gain.value = 1 / sqrt2;
+        sToLGain.gain.value = 1 / sqrt2; // Will be adjusted by width
+        sToRGain.gain.value = -1 / sqrt2; // Negative for R channel, will be adjusted by width
+
+        // Merger to combine M±S into stereo
+        const lMerger = this.audioCtx.createChannelMerger(2);
+        const rMerger = this.audioCtx.createChannelMerger(2);
+        
+        // Final merger to create stereo output
+        const stereoMerger = this.audioCtx.createChannelMerger(2);
+
+        // Balance panner (from M channel pan control)
+        const balancePanner = this.audioCtx.createStereoPanner();
+        balancePanner.pan.value = oddCh.panNode.pan.value;
+
+        // Connect MS matrix:
+        // M (odd channel): analyser → splitter → gains → mergers → stereo → balance → master
+        oddCh.analyserNode.connect(mSplitter);
+        mSplitter.connect(mToLGain, 0);
+        mSplitter.connect(mToRGain, 0);
+
+        // S (even channel): analyser → splitter → gains → mergers → stereo → balance → master
+        evenCh.analyserNode.connect(sSplitter);
+        sSplitter.connect(sToLGain, 0);
+        sSplitter.connect(sToRGain, 0);
+
+        // Combine M+S for L channel and M-S for R channel
+        mToLGain.connect(lMerger, 0, 0);
+        sToLGain.connect(lMerger, 0, 1);
+        
+        mToRGain.connect(rMerger, 0, 0);
+        sToRGain.connect(rMerger, 0, 1);
+
+        // Merge L and R into stereo
+        lMerger.connect(stereoMerger, 0, 0);
+        rMerger.connect(stereoMerger, 0, 1);
+
+        // Apply balance and route to master
+        stereoMerger.connect(balancePanner);
+        balancePanner.connect(this.masterGain);
+
+        // Store decoder nodes
+        return {
+            mSplitter,
+            sSplitter,
+            mToLGain,
+            mToRGain,
+            sToLGain,
+            sToRGain,
+            lMerger,
+            rMerger,
+            stereoMerger,
+            balancePanner
+        };
+    }
+
+    destroyMSDecoder(oddChannelIndex) {
+        // Remove MS decoder and restore normal routing
+        const evenChannelIndex = oddChannelIndex + 1;
+        const oddCh = this.channels[oddChannelIndex];
+        const evenCh = this.channels[evenChannelIndex];
+        const decoder = this.msDecoderNodes[oddChannelIndex];
+
+        if (!decoder || !oddCh || !evenCh) return;
+
+        // Disconnect all MS decoder nodes
+        try {
+            decoder.mSplitter.disconnect();
+            decoder.sSplitter.disconnect();
+            decoder.mToLGain.disconnect();
+            decoder.mToRGain.disconnect();
+            decoder.sToLGain.disconnect();
+            decoder.sToRGain.disconnect();
+            decoder.lMerger.disconnect();
+            decoder.rMerger.disconnect();
+            decoder.stereoMerger.disconnect();
+            decoder.balancePanner.disconnect();
+        } catch (e) {
+            console.error('Error disconnecting MS decoder:', e);
+        }
+
+        // Restore normal routing: analyser → pan → master
+        if (oddCh.analyserNode && oddCh.panNode) {
+            oddCh.analyserNode.connect(oddCh.panNode);
+            oddCh.panNode.connect(this.masterGain);
+        }
+        if (evenCh.analyserNode && evenCh.panNode) {
+            evenCh.analyserNode.connect(evenCh.panNode);
+            evenCh.panNode.connect(this.masterGain);
+        }
+
+        // Remove from storage
+        delete this.msDecoderNodes[oddChannelIndex];
+    }
+
+    updateMSWidth(oddChannelIndex, widthPanValue) {
+        // Convert pan value (-1 to 1) to width (0 to 2)
+        // Pan -1 (fully left) = width 0, Pan 0 (center) = width 1, Pan 1 (fully right) = width 2
+        const width = widthPanValue + 1; // Maps -1→0, 0→1, 1→2
+
+        const decoder = this.msDecoderNodes[oddChannelIndex];
+        if (!decoder) return;
+
+        const sqrt2 = Math.sqrt(2);
+        
+        // Update S channel gains with width parameter
+        decoder.sToLGain.gain.value = width / sqrt2;
+        decoder.sToRGain.gain.value = -width / sqrt2;
+    }
+
+    updateMSBalance(oddChannelIndex, balancePanValue) {
+        // Update the balance panner from M channel pan control
+        const decoder = this.msDecoderNodes[oddChannelIndex];
+        if (!decoder) return;
+
+        decoder.balancePanner.pan.value = balancePanValue;
     }
 
     toggleStereoLink(oddChannelIndex) {
@@ -1171,7 +1344,27 @@ export class Mixer {
         if (mode === 'unlinked') {
             this.stereoLinks[oddChannelIndex] = false;
             delete this.stereoLinkModes[oddChannelIndex];
+            
+            // Destroy MS decoder if it exists
+            if (this.msDecoderNodes[oddChannelIndex]) {
+                this.destroyMSDecoder(oddChannelIndex);
+            }
+            
+            // Refresh even channel pan display to show standard L/R notation
+            const evenPanValueBox = this.container.querySelector(`.pan-value-box[data-idx="${evenChannelIndex}"]`);
+            if (evenPanValueBox) {
+                const evenPanKnob = this.container.querySelector(`.pan-knob[data-idx="${evenChannelIndex}"]`);
+                if (evenPanKnob) {
+                    const displayVal = this.formatPanValue(parseFloat(evenPanKnob.value));
+                    evenPanValueBox.textContent = displayVal;
+                }
+            }
         } else if (mode === 'stereo') {
+            // Destroy MS decoder if switching from MS mode
+            if (this.msDecoderNodes[oddChannelIndex]) {
+                this.destroyMSDecoder(oddChannelIndex);
+            }
+            
             this.stereoLinks[oddChannelIndex] = true;
             this.stereoLinkModes[oddChannelIndex] = 'stereo';
             linkIcon.classList.add('linked');
@@ -1205,7 +1398,26 @@ export class Mixer {
             this.stereoLinkModes[oddChannelIndex] = 'ms';
             linkIcon.classList.add('ms-linked');
             if (modeLabel) modeLabel.textContent = 'MS';
-            // MS decoding implementation will be added later
+            
+            // Create MS decoder
+            this.msDecoderNodes[oddChannelIndex] = this.createMSDecoder(oddChannelIndex);
+            
+            // Set initial pan values
+            // Odd channel pan = balance (start at center)
+            // Even channel pan = width (start at center = width 1.0)
+            this.setPan(oddChannelIndex, 0);
+            this.setPan(evenChannelIndex, 0);
+            
+            const oddPanKnob = this.container.querySelector(`.pan-knob[data-idx="${oddChannelIndex}"]`);
+            const evenPanKnob = this.container.querySelector(`.pan-knob[data-idx="${evenChannelIndex}"]`);
+            if (oddPanKnob) oddPanKnob.value = 0;
+            if (evenPanKnob) evenPanKnob.value = 0;
+            
+            // Update pan labels to show function
+            const oddPanLabel = this.container.querySelector(`.pan-value-box[data-idx="${oddChannelIndex}"]`);
+            const evenPanLabel = this.container.querySelector(`.pan-value-box[data-idx="${evenChannelIndex}"]`);
+            if (oddPanLabel) oddPanLabel.textContent = 'C'; // Balance
+            if (evenPanLabel) evenPanLabel.textContent = '100'; // Width (1.0 * 100)
         }
     }
 

@@ -1132,6 +1132,10 @@ class App {
 
     isEditingText(element) {
         // Check if the user is typing in an input, textarea, select, or contenteditable element
+        // Exclude range inputs (sliders) since they shouldn't block keyboard shortcuts
+        if (element.tagName === 'INPUT' && element.type === 'range') {
+            return false;
+        }
         return element.tagName === 'INPUT' ||
             element.tagName === 'TEXTAREA' ||
             element.tagName === 'SELECT' ||
