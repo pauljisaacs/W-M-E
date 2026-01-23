@@ -60,6 +60,21 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('about-modal').classList.remove('active');
     });
 
+    // Stereo Link Mode Modal
+    document.getElementById('stereo-link-close-btn').addEventListener('click', () => {
+        document.getElementById('stereo-link-mode-modal').classList.remove('active');
+    });
+    document.getElementById('stereo-link-cancel-btn').addEventListener('click', () => {
+        document.getElementById('stereo-link-mode-modal').classList.remove('active');
+    });
+    document.getElementById('stereo-link-ok-btn').addEventListener('click', () => {
+        const selectedMode = document.querySelector('input[name="stereo-link-mode"]:checked').value;
+        if (window.app && window.app.mixer) {
+            window.app.mixer.applyStereoLinkMode(selectedMode);
+        }
+        document.getElementById('stereo-link-mode-modal').classList.remove('active');
+    });
+
     // Dynamically load version from manifest.json
     fetch('manifest.json')
         .then(response => response.json())
@@ -1882,6 +1897,14 @@ class App {
         // Enable save button
         document.getElementById('batch-save-btn').disabled = false;
         
+        // Refresh mixer if trackNames were updated and this file is currently loaded
+        if (key === 'trackNames' && this.currentlyLoadedFileIndex === index) {
+            const item = this.files[index];
+            const trackNames = item.metadata.trackNames;
+            this.mixer.buildUI(item.metadata.channels || 1, trackNames);
+            this.resetFaderHeights();
+        }
+        
         // Trigger auto-save if enabled
         if (this.autoSaveEnabled) {
             this.scheduleAutoSave();
@@ -2502,11 +2525,11 @@ class App {
                     <div class="sidebar-take-details">
                         ${metadata.scene ? `<div class="sidebar-detail-row">
                             <span class="sidebar-detail-label">Scene:</span>
-                            <span class="sidebar-detail-value">${this.escapeHtml(metadata.scene)}</span>
+                            <span class="sidebar-detail-value editable-field" data-field="scene" data-file-index="${isChild ? parentIndex : index}">${this.escapeHtml(metadata.scene)}</span>
                         </div>` : ''}
                         ${metadata.take ? `<div class="sidebar-detail-row">
                             <span class="sidebar-detail-label">Take:</span>
-                            <span class="sidebar-detail-value">${this.escapeHtml(metadata.take)}</span>
+                            <span class="sidebar-detail-value editable-field" data-field="take" data-file-index="${isChild ? parentIndex : index}">${this.escapeHtml(metadata.take)}</span>
                         </div>` : ''}
                         ${metadata.channels ? `<div class="sidebar-detail-row">
                             <span class="sidebar-detail-label">Channels:</span>
@@ -2528,6 +2551,20 @@ class App {
                             <span class="sidebar-detail-label">TC Start:</span>
                             <span class="sidebar-detail-value">${this.escapeHtml(metadata.tcStart)}</span>
                         </div>` : ''}
+                        ${metadata.fps ? `<div class="sidebar-detail-row">
+                            <span class="sidebar-detail-label">FPS:</span>
+                            <select class="sidebar-fps-select" data-file-index="${isChild ? parentIndex : index}" style="color: var(--text-main); background: var(--bg-primary); border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 3px; padding: 2px 4px; font-size: 0.85rem;">
+                                <option value="">-- Select --</option>
+                                <option value="23.98" ${metadata.fps === '23.98' ? 'selected' : ''}>23.98</option>
+                                <option value="24" ${metadata.fps === '24' ? 'selected' : ''}>24</option>
+                                <option value="25" ${metadata.fps === '25' ? 'selected' : ''}>25</option>
+                                <option value="29.97" ${metadata.fps === '29.97' ? 'selected' : ''}>29.97</option>
+                                <option value="30" ${metadata.fps === '30' ? 'selected' : ''}>30</option>
+                                <option value="50" ${metadata.fps === '50' ? 'selected' : ''}>50</option>
+                                <option value="59.94" ${metadata.fps === '59.94' ? 'selected' : ''}>59.94</option>
+                                <option value="60" ${metadata.fps === '60' ? 'selected' : ''}>60</option>
+                            </select>
+                        </div>` : ''}
                         ${metadata.project ? `<div class="sidebar-detail-row">
                             <span class="sidebar-detail-label">Project:</span>
                             <span class="sidebar-detail-value">${this.escapeHtml(metadata.project)}</span>
@@ -2541,7 +2578,7 @@ class App {
                                 <span class="sidebar-detail-label">Track Names:</span>
                                 <button class="track-names-toggle" data-track-id="${uniqueId}" style="background: none; border: none; cursor: pointer; color: var(--text-secondary); font-size: 0.8em; padding: 0; line-height: 1; transform: rotate(-90deg); transition: transform 0.2s; margin-top: 0.15rem;">▼</button>
                             </div>
-                            <span class="sidebar-detail-value track-names-content" id="track-names-${uniqueId}" style="display: none;">${Array.isArray(metadata.trackNames) ? metadata.trackNames.map(name => this.escapeHtml(name)).join('<br/>') : this.escapeHtml(metadata.trackNames)}</span>
+                            <span class="sidebar-detail-value track-names-content" id="track-names-${uniqueId}" style="display: none;">${Array.isArray(metadata.trackNames) ? metadata.trackNames.map((name, idx) => `<span class="editable-field track-name-item" data-field="trackName" data-track-index="${idx}" data-file-index="${isChild ? parentIndex : index}">${this.escapeHtml(name)}</span>`).join('<br/>') : `<span class="editable-field track-name-item" data-field="trackName" data-track-index="0" data-file-index="${isChild ? parentIndex : index}">${this.escapeHtml(metadata.trackNames)}</span>`}</span>
                         </div>` : ''}
                     </div>
                 </div>
@@ -2560,6 +2597,145 @@ class App {
                 const isHidden = content.style.display === 'none';
                 content.style.display = isHidden ? '' : 'none';
                 btn.style.transform = isHidden ? 'rotate(0deg)' : 'rotate(-90deg)';
+            });
+        });
+
+        // Attach click handlers for editable scene field
+        sidebarContent.querySelectorAll('.editable-field[data-field="scene"]').forEach(field => {
+            field.addEventListener('click', (e) => {
+                if (field.contentEditable === 'true') return; // Already editing
+                field.contentEditable = true;
+                field.focus();
+                // Select all text for easy replacement
+                const range = document.createRange();
+                range.selectNodeContents(field);
+                const selection = window.getSelection();
+                selection.removeAllRanges();
+                selection.addRange(range);
+            });
+
+            field.addEventListener('blur', (e) => {
+                field.contentEditable = false;
+                const newValue = e.target.textContent.trim();
+                const fileIndex = parseInt(field.dataset.fileIndex);
+                const oldValue = this.files[fileIndex].metadata.scene || '';
+                
+                // Only update if value actually changed
+                if (newValue !== oldValue) {
+                    this.updateMetadata(fileIndex, 'scene', newValue);
+                }
+            });
+
+            field.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    e.target.blur();
+                } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    // Restore original value
+                    const fileIndex = parseInt(field.dataset.fileIndex);
+                    field.textContent = this.files[fileIndex].metadata.scene || '';
+                    field.blur();
+                }
+            });
+        });
+
+        // Attach click handlers for editable take field
+        sidebarContent.querySelectorAll('.editable-field[data-field="take"]').forEach(field => {
+            field.addEventListener('click', (e) => {
+                if (field.contentEditable === 'true') return;
+                field.contentEditable = true;
+                field.focus();
+                const range = document.createRange();
+                range.selectNodeContents(field);
+                const selection = window.getSelection();
+                selection.removeAllRanges();
+                selection.addRange(range);
+            });
+
+            field.addEventListener('blur', (e) => {
+                field.contentEditable = false;
+                const newValue = e.target.textContent.trim();
+                const fileIndex = parseInt(field.dataset.fileIndex);
+                const oldValue = this.files[fileIndex].metadata.take || '';
+                
+                if (newValue !== oldValue) {
+                    this.updateMetadata(fileIndex, 'take', newValue);
+                }
+            });
+
+            field.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    e.target.blur();
+                } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    const fileIndex = parseInt(field.dataset.fileIndex);
+                    field.textContent = this.files[fileIndex].metadata.take || '';
+                    field.blur();
+                }
+            });
+        });
+
+        // Attach click handlers for editable track name fields
+        sidebarContent.querySelectorAll('.editable-field[data-field="trackName"]').forEach(field => {
+            field.addEventListener('click', (e) => {
+                if (field.contentEditable === 'true') return;
+                field.contentEditable = true;
+                field.focus();
+                const range = document.createRange();
+                range.selectNodeContents(field);
+                const selection = window.getSelection();
+                selection.removeAllRanges();
+                selection.addRange(range);
+            });
+
+            field.addEventListener('blur', (e) => {
+                field.contentEditable = false;
+                const newValue = e.target.textContent.trim();
+                const fileIndex = parseInt(field.dataset.fileIndex);
+                const trackIndex = parseInt(field.dataset.trackIndex);
+                const trackNames = this.files[fileIndex].metadata.trackNames;
+                const oldValue = Array.isArray(trackNames) ? (trackNames[trackIndex] || '') : (trackNames || '');
+                
+                if (newValue !== oldValue) {
+                    // Update the specific track name in the array
+                    if (Array.isArray(trackNames)) {
+                        const updatedTrackNames = [...trackNames];
+                        updatedTrackNames[trackIndex] = newValue;
+                        this.updateMetadata(fileIndex, 'trackNames', updatedTrackNames);
+                    } else {
+                        this.updateMetadata(fileIndex, 'trackNames', [newValue]);
+                    }
+                }
+            });
+
+            field.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    e.target.blur();
+                } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    const fileIndex = parseInt(field.dataset.fileIndex);
+                    const trackIndex = parseInt(field.dataset.trackIndex);
+                    const trackNames = this.files[fileIndex].metadata.trackNames;
+                    const originalValue = Array.isArray(trackNames) ? (trackNames[trackIndex] || '') : (trackNames || '');
+                    field.textContent = originalValue;
+                    field.blur();
+                }
+            });
+        });
+
+        // Attach change handler for FPS dropdown
+        sidebarContent.querySelectorAll('.sidebar-fps-select').forEach(select => {
+            select.addEventListener('change', (e) => {
+                const newValue = e.target.value;
+                const fileIndex = parseInt(select.dataset.fileIndex);
+                const oldValue = this.files[fileIndex].metadata.fps || '';
+                
+                if (newValue && newValue !== oldValue) {
+                    this.updateMetadata(fileIndex, 'fps', newValue);
+                }
             });
         });
     }
@@ -5174,6 +5350,34 @@ class App {
         }
     }
 
+    showMPProgressBar() {
+        const container = document.getElementById('mp-progress-container');
+        if (container) {
+            container.style.display = 'block';
+            document.getElementById('mp-progress-bar').style.width = '0%';
+            document.getElementById('mp-progress-percent').textContent = '0%';
+            document.getElementById('mp-progress-text').textContent = 'Processing...';
+        }
+    }
+
+    hideMPProgressBar() {
+        const container = document.getElementById('mp-progress-container');
+        if (container) {
+            container.style.display = 'none';
+        }
+    }
+
+    updateMPProgress(currentStep, totalSteps, stepText) {
+        const percentage = Math.round((currentStep / totalSteps) * 100);
+        const progressBar = document.getElementById('mp-progress-bar');
+        const progressPercent = document.getElementById('mp-progress-percent');
+        const progressText = document.getElementById('mp-progress-text');
+        
+        if (progressBar) progressBar.style.width = percentage + '%';
+        if (progressPercent) progressPercent.textContent = percentage + '%';
+        if (progressText) progressText.textContent = stepText;
+    }
+
     setupMPChannelDragHandlers() {
         const channelList = document.getElementById('mp-channel-list');
         if (!channelList) return;
@@ -5313,6 +5517,11 @@ class App {
         let failCount = 0;
         const intermediateFiles = []; // Track intermediate files for cleanup
 
+        // Show progress bar and open modal
+        this.showMPProgressBar();
+        const modal = document.getElementById('multi-process-modal');
+        modal.classList.add('active');
+
         try {
             let selectedFiles = Array.from(this.selectedIndices).map(i => this.files[i]);
 
@@ -5329,6 +5538,7 @@ class App {
             // STEP 1: Extract Audio
             if (options.extractAudio) {
                 console.log('[MultiProcess] Step 1: Extracting Audio...');
+                this.updateMPProgress(1, 5, 'Extracting Audio...');
                 const extractedFiles = await this.mpExtractAudio(selectedFiles, options);
                 successCount += extractedFiles.filter(f => f.success).length;
                 failCount += extractedFiles.filter(f => !f.success).length;
@@ -5346,6 +5556,7 @@ class App {
 
             if (processedFiles.length === 0) {
                 alert('No files available for further processing.');
+                this.hideMPProgressBar();
                 return;
             }
 
@@ -5353,6 +5564,7 @@ class App {
             let mixFiles = null;
             if (options.createSummedMix && processedFiles.length > 1) {
                 console.log('[MultiProcess] Step 2: Creating Summed Mono Mix...');
+                this.updateMPProgress(2, 5, 'Creating Summed Mono Mix...');
                 const mixResults = await this.mpCreateSummedMix(processedFiles, options);
                 successCount += mixResults.filter(f => f.success).length;
                 failCount += mixResults.filter(f => !f.success).length;
@@ -5377,6 +5589,7 @@ class App {
             // STEP 3: Combine to Poly (if enabled and multiple files)
             if (options.combineToPoly && processedFiles.length > 1) {
                 console.log('[MultiProcess] Step 3: Combining to Poly...');
+                this.updateMPProgress(3, 5, 'Combining to Poly...');
                 const combined = await this.mpCombineToPoly(processedFiles, options, mixFiles);
                 if (combined.success) {
                     // Mark previous files as intermediate when Combine runs
@@ -5401,6 +5614,7 @@ class App {
             // STEP 4: Normalize
             if (options.normalize) {
                 console.log('[MultiProcess] Step 4: Normalizing Audio...');
+                this.updateMPProgress(4, 5, 'Normalizing Audio...');
                 const previousFiles = [...processedFiles]; // Save reference to previous files
                 const normalized = await this.mpNormalize(processedFiles, options);
                 successCount += normalized.filter(f => f.success).length;
@@ -5421,6 +5635,7 @@ class App {
             // STEP 5: Rename
             if (options.rename) {
                 console.log('[MultiProcess] Step 5: Renaming Files...');
+                this.updateMPProgress(5, 5, 'Renaming Files...');
                 const previousFiles = [...processedFiles]; // Save reference to previous files
                 const renamed = await this.mpRename(processedFiles, options);
                 successCount += renamed.filter(f => f.success).length;
@@ -5440,6 +5655,7 @@ class App {
             // Clean up intermediate files if not keeping them
             if (!options.keepIntermediateFiles && intermediateFiles.length > 0) {
                 console.log(`[MultiProcess] Cleaning up ${intermediateFiles.length} intermediate file(s)...`);
+                this.updateMPProgress(5, 5, 'Cleaning up intermediate files...');
                 for (const fileObj of intermediateFiles) {
                     try {
                         // Remove from file system
@@ -5473,6 +5689,7 @@ class App {
             alert(`Multi-Process failed: ${err.message}`);
         } finally {
             document.body.style.cursor = 'default';
+            this.hideMPProgressBar();
         }
     }
 

@@ -9,6 +9,9 @@ export class Mixer {
         this.container = null;
         this.masterGain = null;
         this.masterFaderLevel = 1.0; // Master fader default to unity gain
+        this.stereoLinks = {}; // Track stereo link state: { 0: true } means channels 0-1 are linked
+        this.stereoLinkModes = {}; // 'stereo', 'ms', or undefined (unlinked)
+        this.selectedLinkPair = null; // For modal interaction
 
         // Automation state
         this.isRecording = false;
@@ -443,6 +446,26 @@ export class Mixer {
 
             this.container.appendChild(strip);
 
+            // Add stereo link icon after odd-numbered channels (channels 0, 2, 4, 6...)
+            if (i % 2 === 0 && i + 1 < trackCount) {
+                const linkIcon = document.createElement('div');
+                linkIcon.className = 'stereo-link-icon';
+                linkIcon.dataset.pairIndex = i;
+                linkIcon.innerHTML = '🔗';
+                linkIcon.title = `Link channels ${i + 1}-${i + 2} for stereo`;
+                
+                linkIcon.addEventListener('click', () => {
+                    this.openStereoLinkModal(i);
+                });
+                
+                const modeLabel = document.createElement('div');
+                modeLabel.className = 'stereo-link-mode-label';
+                modeLabel.dataset.pairIndex = i;
+                linkIcon.appendChild(modeLabel);
+                
+                this.container.appendChild(linkIcon);
+            }
+
             // Attach name edit listener
             // Professional dB curve mapping for fader
             const gainBox = strip.querySelector('.channel-gain-box');
@@ -469,7 +492,26 @@ export class Mixer {
                 }
             };
             fader.addEventListener('input', (e) => {
-                updateGainBoxAndNode(parseFloat(e.target.value));
+                const sliderVal = parseFloat(e.target.value);
+                updateGainBoxAndNode(sliderVal);
+                
+                // Sync even channel if this is a linked odd channel
+                if (i % 2 === 0 && this.stereoLinks[i]) {
+                    const evenChannelIndex = i + 1;
+                    const evenFader = this.container.querySelector(`.volume-fader[data-idx="${evenChannelIndex}"]`);
+                    const evenGainBox = this.container.querySelector(`.channel-gain-box[data-idx="${evenChannelIndex}"]`);
+                    
+                    if (evenFader) {
+                        evenFader.value = sliderVal;
+                        const db = this.sliderToDb(sliderVal);
+                        if (evenGainBox) {
+                            evenGainBox.textContent = isFinite(db) ? `${db.toFixed(1)} dB` : '-∞ dB';
+                        }
+                        if (this.channels[evenChannelIndex] && this.channels[evenChannelIndex].gainNode) {
+                            this.channels[evenChannelIndex].gainNode.gain.value = this.sliderToGain(sliderVal);
+                        }
+                    }
+                }
             });
             // Initialize gain box and node
             updateGainBoxAndNode(parseFloat(fader.value));
@@ -1049,6 +1091,121 @@ export class Mixer {
             return `L${Math.round(Math.abs(val) * 100)}`; // Left percentage
         } else {
             return `R${Math.round(val * 100)}`; // Right percentage
+        }
+    }
+
+    toggleStereoLink(oddChannelIndex) {
+        const evenChannelIndex = oddChannelIndex + 1;
+        const linkIcon = this.container.querySelector(`.stereo-link-icon[data-pair-index="${oddChannelIndex}"]`);
+        
+        if (!linkIcon) return;
+        
+        if (this.stereoLinks[oddChannelIndex]) {
+            // Unlink
+            this.stereoLinks[oddChannelIndex] = false;
+            delete this.stereoLinkModes[oddChannelIndex];
+            linkIcon.classList.remove('linked', 'ms-linked');
+        } else {
+            // Link - set up stereo pair
+            this.stereoLinks[oddChannelIndex] = true;
+            this.stereoLinkModes[oddChannelIndex] = 'stereo';
+            linkIcon.classList.add('linked');
+            
+            // Get the current fader value from odd channel
+            const oddFader = this.container.querySelector(`.volume-fader[data-idx="${oddChannelIndex}"]`);
+            const evenFader = this.container.querySelector(`.volume-fader[data-idx="${evenChannelIndex}"]`);
+            
+            if (oddFader && evenFader) {
+                // Set even channel's gain to match odd channel
+                evenFader.value = oddFader.value;
+                const db = this.sliderToDb(parseFloat(oddFader.value));
+                const gainBox = this.container.querySelector(`.channel-gain-box[data-idx="${evenChannelIndex}"]`);
+                if (gainBox) {
+                    gainBox.textContent = isFinite(db) ? `${db.toFixed(1)} dB` : '-∞ dB';
+                }
+                if (this.channels[evenChannelIndex] && this.channels[evenChannelIndex].gainNode) {
+                    this.channels[evenChannelIndex].gainNode.gain.value = this.sliderToGain(parseFloat(oddFader.value));
+                }
+            }
+            
+            // Set odd channel pan to L100 and even channel pan to R100
+            this.setPan(oddChannelIndex, -1);
+            this.setPan(evenChannelIndex, 1);
+            
+            // Update pan knobs
+            const oddPanKnob = this.container.querySelector(`.pan-knob[data-idx="${oddChannelIndex}"]`);
+            const evenPanKnob = this.container.querySelector(`.pan-knob[data-idx="${evenChannelIndex}"]`);
+            if (oddPanKnob) oddPanKnob.value = -1;
+            if (evenPanKnob) evenPanKnob.value = 1;
+        }
+    }
+
+    openStereoLinkModal(oddChannelIndex) {
+        this.selectedLinkPair = oddChannelIndex;
+        const modal = document.getElementById('stereo-link-mode-modal');
+        const currentMode = this.stereoLinkModes[oddChannelIndex] || 'unlinked';
+        
+        // Set the radio button to current mode
+        const radios = modal.querySelectorAll('input[name="stereo-link-mode"]');
+        radios.forEach(radio => {
+            radio.checked = radio.value === currentMode;
+        });
+        
+        modal.classList.add('active');
+    }
+
+    applyStereoLinkMode(mode) {
+        if (this.selectedLinkPair === null) return;
+        
+        const oddChannelIndex = this.selectedLinkPair;
+        const evenChannelIndex = oddChannelIndex + 1;
+        const linkIcon = this.container.querySelector(`.stereo-link-icon[data-pair-index="${oddChannelIndex}"]`);
+        const modeLabel = linkIcon ? linkIcon.querySelector('.stereo-link-mode-label') : null;
+        
+        if (!linkIcon) return;
+        
+        // Remove all mode classes and clear label
+        linkIcon.classList.remove('linked', 'ms-linked');
+        if (modeLabel) modeLabel.textContent = '';
+        
+        if (mode === 'unlinked') {
+            this.stereoLinks[oddChannelIndex] = false;
+            delete this.stereoLinkModes[oddChannelIndex];
+        } else if (mode === 'stereo') {
+            this.stereoLinks[oddChannelIndex] = true;
+            this.stereoLinkModes[oddChannelIndex] = 'stereo';
+            linkIcon.classList.add('linked');
+            if (modeLabel) modeLabel.textContent = 'ST';
+            
+            // Sync gains and set panning
+            const oddFader = this.container.querySelector(`.volume-fader[data-idx="${oddChannelIndex}"]`);
+            const evenFader = this.container.querySelector(`.volume-fader[data-idx="${evenChannelIndex}"]`);
+            
+            if (oddFader && evenFader) {
+                evenFader.value = oddFader.value;
+                const db = this.sliderToDb(parseFloat(oddFader.value));
+                const gainBox = this.container.querySelector(`.channel-gain-box[data-idx="${evenChannelIndex}"]`);
+                if (gainBox) {
+                    gainBox.textContent = isFinite(db) ? `${db.toFixed(1)} dB` : '-∞ dB';
+                }
+                if (this.channels[evenChannelIndex] && this.channels[evenChannelIndex].gainNode) {
+                    this.channels[evenChannelIndex].gainNode.gain.value = this.sliderToGain(parseFloat(oddFader.value));
+                }
+            }
+            
+            this.setPan(oddChannelIndex, -1);
+            this.setPan(evenChannelIndex, 1);
+            
+            const oddPanKnob = this.container.querySelector(`.pan-knob[data-idx="${oddChannelIndex}"]`);
+            const evenPanKnob = this.container.querySelector(`.pan-knob[data-idx="${evenChannelIndex}"]`);
+            if (oddPanKnob) oddPanKnob.value = -1;
+            if (evenPanKnob) evenPanKnob.value = 1;
+        } else if (mode === 'ms') {
+            this.stereoLinks[oddChannelIndex] = true;
+            this.stereoLinkModes[oddChannelIndex] = 'ms';
+            linkIcon.classList.add('ms-linked');
+            if (modeLabel) modeLabel.textContent = 'MS';
+            // MS decoding implementation will be added later
         }
     }
 

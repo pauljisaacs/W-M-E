@@ -815,6 +815,15 @@
 
             </div>
             <div class="modal-footer">
+                <div id="mp-progress-container" style="display: none; width: 100%; margin-bottom: 1rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                        <span id="mp-progress-text" style="font-size: 0.9rem; color: var(--text-secondary);">Processing...</span>
+                        <span id="mp-progress-percent" style="font-size: 0.9rem; font-weight: 600; color: var(--accent-primary);">0%</span>
+                    </div>
+                    <div style="width: 100%; height: 8px; background: var(--bg-secondary); border-radius: 4px; overflow: hidden;">
+                        <div id="mp-progress-bar" style="height: 100%; width: 0%; background: var(--accent-primary); transition: width 0.3s ease; border-radius: 4px;"></div>
+                    </div>
+                </div>
                 <button id="multi-process-exit-btn" class="btn secondary">Close</button>
                 <button id="multi-process-process-btn" class="btn primary">Process</button>
             </div>
@@ -1088,6 +1097,37 @@
         </div>
     </div>
 </div>
+
+<!-- Stereo Link Mode Modal -->
+<div id="stereo-link-mode-modal" class="modal">
+    <div class="modal-content" style="width: 300px;">
+        <div class="modal-header">
+            <h3>Channel Link Mode</h3>
+            <button class="modal-close" id="stereo-link-close-btn">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div style="display: flex; flex-direction: column; gap: 1rem;">
+                <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                    <input type="radio" name="stereo-link-mode" value="unlinked" checked>
+                    <span>Unlinked</span>
+                </label>
+                <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                    <input type="radio" name="stereo-link-mode" value="stereo">
+                    <span>Stereo Linked</span>
+                </label>
+                <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                    <input type="radio" name="stereo-link-mode" value="ms">
+                    <span>MS Linked</span>
+                </label>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button id="stereo-link-ok-btn" class="btn primary">OK</button>
+            <button id="stereo-link-cancel-btn" class="btn secondary">Cancel</button>
+        </div>
+    </div>
+</div>
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="renameUtilities.js"></script>
 <script src="sound-report.js"></script>

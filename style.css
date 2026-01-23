@@ -145,6 +145,39 @@
     text-align: right;
 }
 
+.sidebar-detail-value.editable-field {
+    cursor: text;
+    border-radius: 3px;
+    padding: 2px 4px;
+    margin: -2px -4px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.editable-field.track-name-item {
+    cursor: text;
+    border-radius: 3px;
+    padding: 2px 4px;
+    margin: 0 0 2px 0;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    transition: background-color 0.2s ease, border-color 0.2s ease;
+    display: inline-block;
+    line-height: 1.0;
+}
+
+.sidebar-detail-value.editable-field:hover,
+.editable-field.track-name-item:hover {
+    background-color: rgba(255, 149, 0, 0.1);
+    border-color: rgba(255, 255, 255, 0.3);
+}
+
+.sidebar-detail-value.editable-field[contenteditable="true"],
+.editable-field.track-name-item[contenteditable="true"] {
+    background-color: rgba(255, 149, 0, 0.15);
+    border-color: var(--accent-primary);
+    outline: none;
+}
+
 .track-names-toggle {
     transition: transform 0.2s ease-in-out;
 }
@@ -154,7 +187,7 @@
     margin-top: 0.3rem;
     padding-left: 1rem;
     font-size: 0.8rem;
-    line-height: 1.4;
+    line-height: 1.1;
     color: var(--text-main);
 }
 /* Channel Gain Box */
@@ -853,6 +886,49 @@ td:nth-child(15) {
 .mixer-strips {
     display: flex;
     gap: 1rem;
+}
+
+.stereo-link-icon {
+    width: 0px;
+    min-width: 0px;
+    flex-shrink: 0;
+    font-size: 0.9rem;
+    cursor: pointer;
+    padding: 0px;
+    text-align: center;
+    align-self: flex-start;
+    margin-left: -1.0rem;
+    margin-right: 0.0rem;
+    margin-top: 240px;
+    color: rgba(255, 255, 255, 0.3);
+    user-select: none;
+    transition: color 0.2s ease, transform 0.1s ease;
+}
+
+.stereo-link-icon:hover {
+    color: rgba(255, 255, 255, 0.6);
+    transform: scale(1.1);
+}
+
+.stereo-link-icon.linked {
+    color: #00ff00;
+    filter: drop-shadow(0 0 4px rgb(0, 255, 0));
+}
+
+.stereo-link-icon.ms-linked {
+    color: #ff9900;
+    filter: drop-shadow(0 0 4px rgb(255, 153, 0));
+}
+
+.stereo-link-mode-label {
+    font-size: 0.45rem;
+    line-height: 0.45rem;
+    color: inherit;
+    text-align: center;
+    margin-top: 2px;
+    margin-left: 2px;
+    font-weight: bold;
+    pointer-events: none;
 }
 
 .channel-strip {
