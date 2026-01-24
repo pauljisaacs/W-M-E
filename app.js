@@ -245,6 +245,18 @@ class App {
         document.getElementById('cancel-normalize-btn').addEventListener('click', () => this.closeNormalizeModal());
         document.getElementById('confirm-normalize-btn').addEventListener('click', () => this.applyNormalize());
 
+        // Clamp normalize target input to valid range (-20 to 0)
+        const normalizeTarget = document.getElementById('normalize-target');
+        if (normalizeTarget) {
+            normalizeTarget.addEventListener('change', (e) => {
+                let value = parseFloat(e.target.value);
+                if (!isNaN(value)) {
+                    value = Math.max(-20, Math.min(0, value));
+                    e.target.value = value.toFixed(1);
+                }
+            });
+        }
+
         const normalizeModal = document.getElementById('normalize-modal');
         normalizeModal.querySelector('.modal-close').addEventListener('click', () => this.closeNormalizeModal());
         normalizeModal.addEventListener('click', (e) => {
@@ -1905,8 +1917,19 @@ class App {
         if (key === 'trackNames' && this.currentlyLoadedFileIndex === index) {
             const item = this.files[index];
             const trackNames = item.metadata.trackNames;
+            
+            // Preserve current fader height before rebuild
+            const mixerContainer = document.getElementById('mixer-container');
+            let currentHeight = 100; // Default
+            if (mixerContainer) {
+                const existingFaderContainer = mixerContainer.querySelector('.fader-container');
+                if (existingFaderContainer) {
+                    currentHeight = parseInt(getComputedStyle(existingFaderContainer).height) || 100;
+                }
+            }
+            
             this.mixer.buildUI(item.metadata.channels || 1, trackNames);
-            this.resetFaderHeights();
+            this.resetFaderHeights(currentHeight);
         }
         
         // Trigger auto-save if enabled
@@ -3722,7 +3745,7 @@ class App {
             };
 
             this.mixer.onStateChange = () => {
-                // Mixer state changed (mute/solo), re-render waveform
+                // Mixer solo state changed, refresh waveform to show only soloed channels
                 this.audioEngine.renderWaveform(canvas, buffer, this.mixer.channels, this.cueMarkers, this.selectedCueMarkerId);
             };
 
@@ -3741,11 +3764,21 @@ class App {
                 trackNames = item.metadata.trackNames;
             }
 
+            // Preserve current fader height before rebuild
+            const mixerContainer = document.getElementById('mixer-container');
+            let currentHeight = 100; // Default
+            if (mixerContainer) {
+                const existingFaderContainer = mixerContainer.querySelector('.fader-container');
+                if (existingFaderContainer) {
+                    currentHeight = parseInt(getComputedStyle(existingFaderContainer).height) || 100;
+                }
+            }
+
             // Build mixer UI for this file (reuses existing mixer container)
             this.mixer.buildUI(trackCount, trackNames);
 
-            // Reset fader heights to default after mixer rebuild
-            this.resetFaderHeights();
+            // Restore fader heights after mixer rebuild
+            this.resetFaderHeights(currentHeight);
 
             // Render Waveform (initial)
             this.audioEngine.renderWaveform(canvas, buffer, this.mixer.channels, this.cueMarkers, this.selectedCueMarkerId);
@@ -6778,7 +6811,7 @@ class App {
         }
     }
 
-    openExportModal() {
+    async openExportModal() {
         if (this.selectedIndices.size === 0) return;
         const modalHeader = document.querySelector('#export-modal .modal-header h3');
         
@@ -6797,15 +6830,42 @@ class App {
         const radioBtn = document.querySelector(`input[name="mix-mode"][value="${lastMixMode}"]`);
         if (radioBtn) radioBtn.checked = true;
 
+        // Check if automation exists in selected files' iXML metadata
+        let hasAutomationInFiles = false;
+        const selectedFiles = Array.from(this.selectedIndices).map(i => this.files[i]);
+        
+        for (const item of selectedFiles) {
+            try {
+                const arrayBuffer = await item.file.arrayBuffer();
+                const ixmlString = this.metadataHandler.getIXMLChunk(arrayBuffer);
+                
+                if (ixmlString) {
+                    const mixerData = MixerMetadata.extractFromIXML(ixmlString);
+                    if (mixerData && mixerData.channels && mixerData.channels.length > 0) {
+                        // Check if any channel has automation data
+                        const hasAutoData = mixerData.channels.some(ch =>
+                            ch.automation && (
+                                (ch.automation.volume && ch.automation.volume.length > 0) ||
+                                (ch.automation.pan && ch.automation.pan.length > 0) ||
+                                (ch.automation.mute && ch.automation.mute.length > 0)
+                            )
+                        );
+                        if (hasAutoData) {
+                            hasAutomationInFiles = true;
+                            break;
+                        }
+                    }
+                }
+            } catch (err) {
+                console.error(`Error checking automation in ${item.metadata.filename}:`, err);
+            }
+        }
+
         // Check if automation exists when automation is selected
         document.querySelectorAll('input[name="mix-mode"]').forEach(radio => {
             radio.addEventListener('change', () => {
                 if (radio.value === 'automation') {
-                    const hasAutomation = this.mixer.channels.some(ch =>
-                        ch.automation && ch.automation.volume && ch.automation.volume.length > 0
-                    );
-
-                    if (!hasAutomation) {
+                    if (!hasAutomationInFiles) {
                         alert('No automation data found. Falling back to "Use Current Mix".');
                         document.querySelector('input[name="mix-mode"][value="current"]').checked = true;
                     }

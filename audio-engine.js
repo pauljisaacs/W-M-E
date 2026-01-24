@@ -324,12 +324,11 @@ export class AudioEngine {
 
         // Draw tracks in reverse order so Track 1 (index 0) is on top
         for (let c = channelCount - 1; c >= 0; c--) {
-            // Check visibility
+            // Check visibility - only respect solo state for waveform display
+            // Muted channels still show in the waveform (audio is muted via mixer, not visual)
             if (channelStates[c]) {
-                if (anySolo) {
-                    if (!channelStates[c].isSoloed) continue;
-                } else {
-                    if (channelStates[c].isMuted) continue;
+                if (anySolo && !channelStates[c].isSoloed) {
+                    continue; // Skip non-soloed channels if any are soloed
                 }
             }
 

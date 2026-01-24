@@ -923,16 +923,36 @@ export class Mixer {
 
         // Iterate through all channels to update all automation types
         for (let idx = 0; idx < this.channels.length; idx++) {
+            // Skip even channels in stereo linked pairs - they follow the odd channel's automation
+            const isEvenChannelInLink = (idx % 2 === 1) && this.stereoLinks[idx - 1];
+            
             // Volume automation
             const recorder = this.automationRecorders[idx];
             if (!this.isTouchingFader[idx] || !recorder.isArmed) {
                 const volumeVal = this.automationPlayers[idx].getValue(currentTime);
                 if (volumeVal !== null && isFinite(volumeVal)) {
-                    this.setVolume(idx, volumeVal, true);
+                    let effectiveVal = volumeVal;
+                    
+                    // If even channel in stereo link, use odd channel's automation value
+                    if (isEvenChannelInLink) {
+                        const oddChannelIndex = idx - 1;
+                        const oddVolumeVal = this.automationPlayers[oddChannelIndex].getValue(currentTime);
+                        if (oddVolumeVal !== null && isFinite(oddVolumeVal)) {
+                            effectiveVal = oddVolumeVal;
+                        }
+                    }
+                    
+                    this.setVolume(idx, effectiveVal, true);
                     // Update volume fader UI
                     const volumeFader = this.container.querySelector(`.volume-fader[data-idx="${idx}"]`);
-                    if (volumeFader && Math.abs(volumeFader.value - volumeVal) > 0.01) {
-                        volumeFader.value = volumeVal;
+                    if (volumeFader && Math.abs(volumeFader.value - effectiveVal) > 0.01) {
+                        volumeFader.value = effectiveVal;
+                    }
+                    // Update gain box display
+                    const gainBox = this.container.querySelector(`.channel-gain-box[data-idx="${idx}"]`);
+                    if (gainBox) {
+                        const db = this.sliderToDb(effectiveVal);
+                        gainBox.textContent = isFinite(db) ? `${db.toFixed(1)} dB` : '-∞ dB';
                     }
                 }
             }
@@ -967,7 +987,7 @@ export class Mixer {
                         }
                     }
                     this.updateGains();
-                    if (this.onStateChange) this.onStateChange();
+                    // Don't call onStateChange for automation mute - muting doesn't affect waveform visibility
                 }
             }
         }
@@ -1448,7 +1468,7 @@ export class Mixer {
         }
 
         this.updateGains();
-        if (this.onStateChange) this.onStateChange();
+        // Don't call onStateChange for mute - muting doesn't affect waveform visibility anymore
         
         // Update Mute All button state
         this.updateMuteAllButtonState();
@@ -1465,6 +1485,7 @@ export class Mixer {
         }
 
         this.updateGains();
+        // Call onStateChange for solo - solo DOES affect waveform visibility
         if (this.onStateChange) this.onStateChange();
     }
 
