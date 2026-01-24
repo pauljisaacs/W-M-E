@@ -236,6 +236,11 @@ export class Mixer {
         this.muteAutomationPlayers = [];
         this.isTouchingFader = [];
         this.isTouchingPan = [];
+        
+        // Reset stereo link state when rebuilding mixer
+        this.stereoLinks = {};
+        this.stereoLinkModes = {};
+        this.msDecoderNodes = {};
 
         // Create Master Fader Strip
         const masterStrip = document.createElement('div');
@@ -440,8 +445,8 @@ export class Mixer {
                 </div>
                 <div class="channel-gain-box" data-idx="${i}">0.0 dB</div>
                 <div class="pan-container">
-                    <div class="pan-value-box" data-idx="${i}">${i % 2 === 0 ? 'L50' : 'R50'}</div>
-                    <input type="range" min="-1" max="1" step="0.1" value="${i % 2 === 0 ? -1 : 1}" data-idx="${i}" class="pan-knob" title="Pan">
+                    <div class="pan-value-box" data-idx="${i}">C</div>
+                    <input type="range" min="-1" max="1" step="0.1" value="0" data-idx="${i}" class="pan-knob" title="Pan">
                 </div>
             `;
 
@@ -496,8 +501,8 @@ export class Mixer {
                 const sliderVal = parseFloat(e.target.value);
                 updateGainBoxAndNode(sliderVal);
                 
-                // Sync even channel if this is a linked odd channel
-                if (i % 2 === 0 && this.stereoLinks[i]) {
+                // Sync even channel if this is a stereo-linked odd channel (but not MS-linked)
+                if (i % 2 === 0 && this.stereoLinks[i] && this.stereoLinkModes[i] === 'stereo') {
                     const evenChannelIndex = i + 1;
                     const evenFader = this.container.querySelector(`.volume-fader[data-idx="${evenChannelIndex}"]`);
                     const evenGainBox = this.container.querySelector(`.channel-gain-box[data-idx="${evenChannelIndex}"]`);
@@ -923,8 +928,8 @@ export class Mixer {
 
         // Iterate through all channels to update all automation types
         for (let idx = 0; idx < this.channels.length; idx++) {
-            // Skip even channels in stereo linked pairs - they follow the odd channel's automation
-            const isEvenChannelInLink = (idx % 2 === 1) && this.stereoLinks[idx - 1];
+            // Skip even channels in stereo linked pairs (but not MS pairs) - they follow the odd channel's automation
+            const isEvenChannelInStereoLink = (idx % 2 === 1) && this.stereoLinks[idx - 1] && this.stereoLinkModes[idx - 1] === 'stereo';
             
             // Volume automation
             const recorder = this.automationRecorders[idx];
@@ -934,7 +939,7 @@ export class Mixer {
                     let effectiveVal = volumeVal;
                     
                     // If even channel in stereo link, use odd channel's automation value
-                    if (isEvenChannelInLink) {
+                    if (isEvenChannelInStereoLink) {
                         const oddChannelIndex = idx - 1;
                         const oddVolumeVal = this.automationPlayers[oddChannelIndex].getValue(currentTime);
                         if (oddVolumeVal !== null && isFinite(oddVolumeVal)) {
@@ -1109,9 +1114,9 @@ export class Mixer {
             this.updateMSWidth(oddChannelIndex, val);
             const panValueBox = this.container.querySelector(`.pan-value-box[data-idx="${idx}"]`);
             if (panValueBox) {
-                // Display width as percentage (0-200)
-                const width = (val + 1) * 100; // Maps -1→0, 0→100, 1→200
-                panValueBox.textContent = Math.round(width).toString();
+                // Display width as 0.0 to 2.0 in 0.1 steps
+                const width = (val + 1); // Maps -1→0.0, 0→1.0, 1→2.0
+                panValueBox.textContent = width.toFixed(1);
             }
         } else {
             // Normal mode: standard stereo panning
@@ -1129,14 +1134,15 @@ export class Mixer {
     }
     
     formatPanValue(val) {
-        // val ranges from -1 (left) to 1 (right)
+        // val ranges from -1 (left) to 1 (right), with 0.1 step resolution
+        // Display as L10-L1, C, R1-R10 (dividing by 10 instead of multiplying by 100)
         const absVal = Math.abs(val);
         if (absVal < 0.05) {
             return 'C'; // Center
         } else if (val < 0) {
-            return `L${Math.round(Math.abs(val) * 100)}`; // Left percentage
+            return `L${Math.round(Math.abs(val) * 10)}`; // Left 1-10
         } else {
-            return `R${Math.round(val * 100)}`; // Right percentage
+            return `R${Math.round(val * 10)}`; // Right 1-10
         }
     }
 
@@ -1370,15 +1376,20 @@ export class Mixer {
                 this.destroyMSDecoder(oddChannelIndex);
             }
             
-            // Refresh even channel pan display to show standard L/R notation
+            // Set both channels to center pan
+            this.setPan(oddChannelIndex, 0);
+            this.setPan(evenChannelIndex, 0);
+            
+            const oddPanKnob = this.container.querySelector(`.pan-knob[data-idx="${oddChannelIndex}"]`);
+            const evenPanKnob = this.container.querySelector(`.pan-knob[data-idx="${evenChannelIndex}"]`);
+            if (oddPanKnob) oddPanKnob.value = 0;
+            if (evenPanKnob) evenPanKnob.value = 0;
+            
+            // Update pan display to show centered
+            const oddPanValueBox = this.container.querySelector(`.pan-value-box[data-idx="${oddChannelIndex}"]`);
             const evenPanValueBox = this.container.querySelector(`.pan-value-box[data-idx="${evenChannelIndex}"]`);
-            if (evenPanValueBox) {
-                const evenPanKnob = this.container.querySelector(`.pan-knob[data-idx="${evenChannelIndex}"]`);
-                if (evenPanKnob) {
-                    const displayVal = this.formatPanValue(parseFloat(evenPanKnob.value));
-                    evenPanValueBox.textContent = displayVal;
-                }
-            }
+            if (oddPanValueBox) oddPanValueBox.textContent = 'C';
+            if (evenPanValueBox) evenPanValueBox.textContent = 'C';
         } else if (mode === 'stereo') {
             // Destroy MS decoder if switching from MS mode
             if (this.msDecoderNodes[oddChannelIndex]) {
@@ -1437,7 +1448,7 @@ export class Mixer {
             const oddPanLabel = this.container.querySelector(`.pan-value-box[data-idx="${oddChannelIndex}"]`);
             const evenPanLabel = this.container.querySelector(`.pan-value-box[data-idx="${evenChannelIndex}"]`);
             if (oddPanLabel) oddPanLabel.textContent = 'C'; // Balance
-            if (evenPanLabel) evenPanLabel.textContent = '100'; // Width (1.0 * 100)
+            if (evenPanLabel) evenPanLabel.textContent = '1.0'; // Width (1.0 for normal stereo width)
         }
     }
 

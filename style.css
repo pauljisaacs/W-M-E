@@ -900,7 +900,7 @@ td:nth-child(15) {
     margin-left: -1.0rem;
     margin-right: 0.0rem;
     margin-top: 240px;
-    color: rgba(255, 255, 255, 0.3);
+    color: rgba(255, 255, 255, 0.5);
     user-select: none;
     transition: color 0.2s ease, transform 0.1s ease;
 }
