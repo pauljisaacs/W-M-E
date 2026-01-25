@@ -75,7 +75,6 @@ export class MixerMetadata {
      */
     static parseFromXML(xmlString) {
         try {
-            console.log('XML string length:', xmlString?.length);
             const parser = new DOMParser();
             const xmlDoc = parser.parseFromString(xmlString, 'text/xml');
 
@@ -90,14 +89,12 @@ export class MixerMetadata {
 
             // Look for MIXER_SETTINGS with or without namespace
             let mixerSettings = xmlDoc.querySelector('MIXER_SETTINGS');
-            console.log('querySelector result:', mixerSettings);
             if (!mixerSettings) {
                 // Try with namespace prefix in case it's namespaced
                 mixerSettings = xmlDoc.getElementsByTagName('MIXER_SETTINGS')[0];
-                console.log('getElementsByTagName result:', mixerSettings);
             }
             if (!mixerSettings) {
-                console.error('MIXER_SETTINGS element not found in XML');
+                // No mixer settings found - this is normal for files without saved mixer data
                 return null;
             }
 

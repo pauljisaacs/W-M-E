@@ -119,7 +119,7 @@
             </div>
             <div class="section-content">
                 <div id="region-selector" class="region-selector">
-                    <span class="region-hint">Click and drag = create region. M = add marker. Delete = remove selected marker. Click and drag marker to move it. <,> = skip between markers</span>
+                    <span class="region-hint">Click and drag = create region. M = add marker. Delete = remove selected marker. Click and drag marker to move it. <,> = Skip to next/previous. Double-click marker to name.</span>
                     <div id="region-tooltip" class="region-tooltip" style="display:none;"></div>
                 </div>
                 <div class="waveform-wrapper">
@@ -205,6 +205,21 @@
                             <input type="checkbox" id="apply-tape" class="apply-checkbox">
                             <label for="apply-tape">Tape:</label>
                             <input type="text" id="batch-tape" placeholder="Tape name">
+                        </div>
+
+                        <div class="form-row">
+                            <input type="checkbox" id="apply-fps" class="apply-checkbox">
+                            <label for="apply-fps">FPS:</label>
+                            <select id="batch-fps">
+                                <option value="23.976">23.976</option>
+                                <option value="24">24</option>
+                                <option value="25">25</option>
+                                <option value="29.97">29.97</option>
+                                <option value="30">30</option>
+                                <option value="48">48</option>
+                                <option value="50">50</option>
+                                <option value="60">60</option>
+                            </select>
                         </div>
 
                         <div class="form-row">
@@ -471,11 +486,11 @@
     </div>
 
     <!-- Cue Marker Edit Modal -->
-    <!-- Export TC Range Modal -->
+    <!-- Extract TC Range Modal -->
     <div id="export-tc-range-modal" class="modal">
         <div class="modal-content small-modal">
             <div class="modal-header">
-                <h3>Export Timecode Range</h3>
+                <h3>Extract Timecode Range</h3>
                 <button class="modal-close" id="export-tc-range-close-btn">&times;</button>
             </div>
             <div class="modal-body">
@@ -488,33 +503,12 @@
                     <input type="text" id="export-tc-end" placeholder="HH:MM:SS" value="00:01:00">
                 </div>
                 <div class="input-group">
-                    <label for="export-tc-format">Format:</label>
-                    <select id="export-tc-format">
-                        <option value="wav">WAV</option>
-                        <option value="mp3">MP3</option>
+                    <label for="export-tc-bitdepth">Bit Depth:</label>
+                    <select id="export-tc-bitdepth">
+                        <option value="16">16-bit PCM</option>
+                        <option value="24" selected>24-bit PCM</option>
+                        <option value="32">32-bit Float</option>
                     </select>
-                </div>
-                <div id="export-tc-wav-options" class="format-options">
-                    <div class="input-group">
-                        <label for="export-tc-bitdepth">Bit Depth:</label>
-                        <select id="export-tc-bitdepth">
-                            <option value="16">16-bit PCM</option>
-                            <option value="24" selected>24-bit PCM</option>
-                            <option value="32">32-bit Float</option>
-                        </select>
-                    </div>
-                </div>
-                <div id="export-tc-mp3-options" class="format-options" style="display: none;">
-                    <div class="input-group">
-                        <label for="export-tc-mp3-bitrate">Bitrate:</label>
-                        <select id="export-tc-mp3-bitrate">
-                            <option value="320">320 kbps</option>
-                            <option value="256">256 kbps</option>
-                            <option value="192" selected>192 kbps</option>
-                            <option value="128">128 kbps</option>
-                            <option value="64">64 kbps</option>
-                        </select>
-                    </div>
                 </div>
             </div>
             <div class="modal-footer">

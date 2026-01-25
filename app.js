@@ -310,12 +310,6 @@ class App {
             }
         });
 
-        document.getElementById('export-tc-format').addEventListener('change', (e) => {
-            const format = e.target.value;
-            document.getElementById('export-tc-wav-options').style.display = format === 'wav' ? 'block' : 'none';
-            document.getElementById('export-tc-mp3-options').style.display = format === 'mp3' ? 'block' : 'none';
-        });
-
         // Conform to CSV controls
         document.getElementById('conform-csv-btn').addEventListener('click', () => this.openConformCSVModal());
         document.getElementById('cancel-conform-csv-btn').addEventListener('click', () => this.closeConformCSVModal());
@@ -2903,6 +2897,18 @@ class App {
         if (document.getElementById('apply-tape').checked) {
             updates.tape = document.getElementById('batch-tape').value;
         }
+        if (document.getElementById('apply-fps').checked) {
+            updates.fps = document.getElementById('batch-fps').value;
+            // Also set fpsExact for iXML
+            if (updates.fps === '23.976') {
+                updates.fpsExact = { numerator: 24000, denominator: 1001 };
+            } else if (updates.fps === '29.97') {
+                updates.fpsExact = { numerator: 30000, denominator: 1001 };
+            } else {
+                const fpsNum = parseFloat(updates.fps);
+                updates.fpsExact = { numerator: fpsNum, denominator: 1 };
+            }
+        }
         if (document.getElementById('apply-notes').checked) {
             updates.notes = document.getElementById('batch-notes').value;
         }
@@ -4158,8 +4164,49 @@ class App {
                 
                 blob = new Blob([newWavBuffer.buffer], { type: 'audio/wav' });
             } else {
+                // MP3 export
+                if (typeof lamejs === 'undefined') {
+                    alert('lamejs library not loaded. Please refresh the page.');
+                    document.body.style.cursor = 'default';
+                    return;
+                }
+                
                 const mp3Bitrate = parseInt(document.getElementById('export-tc-mp3-bitrate')?.value || 320);
-                blob = await this.audioProcessor.encodeToMP3(extractedBuffer, mp3Bitrate, exportMetadata);
+                const channels = extractedBuffer.numberOfChannels;
+                const sampleRate = extractedBuffer.sampleRate;
+                const mp3Encoder = new lamejs.Mp3Encoder(channels, sampleRate, mp3Bitrate);
+                const mp3Data = [];
+                
+                // Get channel data
+                const left = extractedBuffer.getChannelData(0);
+                const right = channels > 1 ? extractedBuffer.getChannelData(1) : left;
+                
+                // Process in chunks
+                const sampleBlockSize = 1152;
+                for (let i = 0; i < left.length; i += sampleBlockSize) {
+                    const leftChunk = left.subarray(i, i + sampleBlockSize);
+                    const rightChunk = right.subarray(i, i + sampleBlockSize);
+                    
+                    // Convert float to int16
+                    const leftInt = new Int16Array(leftChunk.length);
+                    const rightInt = new Int16Array(rightChunk.length);
+                    
+                    for (let j = 0; j < leftChunk.length; j++) {
+                        leftInt[j] = leftChunk[j] < 0 ? leftChunk[j] * 0x8000 : leftChunk[j] * 0x7FFF;
+                        rightInt[j] = rightChunk[j] < 0 ? rightChunk[j] * 0x8000 : rightChunk[j] * 0x7FFF;
+                    }
+                    
+                    const mp3buf = channels === 1
+                        ? mp3Encoder.encodeBuffer(leftInt)
+                        : mp3Encoder.encodeBuffer(leftInt, rightInt);
+                    
+                    if (mp3buf.length > 0) mp3Data.push(mp3buf);
+                }
+                
+                const mp3buf = mp3Encoder.flush();
+                if (mp3buf.length > 0) mp3Data.push(mp3buf);
+                
+                blob = new Blob(mp3Data, { type: 'audio/mp3' });
             }
 
             // Get file handle in the directory
@@ -4180,7 +4227,7 @@ class App {
     async handleExportTCRange() {
         const startTimeStr = document.getElementById('export-tc-start').value.trim();
         const endTimeStr = document.getElementById('export-tc-end').value.trim();
-        const format = document.getElementById('export-tc-format').value;
+        const format = 'wav'; // Always export as WAV
 
         // Validate time format
         if (!this.validateTimeFormat(startTimeStr) || !this.validateTimeFormat(endTimeStr)) {
