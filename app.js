@@ -2393,14 +2393,19 @@ class App {
             .filter(f => f && f.isGroup);
         const canUngroup = selectedGroups.length > 0;
         
+        // Check if any selected individual (non-group) files are polyphonic (>1 channel)
+        // Only gray out for individual poly files, not for groups (which can be ungrouped)
+        const selectedFiles = Array.from(this.selectedIndices).map(idx => this.files[idx]);
+        const hasPolySelected = selectedFiles.some(f => f && !f.isGroup && f.metadata && f.metadata.channels > 1);
+        
         const autoGroupBtn = document.getElementById('auto-group-btn');
         if (autoGroupBtn) {
-            autoGroupBtn.disabled = !hasSelection && !hasUngroupedFiles && !canUngroup;
-            autoGroupBtn.textContent = canUngroup ? 'Ungroup Siblings' : 'Auto-Group';
+            autoGroupBtn.disabled = (!hasSelection && !hasUngroupedFiles && !canUngroup) || hasPolySelected;
+            autoGroupBtn.textContent = canUngroup ? 'Ungroup Siblings' : 'Group Siblings';
         }
-        safeSetDisabled('auto-group-btn', !hasSelection && !hasUngroupedFiles && !canUngroup);
+        safeSetDisabled('auto-group-btn', (!hasSelection && !hasUngroupedFiles && !canUngroup) || hasPolySelected);
         
-        safeSetDisabled('diagnostics-btn', !hasSelection);
+        safeSetDisabled('diagnostics-btn', this.selectedIndices.size !== 1 || this.selectedChildren.size > 0);
         safeSetDisabled('corrupt-ixml-modal-btn', this.selectedIndices.size !== 1);
         safeSetDisabled('normalize-btn', !hasSelection);
         safeSetDisabled('rename-btn', !hasSelection);
@@ -5223,6 +5228,9 @@ class App {
         const mixOptions = document.getElementById('mp-mix-options');
         const mixPlacementSelect = document.getElementById('mp-mix-placement');
         const combinePolyCheckbox = document.getElementById('mp-combine-poly');
+        const channelOrderBtn = document.getElementById('mp-channel-order-btn');
+        const combineSection = document.getElementById('mp-combine-section');
+        const combineWarning = document.getElementById('mp-combine-warning');
         
         // Handle Normalize checkbox
         const normalizeCheckbox = document.getElementById('mp-normalize');
@@ -5236,25 +5244,81 @@ class App {
         const tcRangeRadio = document.getElementById('mp-tc-range');
         const conformCSVRadio = document.getElementById('mp-conform-csv');
         
+        // Helper function to check if Combine to Poly should be disabled
+        const checkCombineDisabled = () => {
+            const selectedFiles = Array.from(this.selectedIndices).map(i => this.files[i]);
+            
+            // Condition 1: Any polyphonic files (>1 channel)
+            const hasPolyFiles = selectedFiles.some(f => f.metadata && f.metadata.channels > 1);
+            if (hasPolyFiles) {
+                return true;
+            }
+            
+            // Condition 2: Only 1 monophonic file selected
+            if (selectedFiles.length === 1) {
+                return true;
+            }
+            
+            // Condition 3: Multiple monophonics selected without Extract Audio checked
+            // AND they don't have the same Start TC and duration
+            if (selectedFiles.length > 1 && !extractAudioCheckbox.checked) {
+                const firstFile = selectedFiles[0].metadata;
+                const tcStart = firstFile.tcStart || '00:00:00:00';
+                const duration = firstFile.duration || '00:00:00';
+                
+                const allSame = selectedFiles.every(f => {
+                    const meta = f.metadata;
+                    return (meta.tcStart || '00:00:00:00') === tcStart && 
+                           (meta.duration || '00:00:00') === duration;
+                });
+                
+                if (!allSame) {
+                    return true;
+                }
+            }
+            
+            return false;
+        };
+        
+        // Helper function to update combine controls state
+        const updateCombineState = () => {
+            const shouldDisable = checkCombineDisabled();
+            
+            if (shouldDisable) {
+                combinePolyCheckbox.disabled = true;
+                channelOrderBtn.disabled = true;
+                combineSection.style.opacity = '0.5';
+                combineWarning.style.display = 'block';
+            } else {
+                combinePolyCheckbox.disabled = false;
+                channelOrderBtn.disabled = false;
+                combineSection.style.opacity = '1';
+                combineWarning.style.display = 'none';
+            }
+        };
+        
         // Mix placement change handler
         const handleMixPlacementChange = () => {
             if (createMixCheckbox.checked && mixPlacementSelect.value === 'embed') {
-                // Auto-enable Combine to Poly when embedding mix
-                combinePolyCheckbox.checked = true;
-                combinePolyCheckbox.disabled = true;
-                combinePolyCheckbox.parentElement.style.opacity = '0.7';
-                combinePolyCheckbox.parentElement.title = 'Required for embedding mix';
+                // Auto-enable Combine to Poly when embedding mix (if not disabled)
+                if (!checkCombineDisabled()) {
+                    combinePolyCheckbox.checked = true;
+                    combinePolyCheckbox.disabled = true;
+                    combineSection.style.opacity = '0.7';
+                    combineWarning.style.display = 'none';
+                }
             } else {
-                // Re-enable Combine to Poly
-                combinePolyCheckbox.disabled = false;
-                combinePolyCheckbox.parentElement.style.opacity = '1';
-                combinePolyCheckbox.parentElement.title = '';
+                // Re-evaluate combine state
+                updateCombineState();
             }
         };
         
         // Add event listeners for mix checkbox and placement select
         createMixCheckbox.addEventListener('change', handleMixPlacementChange);
         mixPlacementSelect.addEventListener('change', handleMixPlacementChange);
+        
+        // Add listener for extract audio checkbox to re-evaluate combine state
+        extractAudioCheckbox.addEventListener('change', updateCombineState);
         
         // Extract mode change handler (Rename is always available)
         const handleExtractModeChange = () => {
@@ -5265,6 +5329,20 @@ class App {
             renameCheckbox.parentElement.style.pointerEvents = 'auto';
         };
         
+        // Add change listeners to radio buttons
+        tcRangeRadio.addEventListener('change', handleExtractModeChange);
+        conformCSVRadio.addEventListener('change', handleExtractModeChange);
+        
+        // Initialize state on modal open
+        handleExtractModeChange();
+        handleMixPlacementChange();
+        updateCombineState();
+        
+        // Handle custom field visibility for rename using RenameManager
+        this.renameManager.setupRenameFieldListeners('mp-rename', null);
+        
+        // Note: CSS already handles the disabled state with :not(:checked) ~ selector
+        // This is just for any additional JavaScript-based interactivity if needed
         // Add change listeners to radio buttons
         tcRangeRadio.addEventListener('change', handleExtractModeChange);
         conformCSVRadio.addEventListener('change', handleExtractModeChange);
@@ -5774,6 +5852,7 @@ class App {
         } finally {
             document.body.style.cursor = 'default';
             this.hideMPProgressBar();
+            this.closeMultiProcessModal();
         }
     }
 

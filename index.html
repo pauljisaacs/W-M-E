@@ -93,7 +93,7 @@
             <button id="normalize-btn" class="btn secondary" disabled>Normalize</button>
             <button id="rename-btn" class="btn secondary" disabled>Rename</button>
             <button id="report-btn" class="btn secondary">Report</button>
-            <button id="auto-group-btn" class="btn secondary" disabled>Auto-Group</button>
+            <button id="auto-group-btn" class="btn secondary" disabled>Group Siblings</button>
             <button id="diagnostics-btn" class="btn secondary" disabled>Diagnostics</button>
         </div>
 
@@ -686,7 +686,7 @@
                 </div>
 
                 <!-- Combine to Poly Section -->
-                <div class="mp-section">
+                <div class="mp-section" id="mp-combine-section">
                     <div style="display: flex; align-items: center; gap: 0.75rem;">
                         <label class="mp-checkbox-label" style="margin: 0;">
                             <input type="checkbox" id="mp-combine-poly" class="mp-checkbox">
@@ -694,6 +694,7 @@
                         </label>
                         <button id="mp-channel-order-btn" class="btn secondary small-btn" style="white-space: nowrap;">Channel Order</button>
                     </div>
+                    <p id="mp-combine-warning" style="margin: 0.5rem 0 0 2rem; font-size: 0.85rem; color: var(--text-muted); display: none;">All files must be monophonic and have same Start TC and duration to combine</p>
                 </div>
 
                 <!-- Normalize Section -->

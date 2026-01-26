@@ -548,9 +548,9 @@ td:nth-child(10) {
 /* TC Start column (11th) */
 th[data-column="8"],
 td:nth-child(11) {
-    width: 100px;
-    max-width: 100px;
-    padding: 0.25rem 0.25rem;
+    width: 110px;
+    max-width: 110px;
+    padding: 0.10rem 0.10rem;
 }
 
 /* End TC column (12th) */
@@ -564,8 +564,8 @@ td:nth-child(12) {
 /* FPS column (13th) */
 th[data-column="9"],
 td:nth-child(13) {
-    width: 90px;
-    max-width: 90px;
+    width: 80px;
+    max-width: 80px;
     padding: 0.1rem 0.1rem;
 }
 
@@ -1918,10 +1918,15 @@ select {
     margin-bottom: 1.5rem;
     padding-bottom: 1.5rem;
     border-bottom: 1px solid var(--border-color);
+    transition: opacity 0.2s ease;
 }
 
 .mp-section:last-of-type {
     border-bottom: none;
+}
+
+#mp-combine-section[style*="opacity: 0.5"] {
+    pointer-events: none;
 }
 
 .mp-checkbox-label {
