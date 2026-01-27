@@ -1,0 +1,734 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wave Agent X - User Guide</title>
+    <style>
+        :root {
+            --bg-main: #1e1e1e;
+            --bg-dark: #121212;
+            --bg-panel: #2a2a2a;
+            --text-main: #e0e0e0;
+            --text-muted: #a0a0a0;
+            --accent-primary: #ffcf44;
+            --border-color: #333333;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background-color: var(--bg-main);
+            color: var(--text-main);
+            line-height: 1.6;
+            padding: 2rem;
+        }
+
+        .guide-container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        h1 {
+            font-size: 2rem;
+            color: var(--accent-primary);
+            margin: 0;
+        }
+
+        .close-btn {
+            background: none;
+            border: none;
+            font-size: 1.5rem;
+            color: var(--text-muted);
+            cursor: pointer;
+            padding: 0.5rem;
+            border-radius: 4px;
+            transition: color 0.2s, background-color 0.2s;
+        }
+
+        .close-btn:hover {
+            color: var(--text-main);
+            background-color: var(--bg-panel);
+        }
+
+        h2 {
+            font-size: 1.3rem;
+            color: var(--accent-primary);
+            margin-top: 2rem;
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        h2:first-of-type {
+            margin-top: 0;
+        }
+
+        h3 {
+            font-size: 1.05rem;
+            color: var(--accent-primary);
+            margin: 1.2rem 0 0.6rem 0;
+            font-weight: 600;
+        }
+
+        p {
+            margin-bottom: 0.8rem;
+            color: var(--text-main);
+        }
+
+        strong {
+            color: var(--accent-primary);
+            font-weight: 600;
+        }
+
+        em {
+            color: var(--text-muted);
+            font-style: italic;
+        }
+
+        ul, ol {
+            margin: 0.8rem 0 0.8rem 1.5rem;
+            padding-left: 1rem;
+        }
+
+        li {
+            margin-bottom: 0.4rem;
+            color: var(--text-main);
+        }
+
+        .section {
+            margin-bottom: 2rem;
+            padding: 1rem;
+            background-color: var(--bg-dark);
+            border-radius: 4px;
+            border-left: 3px solid var(--accent-primary);
+        }
+
+        .keyboard-shortcuts {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+
+        .shortcut-item {
+            background-color: var(--bg-panel);
+            padding: 0.75rem;
+            border-radius: 4px;
+            border-left: 2px solid var(--accent-primary);
+        }
+
+        .shortcut-key {
+            font-family: 'Monaco', 'Courier New', monospace;
+            color: var(--accent-primary);
+            font-weight: 600;
+            margin-right: 0.5rem;
+        }
+
+        .shortcut-desc {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+
+        code {
+            background-color: var(--bg-panel);
+            padding: 0.2rem 0.4rem;
+            border-radius: 3px;
+            font-family: 'Monaco', 'Courier New', monospace;
+            color: var(--text-muted);
+            font-size: 0.9em;
+        }
+
+        a {
+            color: var(--accent-primary);
+            text-decoration: none;
+            transition: opacity 0.2s;
+        }
+
+        a:hover {
+            opacity: 0.8;
+            text-decoration: underline;
+        }
+
+        footer {
+            margin-top: 3rem;
+            padding-top: 1rem;
+            border-top: 1px solid var(--border-color);
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+
+        @media (max-width: 768px) {
+            body {
+                padding: 1rem;
+            }
+
+            h1 {
+                font-size: 1.5rem;
+            }
+
+            .keyboard-shortcuts {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Wave Agent X - User Guide</h1>
+        <button class="close-btn" onclick="window.close()" title="Close window">✕</button>
+    </header>
+
+    <div class="guide-container">
+        <h2>Getting Started</h2>
+        <div class="section">
+            <h3>Import Files</h3>
+            <p>Click the <strong>Import</strong> button or drag folders/files into the File List to add audio files to your session. Wave Agent X supports <strong>WAV</strong>, <strong>MP3</strong>, and <strong>AAC</strong> formats with 16, 24, or 32-bit float bit depths.</p>
+            <p>Note that files larger than 2GB may have limited support depending on your browser and system.</p>
+            <p>You can import individual files or entire directories. The app will recursively scan folders and add all compatible audio files. All metadata is preserved during import.</p>
+            
+            <h3>Managing Your Project</h3>
+            <p>Once files are imported, you'll see them in the metadata table below. Select individual files to load them into the waveform and mixer for playback and editing. The app tracks which file is currently loaded and maintains session state across your work.</p>
+            
+            <h3>First Time Setup Tips</h3>
+            <ul>
+                <li>Enable auto-save in the header to automatically save metadata changes</li>
+                <li>Customize your column layout by dragging headers to show the fields you care about most</li>
+                <li>Check the User Guide frequently—Wave Agent X has many features!</li>
+            </ul>
+        </div>
+
+        <h2>Metadata Management</h2>
+        <div class="section">
+            <h3>Understanding Metadata Fields</h3>
+            <p>Wave Agent X manages the following metadata fields:</p>
+            <ul>
+                <li><strong>Filename:</strong> The name of the audio file</li>
+                <li><strong>Project:</strong> Project or production name</li>
+                <li><strong>Tape:</strong> Tape or media identifier</li>
+                <li><strong>Channels:</strong> Number of audio channels (read-only)</li>
+                <li><strong>Bit Depth:</strong> Audio bit depth in bits (read-only)</li>
+                <li><strong>Sample Rate:</strong> Sample rate in Hz (read-only)</li>
+                <li><strong>Format:</strong> Audio format (WAV, MP3, etc.)</li>
+                <li><strong>Scene:</strong> Scene name or identifier</li>
+                <li><strong>Take:</strong> Take number</li>
+                <li><strong>Duration:</strong> File length in time format (read-only)</li>
+                <li><strong>Start TC:</strong> Timecode at file start</li>
+                <li><strong>End TC:</strong> Timecode at file end (read-only)</li>
+                <li><strong>FPS:</strong> Frames per second for timecode</li>
+                <li><strong>File Size:</strong> File size in MB/GB (read-only)</li>
+                <li><strong>Notes:</strong> Notes about the audio file</li>
+            </ul>
+
+            <h3>Editing Metadata</h3>
+            <p>Click on any editable cell in the metadata table to modify it. Changes are auto-saved by default (if enabled). For fields with special formats like timecode, the app will validate your input.</p>
+            <ul>
+                <li>Click once to enter edit mode</li>
+                <li>Press Enter to save and move to the next field</li>
+                <li>Press Escape to cancel editing</li>
+            </ul>
+
+            <h3>Batch Edit Operations</h3>
+            <p>Select multiple files using Ctrl/Cmd+Click or Shift+Click for ranges. Then click <strong>Batch Edit</strong> to open a menu where you can apply changes to all selected files at once:</p>
+            <ul>
+                <li>Check the checkbox for each field you want to modify</li>
+                <li>Enter values that will be applied to all selected files</li>
+                <li>Click OK to apply or Cancel to dismiss</li>
+            </ul>
+
+            <h3>Column Management</h3>
+            <p>You can customize which columns appear and in what order:</p>
+            <ul>
+                <li>Drag column headers to reorder them</li>
+                <li>Your layout is saved in browser storage for the next session</li>
+                <li>Focus on the metadata fields most important to your workflow</li>
+            </ul>
+
+            <h3>Exporting & Saving</h3>
+            <p>Use the <strong>Save</strong> button to manually save metadata to files (when auto-save is disabled). Click <strong>Export</strong> to create and save a stereo or mono mixdown of the selected file(s).</p>
+        </div>
+
+        <h2>Waveform and Playback</h2>
+        <div class="section">
+            <h3>Playback Controls</h3>
+            <p>Select a file from the table and use the playback controls in the Player section:</p>
+            <ul>
+                <li><strong>▶ (Play):</strong> Start playback from the current position</li>
+                <li><strong>⏹ (Stop):</strong> Stop playback and reset to the beginning</li>
+                <li><strong>↻ (Loop):</strong> Toggle loop mode. When looping a region, playback will repeat between the region boundaries</li>
+            </ul>
+
+            <h3>Time Display & Navigation</h3>
+            <p>The time display shows the current playback position in both:</p>
+            <ul>
+                <li><strong>Elapsed Time:</strong> HH:MM:SS.MS format (hours, minutes, seconds, milliseconds)</li>
+                <li><strong>Timecode:</strong> HH:MM:SS:FF format (hours, minutes, seconds, frames) based on the file's FPS setting</li>
+            </ul>
+            <p>Click anywhere on the waveform to jump to that position. The playhead (vertical line) shows your current position in the audio.</p>
+
+            <h3>Waveform Display</h3>
+            <p>The waveform shows the amplitude of each audio channel:</p>
+            <ul>
+                <li>Each channel is color-coded for easy identification</li>
+                <li>Soloing a channel only shows that channel's waveform</li>
+                <li>The amplitude scale on the left shows dBFS levels (-∞ to 0)</li>
+                <li>Muted channels don't affect the waveform display (visual only—use the mixer to control audio)</li>
+                <li>For files larger than 2GB, the waveform display is not available due to browser memory limitations</li>
+            </ul>
+
+            <h3>Creating and Managing Regions</h3>
+            <p>Regions allow you to select a specific portion of audio for export or processing:</p>
+            <ul>
+                <li><strong>Create:</strong> Click and drag on the waveform area (between the time display and waveform)</li>
+                <li><strong>Resize:</strong> Click and drag the left or right edge to adjust boundaries</li>
+                <li><strong>Move:</strong> Click and drag anywhere in the middle of the region to move it</li>
+                <li><strong>Clear:</strong> Click anywhere on the waveform outside the region</li>
+            </ul>
+            <p>The region is highlighted in blue with transparency. When you export audio, if a region is defined, only that section will be exported.</p>
+
+            <h3>Working with Cue Markers</h3>
+            <p>Cue markers help you navigate and mark important points in your audio:</p>
+            <ul>
+                <li><strong>Add Marker:</strong> Press <strong>M</strong> to add a marker at the current playback position</li>
+                <li><strong>Move Marker:</strong> Click and drag a marker on the waveform to relocate it</li>
+                <li><strong>Name Marker:</strong> Double-click a marker to open a dialog where you can name it</li>
+                <li><strong>Delete Marker:</strong> Select a marker (click once) and press Delete</li>
+                <li><strong>Navigate Markers:</strong> Press <strong>&lt;</strong> to jump to the previous marker (or start if there is no previous marker) or <strong>></strong> to jump to the next marker (or end if there is no next marker).</li>
+            </ul>
+            <p>Markers are saved in the file's cue chunk, so they persist between sessions and can be shared with other audio software that supports the cue chunk format. Useful for marking sync points, problem areas, or important phrases.</p>
+
+            <h3>Region vs. Marker Comparison</h3>
+            <p><strong>Regions:</strong> Define a time range (start to end). Used for exporting portions or normalizing specific sections.</p>
+            <p><strong>Markers:</strong> Single points in time. Used for navigation and marking important moments.</p>
+        </div>
+
+        <h2>Channel Mixer</h2>
+        <div class="section">
+            <h3>Understanding the Channel Strips</h3>
+            <p>Each channel in your audio file gets a vertical strip in the mixer with the following controls:</p>
+            <ul>
+                <li><strong>Channel (Track) Name:</strong> Editable</li>
+                <li><strong>Gain Fader:</strong> Vertical slider to control fader gain</li>
+                <li><strong>Pan Knob:</strong> Stereo positioning control</li>
+                <li><strong>VU Meter:</strong> Real-time level display</li>
+                <li><strong>Gain Display:</strong> Shows current gain in dB</li>
+                <li><strong>Mute & Solo Buttons:</strong> M and S buttons for channel monitoring. Soloing a channel only shows that channel's waveform too.</li>
+                <li><strong>Automation Controls:</strong> A (arm) and × (clear) buttons</li>
+            </ul>
+
+            <h3>Gain Control & Gain Structure</h3>
+            <p>Each channel has a gain control that affects the audio master mix output:</p>
+            <ul>
+                <li><strong>0.0 dB:</strong> Unity gain (no change to audio level)</li>
+                <li><strong>Positive dB:</strong> Increases gain (e.g., +6 dB)</li>
+                <li><strong>Negative dB:</strong> Decreases gain (e.g., -12 dB)</li>
+                <li><strong>-∞ dB:</strong> Complete silence (bottom of fader)</li>
+                <li>Drag the fader or double-click to reset to 0.0 dB</li>
+            </ul>
+            <p>The gain field shows current gain in dB. Click to manually enter a gain value.</p>
+
+            <h3>Panning (Stereo Positioning)</h3>
+            <p>The pan knob controls where each channel appears in the stereo field:</p>
+            <ul>
+                <li><strong>C (Center):</strong> Channel is equally in both left and right speakers</li>
+                <li><strong>L1-L10:</strong> Channel is positioned increasingly to the left</li>
+                <li><strong>R1-R10:</strong> Channel is positioned increasingly to the right</li>
+            </ul>
+            <p>Use panning to create stereo imaging or to separate channels. Double-click the pan knob to reset to center.</p>
+
+            <h3>Mute and Solo Controls</h3>
+            <p><strong>Mute Button (M):</strong> Silences the channel completely. Other channels continue to play at their normal levels. Multiple channels can be muted simultaneously.</p>
+            <p><strong>Solo Button (S):</strong> Plays only the soloed channel while muting all others. When you solo a channel, any previously muted channels remain muted. Solo is useful for:</p>
+            <ul>
+                <li>Isolating and listening to a single channel</li>
+                <li>Checking for problems or noise on specific channels</li>
+                <li>Monitoring dialogue or specific instruments</li>
+            </ul>
+
+            <h3>Stereo Linking for Paired Channels</h3>
+            <p>When you have stereo pairs (L/R channels), you can link them for coordinated control:</p>
+            <ul>
+                <li>Click the link icon between odd and even channels (1-2, 3-4, etc.)</li>
+                <li>Choose linking mode in the dialog that appears:</li>
+            </ul>
+            <ul style="margin-left: 2rem;">
+                <li><strong>Linked Mode (L/R):</strong> Standard stereo linking where L and R channels pan symmetrically. Adjusting the L channel fader affects both the L and R channel fader gains.</li>
+                <li><strong>M/S Mode (Mid-Side):</strong> For mid-side encoded stereo. The odd channel fader controls M (mid), the even channel fader controls S (side). Odd channel pan controls LR balance and even channel pan controls stereo width</li>
+            </ul>
+            <p>The link icon shows the current mode. You can unlink channels by clicking the icon again.</p>
+
+            <h3>Automation Recording & Playback</h3>
+            <p>Capture dynamic changes in volume, panning, or muting:</p>
+            <ul>
+                <li><strong>Arm for Recording:</strong> Click the <strong>A</strong> button on a channel to enable automation recording</li>
+                <li><strong>Record Automation:</strong> Start playback and move the faders or pan knobs. All movements are recorded with precise timing</li>
+                <li><strong>Playback:</strong> Once recorded, automation plays back automatically during subsequent playback</li>
+                <li><strong>Clear Automation:</strong> Click the <strong>×</strong> button to delete all recorded automation for that channel</li>
+                <li><strong>Touch-Write Mode:</strong> Automation only records when you're actively touching a control</li>
+            </ul>
+            <p><strong>Workflow example:</strong> Create a smooth fade-out by arming the channel, playing back the audio, and gradually moving the volume fader down during the last 5 seconds. The automation will repeat exactly on subsequent playbacks.</p>
+
+            <h3>VU Meters</h3>
+            <p>The vertical meter next to each fader provides real-time level monitoring:</p>
+            <ul>
+                <li>Shows peak levels during playback</li>
+                <li>Helps you identify clipping or distortion</li>
+                <li>Displays the signal chain: Input → Gain → Meter → Pan → Output</li>
+            </ul>
+
+            <h3>Master Channel</h3>
+            <p>The master strip on the far left controls the overall output level of all channels combined. Always keep the master at a reasonable level to prevent clipping.</p>
+        </div>
+
+        <h2>File Operations</h2>
+        <div class="section">
+            <h3>Normalize Audio</h3>
+            <p>Normalize adjusts the volume of audio files to reach a specific target level:</p>
+            <ul>
+                <li>Select one or more files</li>
+                <li>Click <strong>Normalize</strong> to open the normalization dialog</li>
+                <li>Set the target level (default: -1.0 dBFS, standard for broadcast)</li>
+                <li>Choose to normalize the entire file or a selected region</li>
+            </ul>
+            <p><strong>Use case:</strong> When you have multiple takes at different recording levels, normalization brings them all to the same loudness for consistency.</p>
+
+            <h3>Rename Files Batch</h3>
+            <p>Rename multiple files using metadata templates:</p>
+            <ul>
+                <li>Select files to rename</li>
+                <li>Click <strong>Rename</strong> to open the rename dialog</li>
+                <li>Choose or create a naming pattern using metadata fields</li>
+                <li>Preview the new names before applying</li>
+            </ul>
+            <p><strong>Example templates:</strong></p>
+            <ul>
+                <li><code>[Project]_[Scene]_[Take]</code> → MyMovie_S01_T01</li>
+                <li><code>[Tape]_[StartTC]</code> → Tape01_001030000</li>
+            </ul>
+
+            <h3>Export Audio</h3>
+            <p>Save your processed audio with metadata preserved:</p>
+            <ul>
+                <li>If a region is selected, only that section exports</li>
+                <li>Choose output format and settings</li>
+                <li>All metadata is embedded in the exported file</li>
+                <li>Automation is not applied to exports—use the mixer settings instead</li>
+            </ul>
+
+            <h3>Group Siblings</h3>
+            <p>Organize related files (multi-track takes from the same scene):</p>
+            <ul>
+                <li>Select files from the same take</li>
+                <li>Click <strong>Group Siblings</strong> to link them</li>
+                <li>Grouped files can be selected and edited as a unit</li>
+                <li>Useful for batch operations on coordinated takes</li>
+            </ul>
+
+            <h3>Combine Files</h3>
+            <p>Merge multiple audio files into a single file:</p>
+            <ul>
+                <li>Select the files you want to combine</li>
+                <li>Click <strong>Combine</strong></li>
+                <li>Choose how files are combined (sequentially or as multi-channel)</li>
+            </ul>
+
+            <h3>Split Files</h3>
+            <p>Break a file into multiple parts at markers or regions:</p>
+            <ul>
+                <li>Create markers at split points</li>
+                <li>Select the file and click <strong>Split</strong></li>
+                <li>New files are created between markers</li>
+            </ul>
+
+            <h3>Conform to CSV</h3>
+            <p>Bulk update metadata from a spreadsheet:</p>
+            <ul>
+                <li>Create a CSV file with columns matching your metadata fields</li>
+                <li>Match files by filename or another unique identifier</li>
+                <li>Click <strong>Conform to CSV</strong> and select your file</li>
+                <li>All matching files get their metadata updated</li>
+            </ul>
+
+            <h3>Extract TC Range</h3>
+            <p>Extract a portion of audio based on timecode range:</p>
+            <ul>
+                <li>Specify start and end timecode</li>
+                <li>The tool extracts only that section and saves it as a new file</li>
+                <li>Useful for pulling specific scenes from longer recordings</li>
+            </ul>
+
+            <h3>Sound Report & Diagnostics</h3>
+            <p>Generate reports about your audio files:</p>
+            <ul>
+                <li><strong>Report:</strong> Creates a summary of all loaded files with their metadata</li>
+                <li><strong>Diagnostics:</strong> Shows detailed technical information and checks for potential issues</li>
+            </ul>
+        </div>
+
+        <h2>Tips & Tricks</h2>
+        <div class="section">
+            <h3>Workflow Optimization</h3>
+            <ul>
+                <li><strong>Use keyboard shortcuts extensively:</strong> Press M, use &lt; and >, arrow keys. These save time over mouse clicking.</li>
+                <li><strong>Customize your column layout:</strong> Show only the metadata fields you actually use in your work. Fewer columns = easier navigation.</li>
+                <li><strong>Batch operations:</strong> Whenever possible, do multiple operations at once with batch edit rather than individually.</li>
+                <li><strong>Save frequently:</strong> While auto-save is convenient, manually save important changes to ensure they're persisted.</li>
+            </ul>
+
+            <h3>Technical Tips</h3>
+            <ul>
+                <li><strong>Offline Operation:</strong> Wave Agent X works completely offline. Your files never leave your computer. Perfect for on-set work or locations without internet.</li>
+                <li><strong>Service Worker Caching:</strong> The first time you load the app, it caches all assets. Subsequent loads are nearly instant. Works even with poor connectivity.</li>
+                <li><strong>Session Persistence:</strong> Your mixer settings, column layout, and recently loaded file are saved in browser storage. Close and reopen the app to resume where you left off.</li>
+                <li><strong>Large Files:</strong> The app handles files up to 2GB. Very large files >2GB won't show waveforms due to browser memory limits, but you can still edit metadata and export.</li>
+            </ul>
+
+            <h3>Audio Quality</h3>
+            <ul>
+                <li><strong>Always export as WAV:</strong> WAV preserves maximum audio quality and supports metadata standards.</li>
+                <li><strong>Monitor levels carefully:</strong> Use the VU meters to ensure you're not clipping. Clipped audio is permanently damaged.</li>
+                <li><strong>Use markers for reference:</strong> Mark problem areas, sync points, or important edits so you can quickly navigate back to them.</li>
+                <li><strong>Test automation:</strong> Record automation, play it back, and verify it matches your intent before exporting.</li>
+            </ul>
+
+            <h3>Troubleshooting Tips</h3>
+            <ul>
+                <li><strong>Audio not playing:</strong> Check that channels aren't muted (M buttons) and master volume isn't all the way down.</li>
+                <li><strong>Metadata not updating:</strong> Ensure auto-save is enabled or manually click Save after editing.</li>
+                <li><strong>Waveform not showing:</strong> Files larger than 2GB don't display waveforms. You can still work with metadata and audio.</li>
+                <li><strong>Automation playing strangely:</strong> Clear automation and re-record it. Use touch-write mode for more natural results.</li>
+            </ul>
+        </div>
+
+        <h2>Keyboard Shortcuts</h2>
+        <div class="section">
+            <div class="keyboard-shortcuts">
+                <div class="shortcut-item">
+                    <div><span class="shortcut-key">M</span> <span class="shortcut-desc">Add marker at current position</span></div>
+                </div>
+                <div class="shortcut-item">
+                    <div><span class="shortcut-key">Delete</span> <span class="shortcut-desc">Remove selected marker</span></div>
+                </div>
+                <div class="shortcut-item">
+                    <div><span class="shortcut-key">&lt;</span> <span class="shortcut-desc">Jump to previous marker</span></div>
+                </div>
+                <div class="shortcut-item">
+                    <div><span class="shortcut-key">></span> <span class="shortcut-desc">Jump to next marker</span></div>
+                </div>
+                <div class="shortcut-item">
+                    <div><span class="shortcut-key">Space</span> <span class="shortcut-desc">Play / Pause</span></div>
+                </div>
+                <div class="shortcut-item">
+                    <div><span class="shortcut-key">Ctrl/Cmd + Click</span> <span class="shortcut-desc">Multi-select files</span></div>
+                </div>
+            </div>
+        </div>
+
+        <h2>Supported Formats</h2>
+        <div class="section">
+            <ul>
+                <li><strong>WAV:</strong> Full support including BWF (Broadcast Wave Format) with bEXT metadata, iXML, and other chunks. RF64 for files >2GB. Recommended format.</li>
+                <li><strong>MP3:</strong> Import and playback supported. Metadata limited compared to WAV.</li>
+                <li><strong>AAC:</strong> Import and playback supported via browser audio decoder.</li>
+            </ul>
+            <p><strong>Best Practice:</strong> Always export as WAV to preserve quality, metadata, and timecode information.</p>
+        </div>
+
+        <h2>Metadata Standards</h2>
+        <div class="section">
+            <h3>Broadcast Wave Format (BWF)</h3>
+            <p>Wave Agent X respects the broadcast audio standard:</p>
+            <ul>
+                <li>bEXT chunk: Contains description, originator, originator reference, origination time, and other metadata</li>
+                <li>iXML chunk: Contains XML-formatted metadata like scene, take, tape name</li>
+                <li>cue chunk: Stores marker positions and names</li>
+            </ul>
+            <p>This ensures your metadata is preserved when working with professional audio software.</p>
+        </div>
+
+        <h2>Troubleshooting</h2>
+        <div class="section">
+            <h3>Waveform Not Displaying</h3>
+            <p>Waveforms only display for files under 2GB due to browser memory limitations. For very large files, you can still:</p>
+            <ul>
+                <li>Edit metadata</li>
+                <li>Listen to audio (all files are playable)</li>
+                <li>Add markers and regions</li>
+                <li>Export processed audio</li>
+            </ul>
+
+            <h3>Metadata Not Saving</h3>
+            <p>If metadata changes don't persist:</p>
+            <ul>
+                <li>Verify auto-save is enabled in the header</li>
+                <li>Manually click Save after editing</li>
+                <li>Check browser storage permissions (may be restricted in private/incognito mode)</li>
+                <li>Ensure your browser isn't clearing storage on exit</li>
+            </ul>
+
+            <h3>Automation Not Playing Back</h3>
+            <p>If recorded automation doesn't play:</p>
+            <ul>
+                <li>Verify it was recorded (check the A button is armed while recording)</li>
+                <li>Press play and listen carefully—automation is played automatically</li>
+                <li>Clear automation and re-record if something seems wrong</li>
+                <li>Check that the channel isn't soloed or muted</li>
+            </ul>
+
+            <h3>Audio Playback Issues</h3>
+            <ul>
+                <li>Check that no channels are muted (look for M button highlighting)</li>
+                <li>Verify master volume isn't all the way down</li>
+                <li>Ensure your computer's volume is turned up</li>
+                <li>Try refreshing the page if audio suddenly stops</li>
+                <li>Check browser console for error messages (F12 → Console)</li>
+            </ul>
+
+            <h3>Import Fails</h3>
+            <p>If files won't import:</p>
+            <ul>
+                <li>Verify files are in supported format (WAV, MP3, AAC)</li>
+                <li>Check file size (supported up to 2GB)</li>
+                <li>Ensure file permissions allow reading</li>
+                <li>Try importing one file at a time to isolate problems</li>
+            </ul>
+
+            <h3>Export Issues</h3>
+            <p>If exported files sound wrong:</p>
+            <ul>
+                <li>Verify mixer levels before exporting (check VU meters)</li>
+                <li>Check that important channels aren't muted</li>
+                <li>Automation is not applied to exports—use mixer settings</li>
+                <li>For multi-channel files, check channel assignment and panning</li>
+            </ul>
+        </div>
+
+        <h2>About Wave Agent X</h2>
+        <div class="section">
+            <h3>Overview</h3>
+            <p>Wave Agent X is a professional audio metadata and file management PWA (Progressive Web App) designed specifically for production sound workflows. It combines waveform editing, multi-track mixing, and comprehensive metadata management in a single, browser-based application.</p>
+            
+            <h3>Key Features</h3>
+            <ul>
+                <li><strong>Complete Offline Operation:</strong> No internet required. Your files stay on your machine.</li>
+                <li><strong>Multi-Track Mixing:</strong> Mix, pan, automate, and master multiple channels with professional-quality audio routing</li>
+                <li><strong>Comprehensive Metadata Editing:</strong> Manage scene, take, project, timecode, and custom fields</li>
+                <li><strong>Batch Operations:</strong> Apply changes to multiple files simultaneously</li>
+                <li><strong>Waveform Visualization:</strong> See your audio in real time with accurate amplitude display</li>
+                <li><strong>Cue Markers:</strong> Mark important moments and navigate instantly</li>
+                <li><strong>Automation Recording:</strong> Capture dynamic fader movements and panning</li>
+                <li><strong>Broadcast Standards:</strong> Supports BWF, timecode, and professional metadata formats</li>
+                <li><strong>Service Worker Caching:</strong> Fast loading and works with poor connectivity</li>
+                <li><strong>No Installation:</strong> Works in any modern web browser</li>
+            </ul>
+
+            <h3>System Requirements</h3>
+            <ul>
+                <li>Modern web browser (Chrome, Firefox, Safari, Edge)</li>
+                <li>Sufficient storage for your audio files (typically on your computer)</li>
+                <li>About 4GB RAM recommended for comfortable operation with large files</li>
+            </ul>
+
+            <h3>Privacy & Security</h3>
+            <p>Your audio files and metadata are stored locally on your computer. Wave Agent X:</p>
+            <ul>
+                <li>Does not upload files to any server</li>
+                <li>Does not track your activity</li>
+                <li>Does not require an account or internet connection</li>
+                <li>All processing happens in your browser using your computer's resources</li>
+            </ul>
+
+            <h3>Getting Help</h3>
+            <p>This User Guide covers the main features of Wave Agent X. For detailed workflows specific to your production:</p>
+            <ul>
+                <li>Experiment with batch operations and automation</li>
+                <li>Use markers to mark important moments</li>
+                <li>Save your work frequently</li>
+                <li>Check the Tips & Tricks section above</li>
+            </ul>
+        </div>
+
+        <h2>Keyboard Shortcuts</h2>
+        <div class="section">
+            <div class="keyboard-shortcuts">
+                <div class="shortcut-item">
+                    <div><span class="shortcut-key">M</span> <span class="shortcut-desc">Add marker at current position</span></div>
+                </div>
+                <div class="shortcut-item">
+                    <div><span class="shortcut-key">Delete</span> <span class="shortcut-desc">Remove selected marker</span></div>
+                </div>
+                <div class="shortcut-item">
+                    <div><span class="shortcut-key">&lt;</span> <span class="shortcut-desc">Jump to previous marker</span></div>
+                </div>
+                <div class="shortcut-item">
+                    <div><span class="shortcut-key">></span> <span class="shortcut-desc">Jump to next marker</span></div>
+                </div>
+                <div class="shortcut-item">
+                    <div><span class="shortcut-key">Space</span> <span class="shortcut-desc">Play / Pause</span></div>
+                </div>
+                <div class="shortcut-item">
+                    <div><span class="shortcut-key">Ctrl/Cmd + Click</span> <span class="shortcut-desc">Multi-select files</span></div>
+                </div>
+            </div>
+        </div>
+
+        <h2>Supported Formats</h2>
+        <div class="section">
+            <ul>
+                <li><strong>WAV:</strong> Full support including BWF (Broadcast Wave Format) with metadata</li>
+                <li><strong>MP3:</strong> Import and playback supported</li>
+                <li><strong>AAC:</strong> Import and playback supported</li>
+            </ul>
+            <p>Files are always exported as WAV to preserve quality and metadata.</p>
+        </div>
+
+        <h2>Troubleshooting</h2>
+        <div class="section">
+            <h3>Waveform Not Displaying</h3>
+            <p>Waveforms only display for files under 2GB. Very large files show a message explaining the browser limitation.</p>
+
+            <h3>Metadata Not Saving</h3>
+            <p>Verify auto-save is enabled in the header. Check your browser's storage permissions for the app.</p>
+
+            <h3>Automation Not Playing Back</h3>
+            <p>Ensure automation was recorded properly and playback hasn't been paused. Clear and re-record if needed.</p>
+
+            <h3>Audio Playback Issues</h3>
+            <p>Check that channels aren't muted and master volume is raised. Verify browser audio output is working.</p>
+        </div>
+
+        <h2>About</h2>
+        <div class="section">
+            <p>Wave Agent X is a professional audio metadata and file management PWA (Progressive Web App) for production sound workflows.</p>
+            <p><strong>Key Features:</strong></p>
+            <ul>
+                <li>Complete offline operation</li>
+                <li>Multi-track mixing with automation</li>
+                <li>Comprehensive metadata editing</li>
+                <li>Waveform visualization</li>
+                <li>Batch file operations</li>
+                <li>Service Worker caching for fast loading</li>
+            </ul>
+        </div>
+    </div>
+
+    <footer>
+        <p>&copy; 2025 Pauli. Wave Agent X User Guide. All rights reserved.</p>
+    </footer>
+</body>
+</html>

@@ -60,6 +60,11 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('about-modal').classList.remove('active');
     });
 
+    // User Guide button in About modal - opens in new tab
+    document.getElementById('user-guide-btn').addEventListener('click', () => {
+        window.open('user-guide.html', 'WaveAgentXUserGuide', 'width=1000,height=800');
+    });
+
     // Stereo Link Mode Modal
     document.getElementById('stereo-link-close-btn').addEventListener('click', () => {
         document.getElementById('stereo-link-mode-modal').classList.remove('active');

@@ -1189,6 +1189,48 @@ input[type="range"][orient="vertical"] {
     overflow-y: auto;
 }
 
+.user-guide-modal {
+    max-width: 750px;
+}
+
+.user-guide-content {
+    font-size: 0.95rem;
+    line-height: 1.6;
+}
+
+.user-guide-content h4 {
+    color: var(--accent-primary);
+    margin: 1.2rem 0 0.6rem 0;
+    font-size: 1.05rem;
+    font-weight: 600;
+}
+
+.user-guide-content p {
+    margin: 0.5rem 0;
+    color: var(--text-main);
+}
+
+.user-guide-content strong {
+    color: var(--accent-primary);
+    font-weight: 600;
+}
+
+.user-guide-content em {
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+.user-guide-content ul {
+    margin: 0.5rem 0;
+    padding-left: 1.5rem;
+    list-style-type: disc;
+}
+
+.user-guide-content li {
+    margin: 0.3rem 0;
+    color: var(--text-main);
+}
+
 .modal-info {
     color: var(--text-muted);
     margin-bottom: 1.5rem;

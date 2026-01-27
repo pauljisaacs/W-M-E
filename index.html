@@ -26,7 +26,61 @@
                 <p>This app is a professional audio metadata and file management tool for production sound workflows.</p>
             </div>
             <div class="modal-footer">
+                <button class="btn secondary" id="user-guide-btn">User Guide</button>
                 <button class="btn secondary" id="about-ok-btn">OK</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- User Guide Modal -->
+    <div id="user-guide-modal" class="modal">
+        <div class="modal-content user-guide-modal">
+            <div class="modal-header">
+                <h3>Wave Agent X User Guide</h3>
+                <button class="modal-close" id="user-guide-close-btn">&times;</button>
+            </div>
+            <div class="modal-body user-guide-content">
+                <h4>Getting Started</h4>
+                <p><strong>Import Files:</strong> Click the <em>Import</em> button to add audio files to your project. Wave Agent X supports WAV, MP3, and AAC formats.</p>
+                
+                <h4>Metadata Management</h4>
+                <p>Edit file metadata in the table below the import section. Click on any cell to modify metadata such as scene, take, project name, and more. Changes are auto-saved by default.</p>
+                <p><strong>Batch Edit:</strong> Select multiple files and click <em>Batch Edit</em> to apply the same metadata changes to all selected files at once.</p>
+                
+                <h4>Waveform and Playback</h4>
+                <p><strong>Play Audio:</strong> Select a file and use the playback controls (▶/⏹) to listen. Click anywhere on the waveform to jump to that position.</p>
+                <p><strong>Create Regions:</strong> Click and drag on the waveform area to create a region. Drag the edges to resize, drag the middle to move, or click elsewhere to clear.</p>
+                <p><strong>Cue Markers:</strong> Press <em>M</em> to add a marker at the current playback position. Click and drag markers to move them. Double-click to name a marker.</p>
+                
+                <h4>Channel Mixer</h4>
+                <p><strong>Volume & Pan:</strong> Adjust volume faders and pan knobs for each channel. Double-click a fader to reset to 0.0 dB or a pan knob to reset to center.</p>
+                <p><strong>Mute & Solo:</strong> Use the M (mute) and S (solo) buttons to control channel playback. Soloing a channel mutes all others.</p>
+                <p><strong>Stereo Link:</strong> For stereo pairs, click the link icon to link two channels together. Choose between linked (L/R panning) or M/S (mid-side) decoding.</p>
+                <p><strong>Automation:</strong> Arm channels with the <em>A</em> button to record automation. Fader movements will be captured during playback.</p>
+                
+                <h4>File Operations</h4>
+                <p><strong>Normalize:</strong> Select files and click <em>Normalize</em> to bring audio to a consistent level.</p>
+                <p><strong>Rename:</strong> Click <em>Rename</em> to batch rename files using metadata templates.</p>
+                <p><strong>Export:</strong> Export audio with applied settings. Define a region to export only that section.</p>
+                <p><strong>Group Siblings:</strong> Organize multi-track takes by clicking <em>Group Siblings</em> to link related files.</p>
+                
+                <h4>Tips & Tricks</h4>
+                <ul>
+                    <li>Use <strong>&lt;, ></strong> keys to skip between cue markers</li>
+                    <li>Middle-click a region to clear it</li>
+                    <li>Drag column headers to reorder columns in the metadata table</li>
+                    <li>The app works offline—your files never leave your computer</li>
+                    <li>Service Worker caching keeps the app responsive even with poor connectivity</li>
+                </ul>
+                
+                <h4>Keyboard Shortcuts</h4>
+                <p><strong>M:</strong> Add marker at current position</p>
+                <p><strong>Delete:</strong> Remove selected marker</p>
+                <p><strong>&lt;, >:</strong> Jump to previous/next marker</p>
+                <p><strong>Space:</strong> Play/Pause</p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn secondary" id="user-guide-ok-btn">Close</button>
             </div>
         </div>
     </div>

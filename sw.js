@@ -2,6 +2,7 @@ const CACHE_NAME = 'wave-agent-x-v73';
 const ASSETS = [
   './',
   './index.html',
+  './user-guide.html',
   './style.css',
   './app.js',
   './metadata-handler.js',
