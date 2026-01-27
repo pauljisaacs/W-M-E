@@ -692,6 +692,11 @@ class App {
                 return;
             }
 
+            // Clear any active region when clicking on waveform
+            if (this.region.start !== null && this.region.end !== null) {
+                this.clearRegion();
+            }
+
             // Otherwise, start dragging playhead
             isDragging = true;
             wasPlaying = this.audioEngine.isPlaying;
@@ -800,9 +805,13 @@ class App {
         let regionStartX = 0;
         let isDraggingEdge = false;
         let draggingEdge = null; // 'start' or 'end'
+        let isDraggingRegion = false;
+        let regionDragStartX = 0;
+        let regionDragStartTime = 0;
+        let regionDragEndTime = 0;
         const regionTooltip = document.getElementById('region-tooltip');
 
-        // Handle region edge dragging
+        // Handle region edge dragging and region movement
         regionOverlay.addEventListener('mousedown', (e) => {
             if (!this.audioEngine.buffer) return;
             e.stopPropagation(); // Prevent region selector from handling this
@@ -822,8 +831,15 @@ class App {
                 draggingEdge = 'end';
             }
             // Middle click clears the region
-            else {
+            else if (e.button === 1) {
                 this.clearRegion();
+            }
+            // Otherwise, start dragging the entire region
+            else {
+                isDraggingRegion = true;
+                regionDragStartX = e.clientX;
+                regionDragStartTime = this.region.start;
+                regionDragEndTime = this.region.end;
             }
         });
 
@@ -860,6 +876,39 @@ class App {
             const percent = x / rect.width;
             const time = percent * this.audioEngine.buffer.duration;
 
+            // Handle region dragging (moving entire region)
+            if (isDraggingRegion) {
+                const deltaX = e.clientX - regionDragStartX;
+                const deltaTime = (deltaX / rect.width) * this.audioEngine.buffer.duration;
+                const regionDuration = regionDragEndTime - regionDragStartTime;
+                
+                let newStart = regionDragStartTime + deltaTime;
+                let newEnd = regionDragEndTime + deltaTime;
+                
+                // Clamp to buffer boundaries
+                if (newStart < 0) {
+                    newStart = 0;
+                    newEnd = regionDuration;
+                }
+                if (newEnd > this.audioEngine.buffer.duration) {
+                    newEnd = this.audioEngine.buffer.duration;
+                    newStart = newEnd - regionDuration;
+                }
+                
+                this.region.start = newStart;
+                this.region.end = newEnd;
+                this.updateRegionDisplay();
+                
+                // Show and update tooltip while dragging region
+                if (regionTooltip) {
+                    regionTooltip.style.display = 'block';
+                    regionTooltip.style.left = `${x - 110}px`;
+                    regionTooltip.style.top = '28px';
+                    updateRegionTooltip(this.region.start, this.region.end);
+                }
+                return;
+            }
+
             // Handle edge dragging
             if (isDraggingEdge) {
                 if (draggingEdge === 'start') {
@@ -894,6 +943,15 @@ class App {
 
         // Listen to document for mouseup so we catch it even outside the element
         document.addEventListener('mouseup', () => {
+            if (isDraggingRegion) {
+                isDraggingRegion = false;
+                // Hide tooltip when done dragging region
+                if (regionTooltip) {
+                    regionTooltip.style.display = 'none';
+                }
+                return;
+            }
+
             if (isDraggingEdge) {
                 isDraggingEdge = false;
                 draggingEdge = null;

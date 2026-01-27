@@ -955,6 +955,15 @@ td:nth-child(15) {
     gap: 0.44rem; /*master strip vertical position*/
 }
 
+.channel-header {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    align-items: center;
+    width: 100%;
+    min-width: 0;
+}
+
 .master-strip .channel-header {
     display: flex;
     flex-direction: column;
@@ -988,7 +997,7 @@ td:nth-child(15) {
 }
 
 .channel-name {
-    font-size: 0.8rem;
+    font-size: 0.70rem;
     text-align: center;
     white-space: nowrap;
     overflow: hidden;

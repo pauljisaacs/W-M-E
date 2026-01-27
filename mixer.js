@@ -426,8 +426,10 @@ export class Mixer {
             strip.innerHTML = `
                 <div class="channel-header">
                     <div class="channel-name" contenteditable="true">${trackName}</div>
-                    <button class="mute-btn" data-idx="${i}">M</button>
-                    <button class="solo-btn" data-idx="${i}">S</button>
+                    <div class="channel-controls">
+                        <button class="mute-btn" data-idx="${i}">M</button>
+                        <button class="solo-btn" data-idx="${i}">S</button>
+                    </div>
                 </div>
                 <div class="automation-controls">
                     <button class="arm-btn" data-idx="${i}" title="Arm for automation recording">A</button>
@@ -599,7 +601,7 @@ export class Mixer {
             if (this.audioCtx) {
                 gainNode = this.audioCtx.createGain();
                 panNode = this.audioCtx.createStereoPanner();
-                panNode.pan.value = i % 2 === 0 ? -1 : 1;
+                panNode.pan.value = 0; // Initialize all channels to center
                 analyserNode = this.audioCtx.createAnalyser();
                 analyserNode.fftSize = 256;
                 analyserNode.smoothingTimeConstant = 0.5;
