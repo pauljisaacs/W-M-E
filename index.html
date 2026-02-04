@@ -12,6 +12,32 @@
 </head>
 
 <body>
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="modal">
+        <div class="modal-content small-modal">
+            <div class="modal-header">
+                <h3>Settings</h3>
+            </div>
+            <div class="modal-body">
+                <div class="settings-group">
+                    <label for="auto-save-toggle-settings">
+                        <input type="checkbox" id="auto-save-toggle-settings" checked>
+                        Auto-save metadata edits
+                    </label>
+                </div>
+                <div class="settings-group">
+                    <label for="auto-group-toggle-settings">
+                        <input type="checkbox" id="auto-group-toggle-settings" checked>
+                        Auto-group sibling files
+                    </label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn secondary" id="settings-ok-btn">OK</button>
+            </div>
+        </div>
+    </div>
+
         <!-- About Modal -->
     <div id="about-modal" class="modal">
         <div class="modal-content small-modal">
@@ -96,12 +122,6 @@
                     <button id="batch-edit-btn" class="btn secondary" disabled>Batch Edit</button>
                     <button id="batch-save-btn" class="btn secondary" disabled>Save</button>
                 </div>
-                <div class="auto-save-toggle">
-                    <label>
-                        <input type="checkbox" id="auto-save-checkbox">
-                        <span>Auto-save metadata changes</span>
-                    </label>
-                </div>
             </div>
         </header>
         <input type="file" id="file-input" multiple accept=".wav,.mp3,.aac" style="display: none;">
@@ -143,7 +163,7 @@
             <button id="conform-csv-btn" class="btn secondary">Conform to CSV</button>
             <button id="combine-btn" class="btn secondary" disabled>Combine</button>
             <button id="split-btn" class="btn secondary" disabled>Split</button>
-            <button id="normalize-btn" class="btn secondary" disabled>Normalize</button>
+            <button id="normalize-btn" class="btn secondary" disabled>Normalize / Bit Depth</button>
             <button id="rename-btn" class="btn secondary" disabled>Rename</button>
             <button id="report-btn" class="btn secondary">Report</button>
             <button id="auto-group-btn" class="btn secondary" disabled>Group Siblings</button>
@@ -359,16 +379,33 @@
                 <button class="modal-close">&times;</button>
             </div>
             <div class="modal-body">
-                <p>Normalize the peak level to:</p>
-                <div class="input-group">
-                    <label for="normalize-target">Target Level (dBFS):</label>
-                    <input type="number" id="normalize-target" min="-20" max="0" step="0.1" value="-1.0" required>
+                <div class="normalize-checkbox-group">
+                    <label>
+                        <input type="checkbox" id="normalize-bypass">
+                        Bypass Normalize (only convert bit depth)
+                    </label>
                 </div>
-                <p class="info-text">Valid range: -20 to 0 dBFS. This will apply gain to bring the highest peak to this level.</p>
+                <div id="normalize-level-section">
+                    <p>Normalize the peak level to:</p>
+                    <div class="input-group">
+                        <label for="normalize-target">Target Level (dBFS):</label>
+                        <input type="number" id="normalize-target" min="-20" max="0" step="0.1" value="-1.0" required>
+                    </div>
+                    <p class="info-text">Valid range: -20 to 0 dBFS. This will apply gain to bring the highest peak to this level.</p>
+                </div>
+                <div class="input-group">
+                    <label for="normalize-bit-depth">Output Bit Depth:</label>
+                    <select id="normalize-bit-depth">
+                        <option value="same">Same as source</option>
+                        <option value="32">32-bit Float</option>
+                        <option value="24">24-bit</option>
+                        <option value="16">16-bit</option>
+                    </select>
+                </div>
             </div>
             <div class="modal-footer">
                 <button id="cancel-normalize-btn" class="btn secondary">Cancel</button>
-                <button id="confirm-normalize-btn" class="btn primary">Normalize</button>
+                <button id="confirm-normalize-btn" class="btn primary">Apply</button>
             </div>
         </div>
     </div>
@@ -703,7 +740,7 @@
                                 <div class="mp-input-group">
                                     <label>Pre/Post Roll:</label>
                                     <select id="mp-prepost-roll">
-                                        <option value="0">0 secs</option>
+                                        <option value="0" selected>0 secs</option>
                                         <option value="1">1 sec</option>
                                         <option value="2">2 secs</option>
                                         <option value="3">3 secs</option>
@@ -713,7 +750,7 @@
                                         <option value="7">7 secs</option>
                                         <option value="8">8 secs</option>
                                         <option value="9">9 secs</option>
-                                        <option value="10" selected>10 secs</option>
+                                        <option value="10">10 secs</option>
                                     </select>
                                 </div>
                             </div>

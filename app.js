@@ -3,9 +3,19 @@ document.addEventListener('DOMContentLoaded', () => {
     // Add About menu item if not present
     let helpMenu = document.getElementById('help-menu');
     if (!helpMenu) {
-        // If no help menu, add About button to header
+        // If no help menu, add Settings and About buttons to header
         const header = document.querySelector('.app-header .header-controls');
         if (header) {
+            const settingsBtn = document.createElement('button');
+            settingsBtn.id = 'settings-btn';
+            settingsBtn.className = 'btn secondary';
+            settingsBtn.textContent = 'Settings';
+            settingsBtn.style.marginLeft = '1em';
+            header.appendChild(settingsBtn);
+            settingsBtn.addEventListener('click', () => {
+                document.getElementById('settings-modal').classList.add('active');
+            });
+            
             const aboutBtn = document.createElement('button');
             aboutBtn.id = 'about-btn';
             aboutBtn.className = 'btn secondary';
@@ -51,6 +61,11 @@ document.addEventListener('DOMContentLoaded', () => {
         });
         helpMenu.appendChild(aboutItem);
     }
+
+    // Close Settings modal
+    document.getElementById('settings-ok-btn').addEventListener('click', () => {
+        document.getElementById('settings-modal').classList.remove('active');
+    });
 
     // Close About modal
     document.getElementById('about-close-btn').addEventListener('click', () => {
@@ -145,6 +160,9 @@ class App {
         this.autoSaveEnabled = localStorage.getItem('autoSaveMetadata') === 'true';
         this.autoSaveDebounceTimer = null;
         this.autoSaveDelay = 1000; // 1 second debounce
+
+        // Auto-group sibling files
+        this.autoGroupEnabled = localStorage.getItem('autoGroupSiblings') !== 'false'; // Default true
 
         this.initEventListeners();
         this.initDragAndDrop();
@@ -262,6 +280,21 @@ class App {
             });
         }
 
+        // Normalize bypass checkbox - gray out target level when checked
+        const normalizeBypass = document.getElementById('normalize-bypass');
+        const normalizeLevelSection = document.getElementById('normalize-level-section');
+        normalizeBypass.addEventListener('change', (e) => {
+            if (e.target.checked) {
+                normalizeLevelSection.style.opacity = '0.5';
+                normalizeLevelSection.style.pointerEvents = 'none';
+                normalizeTarget.disabled = true;
+            } else {
+                normalizeLevelSection.style.opacity = '1';
+                normalizeLevelSection.style.pointerEvents = 'auto';
+                normalizeTarget.disabled = false;
+            }
+        });
+
         const normalizeModal = document.getElementById('normalize-modal');
         normalizeModal.querySelector('.modal-close').addEventListener('click', () => this.closeNormalizeModal());
         normalizeModal.addEventListener('click', (e) => {
@@ -356,12 +389,22 @@ class App {
         });
 
         // Auto-save toggle
-        const autoSaveCheckbox = document.getElementById('auto-save-checkbox');
-        autoSaveCheckbox.checked = this.autoSaveEnabled;
-        autoSaveCheckbox.addEventListener('change', (e) => {
+        const settingsAutoSaveCheckbox = document.getElementById('auto-save-toggle-settings');
+        
+        settingsAutoSaveCheckbox.checked = this.autoSaveEnabled;
+        settingsAutoSaveCheckbox.addEventListener('change', (e) => {
             this.autoSaveEnabled = e.target.checked;
             localStorage.setItem('autoSaveMetadata', this.autoSaveEnabled);
             this.updateSaveButtonState();
+        });
+
+        // Auto-group toggle
+        const settingsAutoGroupCheckbox = document.getElementById('auto-group-toggle-settings');
+        
+        settingsAutoGroupCheckbox.checked = this.autoGroupEnabled;
+        settingsAutoGroupCheckbox.addEventListener('change', (e) => {
+            this.autoGroupEnabled = e.target.checked;
+            localStorage.setItem('autoGroupSiblings', this.autoGroupEnabled);
         });
 
         // Mixer save/load controls
@@ -1269,8 +1312,17 @@ class App {
         }
         allItems.push(...newItems);
 
-        // Group files
-        this.files = this.groupFiles(allItems);
+        // Group files (if auto-grouping is enabled)
+        if (this.autoGroupEnabled) {
+            this.files = this.groupFiles(allItems);
+        } else {
+            // Keep files ungrouped (or preserve existing groups)
+            this.files = allItems.map((item, index) => ({
+                ...item,
+                fileIndex: index,
+                isGroup: false
+            }));
+        }
 
         // Force full table refresh with latest metadata
         const tbody = document.getElementById('file-list-body');
@@ -4093,30 +4145,29 @@ class App {
                 fpsExact = fpsExact || { numerator: 24, denominator: 1 };
             }
             
-            // Parse timecodes including frames using tcToSeconds which accounts for FPS
-            const fileStartSeconds = this.tcToSeconds(sourceFile.metadata.tcStart || '00:00:00:00', fpsExact);
-            const fileDurationSeconds = this.tcToSeconds(sourceFile.metadata.duration, fpsExact);
-            const fileEndSeconds = fileStartSeconds + fileDurationSeconds;
+            // Use frame-accurate sample calculations for fractional frame rates
+            const sampleRate = sourceFile.metadata.sampleRate;
+            const fileStartSamples = this.metadataHandler.tcToSamples(sourceFile.metadata.tcStart || '00:00:00:00', sampleRate, fpsExact);
+            const rangeStartSamples = this.metadataHandler.tcToSamples(startTC, sampleRate, fpsExact);
+            const rangeEndSamples = this.metadataHandler.tcToSamples(endTC, sampleRate, fpsExact);
+            
+            // Calculate actual overlap in samples
+            const fileDurationSamples = Math.round(this.tcToSeconds(sourceFile.metadata.duration, fpsExact) * sampleRate);
+            const fileEndSamples = fileStartSamples + fileDurationSamples;
+            
+            const actualStartSamples = Math.max(rangeStartSamples, fileStartSamples);
+            const actualEndSamples = Math.min(rangeEndSamples, fileEndSamples);
 
-            // Parse target range
-            const rangeStartSeconds = this.tcToSeconds(startTC, fpsExact);
-            const rangeEndSeconds = this.tcToSeconds(endTC, fpsExact);
-
-            // Calculate overlap
-            const actualStartSeconds = Math.max(rangeStartSeconds, fileStartSeconds);
-            const actualEndSeconds = Math.min(rangeEndSeconds, fileEndSeconds);
-
-            if (actualStartSeconds >= actualEndSeconds) {
+            if (actualStartSamples >= actualEndSamples) {
                 return { 
                     success: false, 
                     error: `Timecode range does not overlap with file ${sourceFile.metadata.filename}` 
                 };
             }
 
-            const sampleRate = sourceFile.metadata.sampleRate;
-            const startSampleOffset = Math.round((actualStartSeconds - fileStartSeconds) * sampleRate);
-            const endSampleOffset = Math.round((actualEndSeconds - fileStartSeconds) * sampleRate);
-            const sampleCount = endSampleOffset - startSampleOffset;
+            // Calculate sample offsets using frame-accurate values
+            const startSampleOffset = actualStartSamples - fileStartSamples;
+            const sampleCount = actualEndSamples - actualStartSamples;
 
             // Load file audio
             const arrayBuffer = await sourceFile.file.arrayBuffer();
@@ -4140,22 +4191,17 @@ class App {
 
             // Calculate the actual start TC of the extracted audio (not the requested start)
             // Work with samples for frame-accurate timecode (important for 23.98 FPS)
-            const fileStartSamples = this.metadataHandler.tcToSamples(sourceFile.metadata.tcStart || '00:00:00:00', sampleRate, fpsExact);
-            const rangeStartSamples = this.metadataHandler.tcToSamples(startTC, sampleRate, fpsExact);
-            const actualStartSamples = Math.max(rangeStartSamples, fileStartSamples);
             const actualStartTC = this.metadataHandler.samplesToTC(actualStartSamples, sampleRate, fpsExact);
 
-            // Also calculate actual end for duration
-            const rangeEndSamples = this.metadataHandler.tcToSamples(endTC, sampleRate, fpsExact);
-            const fileEndSamples = fileStartSamples + Math.round(fileDurationSeconds * sampleRate);
-            const actualEndSamples = Math.min(rangeEndSamples, fileEndSamples);
+            // Verify actual end samples using extracted buffer length
+            const verifiedActualEndSamples = Math.min(actualEndSamples, fileStartSamples + extractedBuffer.length);
 
             // Prepare export metadata
             const exportMetadata = {
                 ...sourceFile.metadata,
                 ...outputMetadata,
                 tcStart: actualStartTC,
-                duration: this.secondsToDuration((actualEndSamples - actualStartSamples) / sampleRate),
+                duration: this.secondsToDuration((verifiedActualEndSamples - actualStartSamples) / sampleRate, fpsExact),
                 fpsExact: fpsExact,
                 bitDepth: bitDepth,
                 sampleRate: sampleRate,
@@ -4546,8 +4592,23 @@ class App {
         }
     }
 
-    secondsToDuration(seconds) {
-        // Convert seconds to HH:MM:SS:FF format (assumes 24fps for frames)
+    secondsToDuration(seconds, fpsExact = null) {
+        // If fpsExact is provided, use frame-accurate calculation
+        if (fpsExact !== null && fpsExact !== 24) {
+            const fps = typeof fpsExact === 'object' ? fpsExact.num / fpsExact.denom : fpsExact;
+            const totalSamples = Math.round(seconds * 48000); // Use sample-level precision
+            const samplesPerFrame = 48000 / fps;
+            const totalFrames = Math.round(totalSamples / samplesPerFrame);
+            const hours = Math.floor(totalFrames / (fps * 3600));
+            const remainingFrames = totalFrames - (hours * fps * 3600);
+            const minutes = Math.floor(remainingFrames / (fps * 60));
+            const remainingFrames2 = remainingFrames - (minutes * fps * 60);
+            const secs = Math.floor(remainingFrames2 / fps);
+            const frames = Math.floor(remainingFrames2 % fps);
+            return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}:${String(frames).padStart(2, '0')}`;
+        }
+        
+        // Default 24fps behavior for backward compatibility
         const totalSeconds = Math.floor(seconds);
         const hours = Math.floor(totalSeconds / 3600);
         const minutes = Math.floor((totalSeconds % 3600) / 60);
@@ -5655,9 +5716,17 @@ class App {
         const combineToPoly = document.getElementById('mp-combine-poly').checked;
         const normalize = document.getElementById('mp-normalize').checked;
         const rename = document.getElementById('mp-rename').checked;
+        const outputBitDepth = document.getElementById('mp-output-bitdepth').value;
+        const convertBitDepth = outputBitDepth !== 'same';
 
-        if (!extractAudio && !combineToPoly && !normalize && !rename) {
+        if (!extractAudio && !combineToPoly && !normalize && !rename && !convertBitDepth) {
             alert('Please select at least one process to execute.');
+            return;
+        }
+
+        // If only converting bit depth (no extract audio), at least one file must be selected
+        if (convertBitDepth && !extractAudio && this.selectedIndices.size === 0) {
+            alert('Please select at least one file to convert bit depth.');
             return;
         }
 
@@ -5750,6 +5819,13 @@ class App {
         try {
             let selectedFiles = Array.from(this.selectedIndices).map(i => this.files[i]);
 
+            // For conform-csv, capture selectedIndices BEFORE unwrapping
+            // because conform-csv needs to find takes in the original this.files
+            let selectedIndicesForConform = null;
+            if (options.extractMode === 'conform-csv') {
+                selectedIndicesForConform = new Set(Array.from(this.selectedIndices));
+            }
+
             // STEP 0: Unwrap any group files to individual files (for all operations)
             // This ensures rename, normalize, and combine all work with individual files
             selectedFiles = selectedFiles.flatMap(file => {
@@ -5764,7 +5840,7 @@ class App {
             if (options.extractAudio) {
                 console.log('[MultiProcess] Step 1: Extracting Audio...');
                 this.updateMPProgress(1, 5, 'Extracting Audio...');
-                const extractedFiles = await this.mpExtractAudio(selectedFiles, options);
+                const extractedFiles = await this.mpExtractAudio(selectedFiles, options, selectedIndicesForConform);
                 successCount += extractedFiles.filter(f => f.success).length;
                 failCount += extractedFiles.filter(f => !f.success).length;
                 processedFiles = extractedFiles.filter(f => f.success).map(f => f.fileObj);
@@ -5836,10 +5912,44 @@ class App {
                 }
             }
 
-            // STEP 4: Normalize
+            // STEP 4: Convert Bit Depth (if enabled and only files that need conversion)
+            if (options.outputBitDepth !== 'same') {
+                console.log('[MultiProcess] Step 4: Converting Bit Depth...');
+                this.updateMPProgress(4, 5, 'Converting Bit Depth...');
+                const previousFiles = [...processedFiles]; // Save reference to previous files
+                const converted = await this.mpConvertBitDepth(processedFiles, options);
+                
+                // Count actual successes vs failures (skipped/passthrough don't count as failures)
+                const actualSuccesses = converted.filter(f => f.success && !f.skipped);
+                const failures = converted.filter(f => !f.success);
+                successCount += actualSuccesses.length;
+                failCount += failures.length;
+                
+                // Only process files that were successfully converted
+                const successfullyConverted = converted.filter(f => f.success);
+                if (successfullyConverted.length > 0) {
+                    processedFiles = successfullyConverted.map(f => f.fileObj);
+                    
+                    // Only mark previous files as intermediate if they were converted (not skipped/passthrough)
+                    // AND they were NOT original selected files (i.e., they were created by Extract or Combine steps)
+                    if (!options.keepIntermediateFiles && options.extractAudio) {
+                        converted.filter(f => f.success && !f.skipped).forEach(convResult => {
+                            const origFile = previousFiles.find(pf => pf.handle === convResult.fileObj.handle);
+                            if (origFile && !intermediateFiles.includes(origFile)) {
+                                intermediateFiles.push(origFile);
+                            }
+                        });
+                    }
+                } else {
+                    // If conversion failed for all files, keep the original processedFiles unchanged
+                    console.warn('[MultiProcess] No files were successfully converted, keeping original files');
+                }
+            }
+
+            // STEP 5: Normalize
             if (options.normalize) {
-                console.log('[MultiProcess] Step 4: Normalizing Audio...');
-                this.updateMPProgress(4, 5, 'Normalizing Audio...');
+                console.log('[MultiProcess] Step 5: Normalizing Audio...');
+                this.updateMPProgress(5, 6, 'Normalizing Audio...');
                 const previousFiles = [...processedFiles]; // Save reference to previous files
                 const normalized = await this.mpNormalize(processedFiles, options);
                 successCount += normalized.filter(f => f.success).length;
@@ -5857,10 +5967,10 @@ class App {
                 }
             }
 
-            // STEP 5: Rename
+            // STEP 6: Rename
             if (options.rename) {
-                console.log('[MultiProcess] Step 5: Renaming Files...');
-                this.updateMPProgress(5, 5, 'Renaming Files...');
+                console.log('[MultiProcess] Step 6: Renaming Files...');
+                this.updateMPProgress(6, 6, 'Renaming Files...');
                 const previousFiles = [...processedFiles]; // Save reference to previous files
                 const renamed = await this.mpRename(processedFiles, options);
                 successCount += renamed.filter(f => f.success).length;
@@ -5919,7 +6029,7 @@ class App {
         }
     }
 
-    async mpExtractAudio(selectedFiles, options) {
+    async mpExtractAudio(selectedFiles, options, selectedIndicesForConform = null) {
         const results = [];
 
         // Handle TC Range mode
@@ -5976,7 +6086,8 @@ class App {
         // Handle Conform to CSV mode
         else if (options.extractMode === 'conform-csv') {
             const csvEntries = options.csvEntries;
-            const selectedIndices = new Set(selectedFiles.map((_, idx) => 
+            // Use selectedIndicesForConform if provided (from multi-process), otherwise calculate from selectedFiles
+            const selectedIndices = selectedIndicesForConform || new Set(selectedFiles.map((_, idx) => 
                 this.files.findIndex(f => f === selectedFiles[idx])
             ));
 
@@ -6427,6 +6538,126 @@ class App {
         }
     }
 
+    async mpConvertBitDepth(fileList, options) {
+        const results = [];
+        const targetBitDepth = options.outputBitDepth === '32f' ? 32 : parseInt(options.outputBitDepth);
+
+        for (const fileObj of fileList) {
+            try {
+                // Skip files that already have the target bit depth
+                const currentBitDepth = fileObj.metadata.bitDepth || 24;
+                if (currentBitDepth === targetBitDepth) {
+                    console.log(`[MultiProcess] Skipping ${fileObj.metadata.filename} - already ${targetBitDepth}-bit`);
+                    results.push({ success: true, fileObj: fileObj }); // Return original file
+                    continue;
+                }
+
+                console.log(`[MultiProcess] Converting ${fileObj.metadata.filename} from ${currentBitDepth}-bit to ${targetBitDepth}-bit...`);
+                
+                // Read and decode the original file
+                const arrayBuffer = await fileObj.file.arrayBuffer();
+                console.log(`[MultiProcess] File loaded: ${arrayBuffer.byteLength} bytes`);
+                
+                const audioBuffer = await this.audioEngine.audioCtx.decodeAudioData(arrayBuffer.slice(0));
+                console.log(`[MultiProcess] Audio decoded: ${audioBuffer.numberOfChannels} channels, ${audioBuffer.length} frames, ${audioBuffer.sampleRate} Hz`);
+
+                // Create output filename with bit depth indicator
+                const nameWithoutExt = fileObj.metadata.filename.replace(/\.[^/.]+$/, '');
+                const bitDepthSuffix = targetBitDepth === 32 ? '32f' : `${targetBitDepth}`;
+                const baseFileName = `${nameWithoutExt}_${bitDepthSuffix}.wav`;
+                
+                // Get unique filename (avoid overwriting existing files)
+                const fileName = await this.getUniqueFileName(options.outputDirHandle, baseFileName);
+                console.log(`[MultiProcess] Output filename: ${fileName}`);
+
+                // Prepare metadata - preserve all original metadata but update bit depth
+                const exportMetadata = {
+                    ...fileObj.metadata,
+                    bitDepth: targetBitDepth
+                };
+
+                // Create base WAV file with new bit depth
+                const wavBuffer = this.audioProcessor.createWavFile(audioBuffer, targetBitDepth, null, exportMetadata);
+                console.log(`[MultiProcess] WAV buffer created: ${wavBuffer.byteLength} bytes`);
+                
+                // Create bEXT and iXML chunks with metadata
+                const bextChunk = this.metadataHandler.createBextChunk(exportMetadata);
+                const ixmlChunk = this.metadataHandler.createIXMLChunk(exportMetadata);
+                
+                // Calculate padding and sizes
+                const bextPadding = bextChunk.byteLength % 2 !== 0 ? 1 : 0;
+                const ixmlPadding = ixmlChunk.byteLength % 2 !== 0 ? 1 : 0;
+                const bextTotalSize = 8 + bextChunk.byteLength + bextPadding;
+                const ixmlTotalSize = 8 + ixmlChunk.byteLength + ixmlPadding;
+                
+                // Calculate new file size
+                const wavView = new DataView(wavBuffer);
+                const wavArray = new Uint8Array(wavBuffer);
+                const riffSize = wavView.getUint32(4, true);
+                const oldFileSize = riffSize + 8;
+                const newFileSize = oldFileSize + bextTotalSize + ixmlTotalSize;
+                
+                // Create new buffer with metadata chunks
+                const newWavBuffer = new Uint8Array(newFileSize);
+                newWavBuffer.set(wavArray);
+                
+                const chunkView = new DataView(newWavBuffer.buffer);
+                
+                // Write bEXT chunk
+                let chunkOffset = oldFileSize;
+                newWavBuffer[chunkOffset] = 0x62;     // 'b'
+                newWavBuffer[chunkOffset + 1] = 0x65; // 'e'
+                newWavBuffer[chunkOffset + 2] = 0x78; // 'x'
+                newWavBuffer[chunkOffset + 3] = 0x74; // 't'
+                chunkView.setUint32(chunkOffset + 4, bextChunk.byteLength, true);
+                newWavBuffer.set(new Uint8Array(bextChunk), chunkOffset + 8);
+                chunkOffset += bextTotalSize;
+                
+                // Write iXML chunk
+                newWavBuffer[chunkOffset] = 0x69;     // 'i'
+                newWavBuffer[chunkOffset + 1] = 0x58; // 'X'
+                newWavBuffer[chunkOffset + 2] = 0x4d; // 'M'
+                newWavBuffer[chunkOffset + 3] = 0x4c; // 'L'
+                chunkView.setUint32(chunkOffset + 4, ixmlChunk.byteLength, true);
+                newWavBuffer.set(new Uint8Array(ixmlChunk), chunkOffset + 8);
+                
+                // Update RIFF file size
+                chunkView.setUint32(4, newFileSize - 8, true);
+                
+                const blob = new Blob([newWavBuffer], { type: 'audio/wav' });
+
+                // Write to file
+                console.log(`[MultiProcess] Writing file to output directory...`);
+                const fileHandle = await options.outputDirHandle.getFileHandle(fileName, { create: true });
+                const writable = await fileHandle.createWritable();
+                await writable.write(blob);
+                await writable.close();
+                console.log(`[MultiProcess] File written successfully`);
+
+                // Parse new file handle and metadata
+                const newFile = await fileHandle.getFile();
+                const metadata = await this.metadataHandler.parseFile(newFile);
+                const newFileObj = {
+                    handle: fileHandle,
+                    metadata: metadata,
+                    file: newFile,
+                    isGroup: false
+                };
+                this.files.push(newFileObj);
+                console.log(`[MultiProcess] Conversion complete for ${fileObj.metadata.filename}`);
+
+                results.push({ success: true, fileObj: newFileObj });
+
+            } catch (err) {
+                console.error(`[MultiProcess] Failed to convert ${fileObj.metadata.filename}:`, err);
+                // On failure, keep the original file (it will be included in results as a "passthrough")
+                results.push({ success: true, fileObj: fileObj, skipped: true, reason: err.message });
+            }
+        }
+
+        return results;
+    }
+
     async mpNormalize(fileList, options) {
         const results = [];
 
@@ -6753,17 +6984,6 @@ class App {
         }
     }
 
-    secondsToDuration(seconds) {
-        // Convert seconds to HH:MM:SS:FF format (assumes 24fps for frames)
-        const totalSeconds = Math.floor(seconds);
-        const hours = Math.floor(totalSeconds / 3600);
-        const minutes = Math.floor((totalSeconds % 3600) / 60);
-        const secs = totalSeconds % 60;
-        const frames = Math.round((seconds - totalSeconds) * 24);
-
-        return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}:${String(frames).padStart(2, '0')}`;
-    }
-
     animate() {
         const isPlaying = this.audioEngine.isPlaying;
         const isStopped = this.isStopped;
@@ -6864,8 +7084,11 @@ class App {
     }
 
     async applyNormalize() {
-        const targetDb = parseFloat(document.getElementById('normalize-target').value);
-        if (isNaN(targetDb) || targetDb > 0 || targetDb < -20) {
+        const bypassNormalize = document.getElementById('normalize-bypass').checked;
+        const targetDb = bypassNormalize ? null : parseFloat(document.getElementById('normalize-target').value);
+        const outputBitDepth = document.getElementById('normalize-bit-depth').value;
+
+        if (!bypassNormalize && (isNaN(targetDb) || targetDb > 0 || targetDb < -20)) {
             alert('Please enter a valid target level between -20 and 0 dBFS.');
             return;
         }
@@ -6884,26 +7107,90 @@ class App {
                 const targets = item.isGroup ? item.siblings : [item];
 
                 for (const target of targets) {
-                    console.log(`Normalizing ${target.metadata.filename}...`);
+                    console.log(`Processing ${target.metadata.filename}...`);
 
                     // Read file
-                    const arrayBuffer = await target.file.arrayBuffer();
+                    let arrayBuffer = await target.file.arrayBuffer();
 
-                    // Normalize
-                    // Note: normalize modifies buffer in place or returns new one
-                    // Check if region is active (both start and end are not null)
-                    const region = (this.region && this.region.start !== null && this.region.end !== null) ? this.region : null;
-                    const normalizedBuffer = await this.audioProcessor.normalize(arrayBuffer, targetDb, region);
+                    // Step 1: Normalize (if not bypassed)
+                    if (!bypassNormalize) {
+                        console.log(`Normalizing to ${targetDb} dBFS...`);
+                        const region = (this.region && this.region.start !== null && this.region.end !== null) ? this.region : null;
+                        arrayBuffer = await this.audioProcessor.normalize(arrayBuffer, targetDb, region);
+                    }
+
+                    // Step 2: Convert bit depth (if needed)
+                    if (outputBitDepth !== 'same') {
+                        console.log(`Converting to ${outputBitDepth}-bit...`);
+                        
+                        const targetBitDepthNum = outputBitDepth === '32' ? 32 : parseInt(outputBitDepth);
+                        const currentBitDepth = target.metadata.bitDepth || 24;
+                        
+                        // Only convert if bit depths differ
+                        if (currentBitDepth !== targetBitDepthNum) {
+                            // Decode audio to apply bit depth conversion
+                            const audioBuffer = await this.audioEngine.audioCtx.decodeAudioData(arrayBuffer.slice(0));
+                            
+                            // Update metadata
+                            target.metadata.bitDepth = targetBitDepthNum;
+                            
+                            // Create base WAV file with target bit depth
+                            let wavBuffer = this.audioProcessor.createWavFile(audioBuffer, targetBitDepthNum, null, target.metadata);
+                            
+                            // Preserve bEXT and iXML chunks
+                            const bextChunk = this.metadataHandler.createBextChunk(target.metadata);
+                            const ixmlChunk = this.metadataHandler.createIXMLChunk(target.metadata);
+                            
+                            // Calculate padding and sizes
+                            const bextPadding = bextChunk.byteLength % 2 !== 0 ? 1 : 0;
+                            const ixmlPadding = ixmlChunk.byteLength % 2 !== 0 ? 1 : 0;
+                            const bextTotalSize = 8 + bextChunk.byteLength + bextPadding;
+                            const ixmlTotalSize = 8 + ixmlChunk.byteLength + ixmlPadding;
+                            
+                            // Get current WAV size
+                            const wavView = new DataView(wavBuffer);
+                            const wavArray = new Uint8Array(wavBuffer);
+                            const riffSize = wavView.getUint32(4, true);
+                            const oldFileSize = riffSize + 8;
+                            const newFileSize = oldFileSize + bextTotalSize + ixmlTotalSize;
+                            
+                            // Create new buffer with metadata chunks
+                            const newWavBuffer = new Uint8Array(newFileSize);
+                            newWavBuffer.set(wavArray);
+                            
+                            const chunkView = new DataView(newWavBuffer.buffer);
+                            
+                            // Write bEXT chunk
+                            let chunkOffset = oldFileSize;
+                            newWavBuffer[chunkOffset] = 0x62;     // 'b'
+                            newWavBuffer[chunkOffset + 1] = 0x65; // 'e'
+                            newWavBuffer[chunkOffset + 2] = 0x78; // 'x'
+                            newWavBuffer[chunkOffset + 3] = 0x74; // 't'
+                            chunkView.setUint32(chunkOffset + 4, bextChunk.byteLength, true);
+                            newWavBuffer.set(new Uint8Array(bextChunk), chunkOffset + 8);
+                            chunkOffset += bextTotalSize;
+                            
+                            // Write iXML chunk
+                            newWavBuffer[chunkOffset] = 0x69;     // 'i'
+                            newWavBuffer[chunkOffset + 1] = 0x58; // 'X'
+                            newWavBuffer[chunkOffset + 2] = 0x4d; // 'M'
+                            newWavBuffer[chunkOffset + 3] = 0x4c; // 'L'
+                            chunkView.setUint32(chunkOffset + 4, ixmlChunk.byteLength, true);
+                            newWavBuffer.set(new Uint8Array(ixmlChunk), chunkOffset + 8);
+                            
+                            // Update RIFF file size
+                            chunkView.setUint32(4, newFileSize - 8, true);
+                            
+                            arrayBuffer = newWavBuffer.buffer;
+                        }
+                    }
 
                     // Save back to file
-                    // We use the file handle to write the raw WAV bytes directly
                     const writable = await target.handle.createWritable();
-                    await writable.write(normalizedBuffer);
+                    await writable.write(arrayBuffer);
                     await writable.close();
 
-                    // Refresh file object on the target (Sibling or Single)
-                    // CRITICAL: This updates the reference so subsequent reads (like loadAudioForFile)
-                    // use the valid, new file blob.
+                    // Refresh file object on the target
                     target.file = await target.handle.getFile();
                 }
 
@@ -6913,20 +7200,19 @@ class App {
                 }
 
                 // If this is the currently loaded file, reload audio engine
-                // Use setTimeout to allow handle to settle if needed, though await above should suffice
                 if (this.currentFileMetadata && this.currentFileMetadata.filename === item.metadata.filename) {
-                    // Force reload of the updated file blobs
                     await this.loadAudioForFile(index);
                 }
 
                 processedCount++;
             }
 
-            alert(`Successfully normalized ${processedCount} file(s).`);
+            const action = bypassNormalize ? 'converted' : 'normalized and converted';
+            alert(`Successfully ${action} ${processedCount} file(s).`);
 
         } catch (err) {
-            console.error('Normalization failed:', err);
-            alert('An error occurred during normalization. Check console for details.');
+            console.error('Operation failed:', err);
+            alert('An error occurred. Check console for details.');
         } finally {
             document.body.style.cursor = 'default';
         }
@@ -7838,7 +8124,8 @@ class App {
                     .filter(group => group.length >= 2)
                     .map(group => ({
                         files: group.map(g => g.file),
-                        fileIndices: group.map(g => g.originalIndex)
+                        // Store file objects directly instead of indices to avoid index invalidation
+                        fileObjects: group.map(g => g.file)
                     }));
             }
         }
@@ -7861,7 +8148,8 @@ class App {
                     })),
                     metadata: { ...group.files[0].metadata },
                     destinationHandle: null,
-                    fileIndices: group.fileIndices // Track original indices
+                    // Store file objects directly for stable validation
+                    originalFileObjects: group.fileObjects
                 };
             });
         } else if (siblingGroups.length === 0) {
@@ -8102,14 +8390,25 @@ class App {
         // Validate that groups still exist (either as sibling groups or as valid individual files)
         const currentSiblingGroups = this.files.filter(item => item.isGroup);
         const hasValidGroups = this.combineGroups.every(group => {
-            // If group has fileIndices, it's from selected individual mono files - validate they still exist
-            if (group.fileIndices) {
-                return group.fileIndices.every(idx => 
-                    idx < this.files.length && 
-                    this.files[idx] && 
-                    !this.files[idx].isGroup &&
-                    this.files[idx].metadata.channels === 1
-                );
+            // If group has originalFileObjects, it's from selected individual mono files - validate they still exist
+            if (group.originalFileObjects && group.originalFileObjects.length > 0) {
+                // Check that all original file objects still exist somewhere in this.files
+                // (either as individual files or as siblings in a group)
+                return group.originalFileObjects.every(fileObj => {
+                    // Check if file exists as an individual file
+                    const existsAsIndividual = this.files.some(item => 
+                        !item.isGroup && 
+                        item === fileObj
+                    );
+                    
+                    // Check if file exists as a sibling in a group
+                    const existsAsGroupSibling = currentSiblingGroups.some(group =>
+                        group.siblings && 
+                        group.siblings.some(sib => sib === fileObj)
+                    );
+                    
+                    return existsAsIndividual || existsAsGroupSibling;
+                });
             }
             // Otherwise, it's a sibling group - check if it exists
             return currentSiblingGroups.some(sg => 

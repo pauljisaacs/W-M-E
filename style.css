@@ -1535,6 +1535,48 @@ select {
     accent-color: var(--accent-primary);
 }
 
+/* Settings modal checkboxes */
+.settings-group {
+    margin-bottom: 1.5rem;
+}
+
+.settings-group label {
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    user-select: none;
+}
+
+.settings-group input[type="checkbox"] {
+    width: 22px;
+    height: 22px;
+    margin-right: 0.75rem;
+    cursor: pointer;
+    accent-color: var(--accent-primary);
+    flex-shrink: 0;
+}
+
+/* Normalize modal checkbox */
+.normalize-checkbox-group {
+    margin-bottom: 1.5rem;
+}
+
+.normalize-checkbox-group label {
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    user-select: none;
+}
+
+.normalize-checkbox-group input[type="checkbox"] {
+    width: 22px;
+    height: 22px;
+    margin-right: 0.75rem;
+    cursor: pointer;
+    accent-color: var(--accent-primary);
+    flex-shrink: 0;
+}
+
 /* Toast notification */
 .toast-notification {
     position: fixed;
