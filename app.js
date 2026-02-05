@@ -2653,6 +2653,25 @@ class App {
                 
                 // Enable combine if at least one group has 2+ files
                 canCombineSelectedMono = Array.from(groups.values()).some(group => group.length >= 2);
+            } else {
+                // Handle mixed mono and poly files - check if they have matching TC and duration
+                const selectedFiles = Array.from(this.selectedIndices).map(idx => this.files[idx]);
+                const noGroups = selectedFiles.every(f => f && !f.isGroup);
+                
+                if (noGroups && selectedFiles.length >= 2) {
+                    // Group by TC Start and duration (works for both mono and poly)
+                    const groups = new Map();
+                    for (const file of selectedFiles) {
+                        const key = `${file.metadata.tcStart}_${file.metadata.duration}`;
+                        if (!groups.has(key)) {
+                            groups.set(key, []);
+                        }
+                        groups.get(key).push(file);
+                    }
+                    
+                    // Enable combine if at least one group has 2+ files (mixed mono/poly is OK)
+                    canCombineSelectedMono = Array.from(groups.values()).some(group => group.length >= 2);
+                }
             }
         }
         
@@ -8207,10 +8226,10 @@ class App {
             );
             
             if (allMono) {
-                // Group files by TC Start and audio size
+                // Group files by TC Start and duration
                 const groups = new Map();
                 selectedFiles.forEach((file, idx) => {
-                    const key = `${file.metadata.tcStart}_${file.metadata.audioDataSize}`;
+                    const key = `${file.metadata.tcStart}_${file.metadata.duration}`;
                     if (!groups.has(key)) {
                         groups.set(key, []);
                     }
@@ -8270,6 +8289,33 @@ class App {
             }
         }
         
+        // Check for mixed mono/poly files with matching TC and duration
+        let mixedFileGroups = [];
+        if (this.selectedIndices.size >= 2 && monoFileGroups.length === 0 && polyFileGroups.length === 0) {
+            const selectedFiles = Array.from(this.selectedIndices).map(idx => this.files[idx]);
+            const noGroups = selectedFiles.every(f => f && !f.isGroup);
+            
+            if (noGroups) {
+                // Group by TC Start and duration (works for both mono and poly)
+                const groups = new Map();
+                selectedFiles.forEach(file => {
+                    const key = `${file.metadata.tcStart}_${file.metadata.duration}`;
+                    if (!groups.has(key)) {
+                        groups.set(key, []);
+                    }
+                    groups.get(key).push(file);
+                });
+                
+                // Keep groups with 2+ files
+                mixedFileGroups = Array.from(groups.values())
+                    .filter(group => group.length >= 2)
+                    .map(group => ({
+                        files: group,
+                        fileObjects: group
+                    }));
+            }
+        }
+        
         // If we have mono file groups, prioritize combining them
         if (monoFileGroups.length > 0) {
             this.combineGroups = monoFileGroups.map((group, groupIndex) => {
@@ -8314,10 +8360,32 @@ class App {
                     originalFileObjects: group.fileObjects
                 };
             });
+        } else if (mixedFileGroups.length > 0) {
+            // Combine mixed mono and poly files
+            this.combineGroups = mixedFileGroups.map((group, groupIndex) => {
+                const baseName = this.getCommonBaseName(group.files.map(f => f.metadata.filename));
+                
+                return {
+                    groupIndex: groupIndex,
+                    baseName: baseName,
+                    siblings: group.files.map((file, index) => ({
+                        originalIndex: index,
+                        handle: file.handle,
+                        file: file.file,
+                        metadata: file.metadata,
+                        order: index,
+                        selected: true
+                    })),
+                    metadata: { ...group.files[0].metadata },
+                    destinationHandle: null,
+                    // Store file objects directly for stable validation
+                    originalFileObjects: group.fileObjects
+                };
+            });
         } else if (this.selectedIndices.size === 0 && siblingGroups.length > 0) {
             // Bug fix: Only show sibling groups that contain selected files
             // If no files selected, show message instead of all groups
-            alert('Please select files first. You can either:\n1. Select individual mono files with matching TC start\n2. Select poly files with matching TC start and duration\n3. Select files from an existing sibling group');
+            alert('Please select files first. You can either:\n1. Select individual mono files with matching TC start\n2. Select poly files with matching TC start and duration\n3. Select mixed mono/poly files with matching TC start and duration\n4. Select files from an existing sibling group');
             return;
         } else if (siblingGroups.length === 0) {
             alert('No sibling file groups detected, and no compatible selected files to combine.');
@@ -8334,7 +8402,7 @@ class App {
             });
 
             if (selectedSiblingGroups.length === 0) {
-                alert('Please select files to combine. You can either:\n1. Select individual mono files with matching TC start\n2. Select poly files with matching TC start and duration\n3. Select files from an existing sibling group');
+                alert('Please select files to combine. You can either:\n1. Select individual mono files with matching TC start\n2. Select poly files with matching TC start and duration\n3. Select mixed mono/poly files with matching TC start and duration\n4. Select files from an existing sibling group');
                 return;
             }
 
