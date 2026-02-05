@@ -1011,6 +1011,18 @@
                 <button class="modal-close" id="combine-close-btn">&times;</button>
             </div>
             <div class="modal-body">
+                <!-- Bit Depth Selector -->
+                <div class="combine-bit-depth-section" style="background: var(--bg-secondary); padding: 1em; margin-bottom: 1.5em; border-radius: 4px;">
+                    <div style="display: flex; align-items: center; gap: 1em;">
+                        <label for="combine-target-bitdepth" id="combine-bitdepth-label" style="margin: 0; font-weight: 600; min-width: 300px;">Output Bit Depth:</label>
+                        <select id="combine-target-bitdepth" style="padding: 0.5em; border-radius: 4px; border: 1px solid var(--input-border); min-width: 150px;">
+                            <option value="16">16-bit</option>
+                            <option value="24" selected>24-bit</option>
+                            <option value="32">32-bit Float</option>
+                        </select>
+                    </div>
+                </div>
+
                 <!-- Shared Output Settings -->
                 <div class="combine-output-settings" style="background: var(--bg-secondary); padding: 1em; margin-bottom: 1.5em; border-radius: 4px;">
                     <h4 style="margin-top: 0; margin-bottom: 1em; font-size: 1.1em;">Output Settings (applies to all groups)</h4>
@@ -1092,6 +1104,16 @@
                         <button id="combine-select-dir-btn" class="btn secondary">Select Destination Folder</button>
                         <span id="combine-dest-path" style="color: var(--text-muted); font-size: 0.95em;">Same as source files</span>
                     </div>
+                </div>
+                
+                <!-- Apply Pattern Button (shown after first group) -->
+                <div id="combine-apply-pattern-section" style="display: none; margin-bottom: 1.5em; padding: 1em; background: rgba(255, 149, 0, 0.1); border: 1px solid var(--accent-primary); border-radius: 4px;">
+                    <p style="margin: 0 0 0.75em 0; font-size: 0.95em; color: var(--text-main);">
+                        <strong>Apply reorder pattern to other groups?</strong>
+                    </p>
+                    <p id="combine-pattern-preview" style="margin: 0 0 1em 0; font-size: 0.9em; color: var(--text-muted); font-style: italic;"></p>
+                    <button id="combine-apply-pattern-btn" class="btn secondary" style="margin-right: 0.5em;">Apply Pattern to All Groups</button>
+                    <button id="combine-clear-pattern-btn" class="btn secondary" style="background: none; border: 1px solid var(--input-border);">Dismiss</button>
                 </div>
                 
                 <!-- File Groups -->

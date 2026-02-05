@@ -1353,16 +1353,27 @@ class App {
     groupFiles(items) {
         const buckets = new Map();
 
-        // 1. Bucket by Audio Data Size + timeReference
-        // Using audioDataSize is more robust than file.size because metadata chunks can vary in length
-        // between Mix (L/R) and ISO tracks, but the actual audio payload should be identical.
+        // 1. Bucket by Scene + Take + Duration (metadata-based) OR Duration + TimeReference (fallback)
+        // Duration is reliable because same take = same duration, regardless of channel count
+        // (LR and ISO files have different channel counts but identical duration and timeReference)
         for (const item of items) {
-            const timeRef = item.metadata.timeReference !== undefined ? item.metadata.timeReference : 'unknown';
+            let key;
+            
+            // Try to group by scene + take + duration first (most reliable for production workflows)
+            if (item.metadata.scene && item.metadata.take && item.metadata.duration) {
+                key = `scene_${item.metadata.scene}_take_${item.metadata.take}_dur_${item.metadata.duration}`;
+                console.log(`[Grouping] Using scene+take+duration key for ${item.metadata.filename}: ${key}`);
+            } else if (item.metadata.duration && item.metadata.timeReference !== undefined) {
+                // Fallback to duration + time reference if no scene/take metadata
+                const timeRef = item.metadata.timeReference;
+                key = `dur_${item.metadata.duration}_timeref_${timeRef}`;
+                console.log(`[Grouping] Using duration+timeRef key for ${item.metadata.filename}: ${key}`);
+            } else {
+                // Last resort: just use duration
+                key = `dur_${item.metadata.duration || 'unknown'}`;
+                console.log(`[Grouping] Using duration-only key for ${item.metadata.filename}: ${key}`);
+            }
 
-            // Use audioDataSize if available, otherwise fallback to file size (for non-compliant files)
-            const sizeKey = item.metadata.audioDataSize || item.file.size;
-
-            const key = `${sizeKey}_${timeRef}`;
             if (!buckets.has(key)) buckets.set(key, []);
             buckets.get(key).push(item);
         }
@@ -1375,8 +1386,6 @@ class App {
                 result.push(bucket[0]); // Single file
                 continue;
             }
-
-            console.log(`[Grouping] Checking bucket '${key}' with ${bucket.length} items.`);
 
             // Bucket has potential siblings
             // Group by Base Name (regex match)
@@ -1392,7 +1401,6 @@ class App {
                     if (!groups.has(baseName)) groups.set(baseName, []);
                     groups.get(baseName).push(item);
                 } else {
-                    console.log(`[Grouping] File '${item.metadata.filename}' did not match sibling regex.`);
                     singles.push(item);
                 }
             }
@@ -1403,8 +1411,6 @@ class App {
             // Process grouped siblings
             for (const [baseName, siblings] of groups) {
                 if (siblings.length > 1) {
-                    console.log(`[Grouping] Found sibling group: ${baseName} (${siblings.length} files)`);
-
                     // Sort siblings by filename (numeric suffix logic if possible)
                     siblings.sort((a, b) => {
                         return a.metadata.filename.localeCompare(b.metadata.filename, undefined, { numeric: true, sensitivity: 'base' });
@@ -2470,11 +2476,8 @@ class App {
                 const siblingOrder = parseInt(r.dataset.siblingOrder);
                 const key = `${parentIndex}:${siblingOrder}`;
                 
-                console.log('[updateSelectionUI] Child row:', { parentIndex, siblingOrder, key, hasKey: this.selectedChildren.has(key) });
-                
                 if (this.selectedChildren.has(key)) {
                     r.classList.add('selected');
-                    console.log('[updateSelectionUI] Added selected class to child row:', key);
                 } else {
                     r.classList.remove('selected');
                 }
@@ -2529,11 +2532,28 @@ class App {
         safeSetDisabled('load-mix-btn', this.selectedIndices.size !== 1);
         
         // Enable combine button if:
-        // 1. Any sibling groups are detected AND no poly file is selected, OR
-        // 2. Multiple individual mono files are selected that can be grouped by TC Start and audio size
+        // 1. Any sibling groups are detected, OR
+        // 2. Multiple individual mono files are selected that can be grouped by TC Start and audio size, OR
+        // 3. Multiple poly files are selected with matching TC Start and duration, OR
+        // 4. Selected files belong to sibling groups
         const hasSiblingGroups = this.files.some(item => item.isGroup);
+        
+        // Check if any selected file is part of a sibling group
+        const selectedFilesInGroups = Array.from(this.selectedIndices).some(idx => {
+            const selectedFile = this.files[idx];
+            if (!selectedFile || selectedFile.isGroup) return false;
+            
+            // Check if this file is a sibling in any group
+            return this.files.some(item => 
+                item.isGroup && 
+                item.siblings && 
+                item.siblings.some(sib => sib === selectedFile)
+            );
+        });
+        
         let isPolySelected = false;
         let canCombineSelectedMono = false;
+        let canCombineSelectedPoly = false;
         
         if (this.selectedIndices.size >= 1) {
             // Check if all selected files are poly (channels > 1) and not groups
@@ -2545,8 +2565,41 @@ class App {
                 f.metadata.channels > 1
             );
             
-            if (allPoly) {
+            if (allPoly && selectedFiles.length >= 2) {
                 isPolySelected = true;
+                
+                // Group selected poly files by TC start (to handle multiple different sibling groups)
+                const groupsByTC = new Map();
+                for (const file of selectedFiles) {
+                    const tc = file.metadata.tcStart;
+                    if (!groupsByTC.has(tc)) {
+                        groupsByTC.set(tc, []);
+                    }
+                    groupsByTC.get(tc).push(file);
+                }
+                
+                // Check if EACH TC group is combinable (matching duration within each TC group)
+                let allGroupsCombinable = true;
+                for (const [tc, filesInGroup] of groupsByTC) {
+                    if (filesInGroup.length < 2) {
+                        // Single file in this TC group can't be combined
+                        allGroupsCombinable = false;
+                        break;
+                    }
+                    
+                    // Check duration match within this group
+                    const firstDuration = filesInGroup[0].metadata.duration;
+                    const durationMatch = filesInGroup.every(f =>
+                        f.metadata.duration === firstDuration
+                    );
+                    
+                    if (!durationMatch) {
+                        allGroupsCombinable = false;
+                        break;
+                    }
+                }
+                
+                canCombineSelectedPoly = allGroupsCombinable && groupsByTC.size >= 1;
             } else if (this.selectedIndices.size === 1) {
                 // Single selection: check if it's poly
                 const selectedFile = selectedFiles[0];
@@ -2557,7 +2610,7 @@ class App {
             }
         }
         
-        if (this.selectedIndices.size >= 2) {
+        if (this.selectedIndices.size >= 2 && !isPolySelected) {
             // Check if selected files are individual mono files that can be grouped
             const selectedFiles = Array.from(this.selectedIndices).map(idx => this.files[idx]);
             const allMono = selectedFiles.every(f => 
@@ -2583,7 +2636,13 @@ class App {
             }
         }
         
-        safeSetDisabled('combine-btn', (!hasSiblingGroups && !canCombineSelectedMono) || isPolySelected);
+        // Button is disabled only if no combining is possible
+        // Note: hasSiblingGroups is NOT required - files can be combined even if auto-grouping is off
+        // as long as they have matching duration (for poly) or can be grouped by TC/size (for mono)
+        const canCombine = canCombineSelectedMono || canCombineSelectedPoly || selectedFilesInGroups;
+
+        
+        safeSetDisabled('combine-btn', !canCombine);
         
         // Enable export TC range button if one or more files are selected
         safeSetDisabled('export-tc-range-btn', this.selectedIndices.size === 0);
@@ -8129,6 +8188,45 @@ class App {
                     }));
             }
         }
+
+        // Check if selected poly files can be combined (matching TC start and duration within each TC group)
+        let polyFileGroups = [];
+        if (this.selectedIndices.size >= 2) {
+            const selectedFiles = Array.from(this.selectedIndices).map(idx => this.files[idx]);
+            const allPoly = selectedFiles.every(f => 
+                f && 
+                !f.isGroup && 
+                f.metadata && 
+                f.metadata.channels > 1
+            );
+            
+            if (allPoly) {
+                // Group poly files by TC start (to handle multiple different sibling groups)
+                const groupsByTC = new Map();
+                selectedFiles.forEach(file => {
+                    const tc = file.metadata.tcStart;
+                    if (!groupsByTC.has(tc)) {
+                        groupsByTC.set(tc, []);
+                    }
+                    groupsByTC.get(tc).push(file);
+                });
+                
+                // Convert to polyFileGroups format - each TC group becomes a separate combine group
+                polyFileGroups = Array.from(groupsByTC.values())
+                    .filter(group => {
+                        // Must have 2+ files in the group
+                        if (group.length < 2) return false;
+                        
+                        // All files in group must have matching duration
+                        const firstDuration = group[0].metadata.duration;
+                        return group.every(f => f.metadata.duration === firstDuration);
+                    })
+                    .map(group => ({
+                        files: group,
+                        fileObjects: group
+                    }));
+            }
+        }
         
         // If we have mono file groups, prioritize combining them
         if (monoFileGroups.length > 0) {
@@ -8152,12 +8250,53 @@ class App {
                     originalFileObjects: group.fileObjects
                 };
             });
+        } else if (polyFileGroups.length > 0) {
+            // Combine poly files
+            this.combineGroups = polyFileGroups.map((group, groupIndex) => {
+                const baseName = this.getCommonBaseName(group.files.map(f => f.metadata.filename));
+                
+                return {
+                    groupIndex: groupIndex,
+                    baseName: baseName,
+                    siblings: group.files.map((file, index) => ({
+                        originalIndex: index,
+                        handle: file.handle,
+                        file: file.file,
+                        metadata: file.metadata,
+                        order: index,
+                        selected: true
+                    })),
+                    metadata: { ...group.files[0].metadata },
+                    destinationHandle: null,
+                    // Store file objects directly for stable validation
+                    originalFileObjects: group.fileObjects
+                };
+            });
+        } else if (this.selectedIndices.size === 0 && siblingGroups.length > 0) {
+            // Bug fix: Only show sibling groups that contain selected files
+            // If no files selected, show message instead of all groups
+            alert('Please select files first. You can either:\n1. Select individual mono files with matching TC start\n2. Select poly files with matching TC start and duration\n3. Select files from an existing sibling group');
+            return;
         } else if (siblingGroups.length === 0) {
             alert('No sibling file groups detected, and no compatible selected files to combine.');
             return;
         } else {
-            // Use existing sibling groups
-            this.combineGroups = siblingGroups.map((group, groupIndex) => {
+            // Use existing sibling groups, but only if their children are selected
+            const selectedSiblingGroups = siblingGroups.filter(group => {
+                // Check if any sibling in this group is selected
+                return group.siblings && group.siblings.some(sib => 
+                    this.selectedChildren && 
+                    this.selectedChildren.has(sib) ||
+                    (this.selectedIndices && this.selectedIndices.has(this.files.indexOf(group)))
+                );
+            });
+
+            if (selectedSiblingGroups.length === 0) {
+                alert('Please select files to combine. You can either:\n1. Select individual mono files with matching TC start\n2. Select poly files with matching TC start and duration\n3. Select files from an existing sibling group');
+                return;
+            }
+
+            this.combineGroups = selectedSiblingGroups.map((group, groupIndex) => {
                 const baseName = group.metadata.filename.replace(/_X\.wav$/, '');
                 
                 return {
@@ -8210,63 +8349,109 @@ class App {
                 fileItem.draggable = true;
                 fileItem.dataset.groupIndex = groupIndex;
                 fileItem.dataset.fileIndex = index;
+                fileItem.dataset.order = index; // Track current order
 
-                const checkbox = document.createElement('input');
-                checkbox.type = 'checkbox';
-                checkbox.className = 'combine-file-checkbox';
-                checkbox.checked = true;
-                checkbox.dataset.groupIndex = groupIndex;
-                checkbox.dataset.fileIndex = index;
-                checkbox.addEventListener('change', (e) => {
-                    this.combineGroups[groupIndex].siblings[index].selected = e.target.checked;
-                    // Update channel count preview
-                    const selectedCount = this.combineGroups[groupIndex].siblings.filter(s => s.selected).length;
-                    const countSpan = groupDiv.querySelector('.selected-count');
-                    if (countSpan) {
-                        countSpan.textContent = selectedCount;
-                    }
-                });
+                const positionLabel = document.createElement('div');
+                positionLabel.className = 'combine-position-label';
+                positionLabel.textContent = `#${index + 1}`;
+                positionLabel.style.fontWeight = '600';
+                positionLabel.style.minWidth = '2rem';
+                positionLabel.style.color = 'var(--text-muted)';
+                positionLabel.style.textAlign = 'center';
 
                 const dragHandle = document.createElement('div');
                 dragHandle.className = 'drag-handle';
-                dragHandle.textContent = '⋮⋮';
+                dragHandle.textContent = '≡';
+                dragHandle.style.cursor = 'grab';
+                dragHandle.style.color = 'var(--text-muted)';
+                dragHandle.style.fontSize = '1.2rem';
+                dragHandle.style.flexShrink = '0';
 
                 const fileName = document.createElement('div');
                 fileName.className = 'file-name';
                 fileName.textContent = sibling.metadata.filename;
+                fileName.style.flex = '1';
 
                 const channelLabel = document.createElement('div');
                 channelLabel.className = 'channel-label';
-                channelLabel.textContent = `Ch ${index + 1}`;
+                const channels = sibling.metadata.channels || 1;
+                channelLabel.textContent = `${channels} channel${channels > 1 ? 's' : ''}`;
+                channelLabel.style.color = 'var(--accent-primary)';
+                channelLabel.style.fontWeight = '600';
+                channelLabel.style.fontSize = '0.9em';
+                channelLabel.style.minWidth = '80px';
+                channelLabel.style.textAlign = 'right';
 
-                fileItem.appendChild(checkbox);
+                fileItem.appendChild(positionLabel);
                 fileItem.appendChild(dragHandle);
                 fileItem.appendChild(fileName);
                 fileItem.appendChild(channelLabel);
+                fileItem.style.display = 'flex';
+                fileItem.style.alignItems = 'center';
+                fileItem.style.gap = '0.75em';
+                fileItem.style.padding = '0.75em';
+                fileItem.style.marginBottom = '0.5em';
+                fileItem.style.backgroundColor = 'var(--bg-primary)';
+                fileItem.style.border = '1px solid var(--input-border)';
+                fileItem.style.borderRadius = '4px';
+                fileItem.style.cursor = 'move';
+                fileItem.style.transition = 'all 0.2s ease';
 
                 // Drag and drop handlers
                 fileItem.addEventListener('dragstart', (e) => {
                     e.dataTransfer.effectAllowed = 'move';
                     e.dataTransfer.setData('text/plain', JSON.stringify({ groupIndex, fileIndex: index }));
                     fileItem.classList.add('dragging');
+                    fileItem.style.opacity = '0.5';
+                    fileItem.style.backgroundColor = 'var(--bg-secondary)';
                 });
 
                 fileItem.addEventListener('dragend', (e) => {
                     fileItem.classList.remove('dragging');
+                    fileItem.style.opacity = '1';
+                    fileItem.style.backgroundColor = 'var(--bg-primary)';
+                    // Update all position labels after reordering
+                    this.updateCombinePositionLabels(groupIndex);
                 });
 
                 fileItem.addEventListener('dragover', (e) => {
                     e.preventDefault();
                     e.dataTransfer.dropEffect = 'move';
-                    const dragging = fileList.querySelector('.dragging');
-                    if (dragging && dragging !== fileItem) {
-                        const rect = fileItem.getBoundingClientRect();
-                        const midpoint = rect.top + rect.height / 2;
-                        if (e.clientY < midpoint) {
-                            fileList.insertBefore(dragging, fileItem);
-                        } else {
-                            fileList.insertBefore(dragging, fileItem.nextSibling);
-                        }
+                    fileItem.style.backgroundColor = 'var(--bg-secondary)';
+                    fileItem.style.borderColor = 'var(--accent-primary)';
+                    fileItem.style.boxShadow = '0 0 8px rgba(255, 149, 0, 0.3)';
+                });
+
+                fileItem.addEventListener('dragleave', (e) => {
+                    fileItem.style.backgroundColor = 'var(--bg-primary)';
+                    fileItem.style.borderColor = 'var(--input-border)';
+                    fileItem.style.boxShadow = 'none';
+                });
+
+                fileItem.addEventListener('drop', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    fileItem.style.backgroundColor = 'var(--bg-primary)';
+                    fileItem.style.borderColor = 'var(--input-border)';
+                    fileItem.style.boxShadow = 'none';
+                    
+                    // Get the dragged file data
+                    const draggedData = JSON.parse(e.dataTransfer.getData('text/plain'));
+                    const draggedGroupIndex = draggedData.groupIndex;
+                    const draggedFileIndex = draggedData.fileIndex;
+                    const targetGroupIndex = parseInt(fileItem.dataset.groupIndex);
+                    const targetFileIndex = parseInt(fileItem.dataset.fileIndex);
+                    
+                    // Only allow reordering within the same group
+                    if (draggedGroupIndex === targetGroupIndex && draggedFileIndex !== targetFileIndex) {
+                        // Swap in the siblings array
+                        const group = this.combineGroups[groupIndex];
+                        const temp = group.siblings[draggedFileIndex];
+                        group.siblings[draggedFileIndex] = group.siblings[targetFileIndex];
+                        group.siblings[targetFileIndex] = temp;
+                        
+                        // Re-render the file list to show new order
+                        this.renderCombineGroupFiles(groupIndex);
                     }
                 });
 
@@ -8310,8 +8495,423 @@ class App {
         // Update filename previews
         this.updateCombineFilenamePreviews();
 
+        // Check bit depth mismatch and update UI
+        this.updateCombineBitDepthUI();
+
+        // Wire up Apply Pattern button events
+        const applyPatternBtn = document.getElementById('combine-apply-pattern-btn');
+        const dismissPatternBtn = document.getElementById('combine-clear-pattern-btn');
+
+        applyPatternBtn.removeEventListener('click', this.boundApplyPattern);
+        dismissPatternBtn.removeEventListener('click', this.boundDismissPattern);
+
+        this.boundApplyPattern = () => this.applyReorderPatternToAllGroups();
+        this.boundDismissPattern = () => {
+            document.getElementById('combine-apply-pattern-section').style.display = 'none';
+        };
+
+        applyPatternBtn.addEventListener('click', this.boundApplyPattern);
+        dismissPatternBtn.addEventListener('click', this.boundDismissPattern);
+
+        // Pattern button will show only after files are reordered (not on modal open)
+
         const modal = document.getElementById('combine-modal');
         modal.classList.add('active');
+    }
+
+    /**
+     * Detect bit depth mismatch across all groups and update UI
+     */
+    updateCombineBitDepthUI() {
+        if (!this.combineGroups || this.combineGroups.length === 0) return;
+
+        // Collect all bit depths across all groups
+        const allBitDepths = new Set();
+        this.combineGroups.forEach(group => {
+            group.siblings.forEach(sib => {
+                allBitDepths.add(sib.metadata.bitDepth);
+            });
+        });
+
+        // Determine if there's a mismatch
+        const hasMismatch = allBitDepths.size > 1;
+        const label = document.getElementById('combine-bitdepth-label');
+        const selector = document.getElementById('combine-target-bitdepth');
+
+        if (hasMismatch) {
+            label.textContent = 'Bit depths mismatched. Select a common bit depth for all files:';
+            label.style.color = 'var(--accent-primary)';
+            selector.style.borderColor = 'var(--accent-primary)';
+        } else {
+            const commonBitDepth = Array.from(allBitDepths)[0];
+            label.textContent = `Convert output bit depth (current: ${commonBitDepth}-bit):`;
+            label.style.color = 'var(--text-main)';
+            selector.style.borderColor = 'var(--input-border)';
+            // Set selector to match current bit depth
+            selector.value = commonBitDepth.toString();
+        }
+
+        // Set default to highest bit depth if mismatch
+        if (hasMismatch) {
+            const highestBitDepth = Math.max(...Array.from(allBitDepths));
+            selector.value = highestBitDepth.toString();
+        }
+    }
+
+    /**
+     * Update position labels after reordering files within a group
+     */
+    renderCombineGroupFiles(groupIndex) {
+        const fileList = document.querySelector(`.combine-file-list[data-group-index="${groupIndex}"]`);
+        if (!fileList || !this.combineGroups || !this.combineGroups[groupIndex]) return;
+
+        const group = this.combineGroups[groupIndex];
+        
+        // Clear existing file items
+        fileList.querySelectorAll('.combine-file-item').forEach(item => item.remove());
+        
+        // Re-render all siblings in new order
+        group.siblings.forEach((sibling, index) => {
+            const fileItem = document.createElement('div');
+            fileItem.className = 'combine-file-item';
+            fileItem.draggable = true;
+            fileItem.dataset.groupIndex = groupIndex;
+            fileItem.dataset.fileIndex = index;
+            fileItem.dataset.order = index;
+
+            const positionLabel = document.createElement('div');
+            positionLabel.className = 'combine-position-label';
+            positionLabel.textContent = `#${index + 1}`;
+            positionLabel.style.fontWeight = '600';
+            positionLabel.style.minWidth = '2rem';
+            positionLabel.style.color = 'var(--text-muted)';
+            positionLabel.style.textAlign = 'center';
+
+            const dragHandle = document.createElement('div');
+            dragHandle.className = 'drag-handle';
+            dragHandle.textContent = '≡';
+            dragHandle.style.cursor = 'grab';
+            dragHandle.style.color = 'var(--text-muted)';
+            dragHandle.style.fontSize = '1.2rem';
+            dragHandle.style.flexShrink = '0';
+
+            const fileName = document.createElement('div');
+            fileName.className = 'file-name';
+            fileName.textContent = sibling.metadata.filename;
+            fileName.style.flex = '1';
+
+            const channelLabel = document.createElement('div');
+            channelLabel.className = 'channel-label';
+            const channels = sibling.metadata.channels || 1;
+            channelLabel.textContent = `${channels} channel${channels > 1 ? 's' : ''}`;
+            channelLabel.style.color = 'var(--accent-primary)';
+            channelLabel.style.fontWeight = '600';
+            channelLabel.style.fontSize = '0.9em';
+            channelLabel.style.minWidth = '80px';
+            channelLabel.style.textAlign = 'right';
+
+            fileItem.appendChild(positionLabel);
+            fileItem.appendChild(dragHandle);
+            fileItem.appendChild(fileName);
+            fileItem.appendChild(channelLabel);
+            fileItem.style.display = 'flex';
+            fileItem.style.alignItems = 'center';
+            fileItem.style.gap = '0.75em';
+            fileItem.style.padding = '0.75em';
+            fileItem.style.marginBottom = '0.5em';
+            fileItem.style.backgroundColor = 'var(--bg-primary)';
+            fileItem.style.border = '1px solid var(--input-border)';
+            fileItem.style.borderRadius = '4px';
+            fileItem.style.cursor = 'move';
+            fileItem.style.transition = 'all 0.2s ease';
+
+            // Re-attach drag handlers
+            fileItem.addEventListener('dragstart', (e) => {
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/plain', JSON.stringify({ groupIndex, fileIndex: index }));
+                fileItem.classList.add('dragging');
+                fileItem.style.opacity = '0.5';
+                fileItem.style.backgroundColor = 'var(--bg-secondary)';
+            });
+
+            fileItem.addEventListener('dragend', (e) => {
+                fileItem.classList.remove('dragging');
+                fileItem.style.opacity = '1';
+                fileItem.style.backgroundColor = 'var(--bg-primary)';
+                this.updateCombinePositionLabels(groupIndex);
+            });
+
+            fileItem.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                fileItem.style.backgroundColor = 'var(--bg-secondary)';
+                fileItem.style.borderColor = 'var(--accent-primary)';
+                fileItem.style.boxShadow = '0 0 8px rgba(255, 149, 0, 0.3)';
+            });
+
+            fileItem.addEventListener('dragleave', (e) => {
+                fileItem.style.backgroundColor = 'var(--bg-primary)';
+                fileItem.style.borderColor = 'var(--input-border)';
+                fileItem.style.boxShadow = 'none';
+            });
+
+            fileItem.addEventListener('drop', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                fileItem.style.backgroundColor = 'var(--bg-primary)';
+                fileItem.style.borderColor = 'var(--input-border)';
+                fileItem.style.boxShadow = 'none';
+                
+                const draggedData = JSON.parse(e.dataTransfer.getData('text/plain'));
+                const draggedGroupIndex = draggedData.groupIndex;
+                const draggedFileIndex = draggedData.fileIndex;
+                const targetGroupIndex = parseInt(fileItem.dataset.groupIndex);
+                const targetFileIndex = parseInt(fileItem.dataset.fileIndex);
+                
+                if (draggedGroupIndex === targetGroupIndex && draggedFileIndex !== targetFileIndex) {
+                    const g = this.combineGroups[groupIndex];
+                    const temp = g.siblings[draggedFileIndex];
+                    g.siblings[draggedFileIndex] = g.siblings[targetFileIndex];
+                    g.siblings[targetFileIndex] = temp;
+                    
+                    this.renderCombineGroupFiles(groupIndex);
+                }
+            });
+
+            fileList.appendChild(fileItem);
+        });
+    }
+
+    updateCombinePositionLabels(groupIndex) {
+        const fileList = document.querySelector(`.combine-file-list[data-group-index="${groupIndex}"]`);
+        if (!fileList) return;
+
+        const fileItems = Array.from(fileList.querySelectorAll('.combine-file-item'));
+        fileItems.forEach((item, newPosition) => {
+            const posLabel = item.querySelector('.combine-position-label');
+            if (posLabel) {
+                posLabel.textContent = `#${newPosition + 1}`;
+            }
+            item.dataset.fileIndex = newPosition;
+        });
+
+        // Update the order property in combineGroups
+        if (this.combineGroups && this.combineGroups[groupIndex]) {
+            const newOrder = fileItems.map((item, idx) => {
+                const originalIndex = parseInt(item.dataset.fileIndex);
+                return this.combineGroups[groupIndex].siblings[originalIndex];
+            });
+            this.combineGroups[groupIndex].siblings = newOrder;
+        }
+
+        // Check if pattern can be applied to other groups (only show if multiple groups exist)
+        if (this.combineGroups && this.combineGroups.length > 1) {
+            this.checkAndShowApplyPatternButton();
+        }
+    }
+
+    /**
+     * Detect filename patterns and show "Apply Pattern" button if applicable
+     */
+    checkAndShowApplyPatternButton() {
+        if (!this.combineGroups || this.combineGroups.length <= 1) {
+            document.getElementById('combine-apply-pattern-section').style.display = 'none';
+            return;
+        }
+
+        const firstGroup = this.combineGroups[0];
+        const firstGroupPattern = this.extractFilenamePattern(firstGroup.siblings);
+
+        // Check if any other group has matching structure
+        let matchingGroups = 0;
+        for (let i = 1; i < this.combineGroups.length; i++) {
+            const group = this.combineGroups[i];
+            if (group.siblings.length === firstGroup.siblings.length) {
+                matchingGroups++;
+            }
+        }
+
+        if (matchingGroups > 0) {
+            const section = document.getElementById('combine-apply-pattern-section');
+            const preview = document.getElementById('combine-pattern-preview');
+            section.style.display = 'block';
+            
+            // Show the actual sequence of files in the first group
+            const sequenceStr = firstGroup.siblings
+                .map(sib => sib.metadata.filename)
+                .join(' → ');
+            
+            preview.textContent = `Sequence to apply: ${sequenceStr}`;
+        } else {
+            document.getElementById('combine-apply-pattern-section').style.display = 'none';
+        }
+    }
+
+    /**
+     * Extract filename pattern/suffix from file list
+     */
+    extractFilenamePattern(siblings) {
+        // Extract common suffix patterns (e.g., _ISO, _LR, _A, _B)
+        return siblings.map(sib => {
+            const filename = sib.metadata.filename;
+            // Extract suffix after last underscore or last letter sequence
+            const match = filename.match(/[_-]([A-Z0-9]+)\.wav$/i);
+            return match ? match[1] : null;
+        });
+    }
+
+    /**
+     * Apply reordering pattern from first group to all other groups
+     */
+    applyReorderPatternToAllGroups() {
+        if (!this.combineGroups || this.combineGroups.length <= 1) return;
+
+        const firstGroup = this.combineGroups[0];
+        const firstPattern = this.extractFilenamePattern(firstGroup.siblings);
+
+        for (let i = 1; i < this.combineGroups.length; i++) {
+            const group = this.combineGroups[i];
+            
+            // Only apply if group has same number of files
+            if (group.siblings.length !== firstGroup.siblings.length) {
+                continue;
+            }
+
+            const groupPattern = this.extractFilenamePattern(group.siblings);
+            const reorderedSiblings = Array(group.siblings.length);
+            
+            // Map siblings based on pattern matching
+            for (let srcIdx = 0; srcIdx < firstPattern.length; srcIdx++) {
+                const targetSuffix = firstPattern[srcIdx];
+                
+                // Find matching file in current group
+                for (let dstIdx = 0; dstIdx < groupPattern.length; dstIdx++) {
+                    if (groupPattern[dstIdx] === targetSuffix && !reorderedSiblings[srcIdx]) {
+                        reorderedSiblings[srcIdx] = group.siblings[dstIdx];
+                        break;
+                    }
+                }
+            }
+
+            // Only apply if we found valid mapping
+            if (reorderedSiblings.every(s => s !== undefined)) {
+                group.siblings = reorderedSiblings;
+                
+                // Update UI for this group
+                this.updateCombineGroupFileListUI(i);
+                this.updateCombinePositionLabels(i);
+            }
+        }
+
+        alert('✓ Pattern applied to all matching groups');
+        document.getElementById('combine-apply-pattern-section').style.display = 'none';
+    }
+
+    /**
+     * Re-render file list UI for a specific group (after pattern apply)
+     */
+    updateCombineGroupFileListUI(groupIndex) {
+        const group = this.combineGroups[groupIndex];
+        const fileList = document.querySelector(`.combine-file-list[data-group-index="${groupIndex}"]`);
+        
+        if (!fileList) return;
+
+        fileList.innerHTML = '';
+        
+        group.siblings.forEach((sibling, index) => {
+            const fileItem = document.createElement('div');
+            fileItem.className = 'combine-file-item';
+            fileItem.draggable = true;
+            fileItem.dataset.groupIndex = groupIndex;
+            fileItem.dataset.fileIndex = index;
+            fileItem.dataset.order = index;
+
+            const positionLabel = document.createElement('div');
+            positionLabel.className = 'combine-position-label';
+            positionLabel.textContent = `#${index + 1}`;
+            positionLabel.style.fontWeight = '600';
+            positionLabel.style.minWidth = '2rem';
+            positionLabel.style.color = 'var(--text-muted)';
+            positionLabel.style.textAlign = 'center';
+
+            const dragHandle = document.createElement('div');
+            dragHandle.className = 'drag-handle';
+            dragHandle.textContent = '≡';
+            dragHandle.style.cursor = 'grab';
+            dragHandle.style.color = 'var(--text-muted)';
+            dragHandle.style.fontSize = '1.2rem';
+            dragHandle.style.flexShrink = '0';
+
+            const fileName = document.createElement('div');
+            fileName.className = 'file-name';
+            fileName.textContent = sibling.metadata.filename;
+            fileName.style.flex = '1';
+
+            const channelLabel = document.createElement('div');
+            channelLabel.className = 'channel-label';
+            const channels = sibling.metadata.channels || 1;
+            channelLabel.textContent = `${channels} channel${channels > 1 ? 's' : ''}`;
+            channelLabel.style.color = 'var(--accent-primary)';
+            channelLabel.style.fontWeight = '600';
+            channelLabel.style.fontSize = '0.9em';
+            channelLabel.style.minWidth = '80px';
+            channelLabel.style.textAlign = 'right';
+
+            fileItem.appendChild(positionLabel);
+            fileItem.appendChild(dragHandle);
+            fileItem.appendChild(fileName);
+            fileItem.appendChild(channelLabel);
+            fileItem.style.display = 'flex';
+            fileItem.style.alignItems = 'center';
+            fileItem.style.gap = '0.75em';
+            fileItem.style.padding = '0.75em';
+            fileItem.style.marginBottom = '0.5em';
+            fileItem.style.backgroundColor = 'var(--bg-primary)';
+            fileItem.style.border = '1px solid var(--input-border)';
+            fileItem.style.borderRadius = '4px';
+            fileItem.style.cursor = 'move';
+            fileItem.style.transition = 'all 0.2s ease';
+
+            // Add drag handlers
+            fileItem.addEventListener('dragstart', (e) => {
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/plain', JSON.stringify({ groupIndex, fileIndex: index }));
+                fileItem.classList.add('dragging');
+                fileItem.style.opacity = '0.5';
+                fileItem.style.backgroundColor = 'var(--bg-secondary)';
+            });
+
+            fileItem.addEventListener('dragend', (e) => {
+                fileItem.classList.remove('dragging');
+                fileItem.style.opacity = '1';
+                fileItem.style.backgroundColor = 'var(--bg-primary)';
+                this.updateCombinePositionLabels(groupIndex);
+            });
+
+            fileItem.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                fileItem.style.backgroundColor = 'var(--bg-secondary)';
+                fileItem.style.borderColor = 'var(--accent-primary)';
+                fileItem.style.boxShadow = '0 0 8px rgba(255, 149, 0, 0.3)';
+            });
+
+            fileItem.addEventListener('dragleave', (e) => {
+                fileItem.style.backgroundColor = 'var(--bg-primary)';
+                fileItem.style.borderColor = 'var(--input-border)';
+                fileItem.style.boxShadow = 'none';
+            });
+
+            fileItem.addEventListener('drop', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                fileItem.style.backgroundColor = 'var(--bg-primary)';
+                fileItem.style.borderColor = 'var(--input-border)';
+                fileItem.style.boxShadow = 'none';
+            });
+
+            fileList.appendChild(fileItem);
+        });
     }
 
     /**
@@ -8375,6 +8975,129 @@ class App {
         const modal = document.getElementById('combine-modal');
         modal.classList.remove('active');
         this.combineGroups = null;
+    }
+
+    /**
+     * Phase 1: Convert files to target bit depth if needed
+     * Returns array of WAV ArrayBuffers ready for combining
+     */
+    async convertGroupFilesToTargetBitDepth(group, targetBitDepth, progressCallback) {
+        const convertedWavBuffers = [];
+        
+        for (let sibIndex = 0; sibIndex < group.siblings.length; sibIndex++) {
+            const sibling = group.siblings[sibIndex];
+            const currentBitDepth = sibling.metadata.bitDepth;
+            
+            if (progressCallback) {
+                progressCallback(`${sibling.metadata.filename} (${currentBitDepth}-bit)`);
+            }
+
+            if (currentBitDepth === targetBitDepth) {
+                // No conversion needed - use original WAV file directly
+                try {
+                    const arrayBuffer = await sibling.file.arrayBuffer();
+                    convertedWavBuffers.push(arrayBuffer);
+                } catch (err) {
+                    throw new Error(`Failed to read ${sibling.metadata.filename}: ${err.message}`);
+                }
+            } else {
+                // Conversion needed: decode → convert bit depth → encode
+                try {
+                    const arrayBuffer = await sibling.file.arrayBuffer();
+                    
+                    // Decode to AudioBuffer
+                    const decoded = await this.audioEngine.decodeFile(arrayBuffer);
+                    
+                    // Create conversion metadata
+                    const convertMetadata = {
+                        ...sibling.metadata,
+                        bitDepth: targetBitDepth
+                    };
+                    
+                    // Convert bit depth using audioProcessor
+                    // createWavFile returns ArrayBuffer directly
+                    const convertedWavBuffer = this.audioProcessor.createWavFile(
+                        decoded,
+                        targetBitDepth,
+                        arrayBuffer,
+                        convertMetadata
+                    );
+                    
+                    convertedWavBuffers.push(convertedWavBuffer);
+                } catch (err) {
+                    throw new Error(`Failed to convert ${sibling.metadata.filename} to ${targetBitDepth}-bit: ${err.message}`);
+                }
+            }
+        }
+        
+        return convertedWavBuffers;
+    }
+
+    /**
+     * Combine polyphonic files by merging their channels
+     * Takes multiple poly files and creates one file with all channels
+     */
+    async combinePolyphonicFiles(wavBuffers, trackNames, metadata) {
+        // Decode all WAV files to get their channel data
+        const decodedFiles = [];
+        let totalChannels = 0;
+        let referenceSampleRate = null;
+        let referenceBitDepth = null;
+        let referenceDuration = null;
+        
+        for (let i = 0; i < wavBuffers.length; i++) {
+            const decoded = await this.audioEngine.decodeFile(wavBuffers[i]);
+            decodedFiles.push(decoded);
+            totalChannels += decoded.numberOfChannels;
+            
+            if (i === 0) {
+                referenceSampleRate = decoded.sampleRate;
+                referenceDuration = decoded.length;
+            } else {
+                // Validate compatibility
+                if (decoded.sampleRate !== referenceSampleRate) {
+                    throw new Error(`Sample rate mismatch: File 1 has ${referenceSampleRate}Hz, File ${i + 1} has ${decoded.sampleRate}Hz`);
+                }
+                if (decoded.length !== referenceDuration) {
+                    throw new Error(`Duration mismatch: File 1 has ${referenceDuration} samples, File ${i + 1} has ${decoded.length} samples`);
+                }
+            }
+        }
+        
+        // Create output AudioBuffer with all channels
+        const offlineCtx = new OfflineAudioContext(
+            totalChannels,
+            referenceDuration,
+            referenceSampleRate
+        );
+        
+        const outputBuffer = offlineCtx.createBuffer(
+            totalChannels,
+            referenceDuration,
+            referenceSampleRate
+        );
+        
+        // Copy channels from each file to the output
+        let outputChannelIndex = 0;
+        for (let fileIdx = 0; fileIdx < decodedFiles.length; fileIdx++) {
+            const sourceBuffer = decodedFiles[fileIdx];
+            for (let ch = 0; ch < sourceBuffer.numberOfChannels; ch++) {
+                const sourceData = sourceBuffer.getChannelData(ch);
+                const outputData = outputBuffer.getChannelData(outputChannelIndex);
+                outputData.set(sourceData);
+                outputChannelIndex++;
+            }
+        }
+        
+        // Create WAV file from the output buffer
+        const wavBuffer = this.audioProcessor.createWavFile(
+            outputBuffer,
+            metadata.bitDepth || 24,
+            null,
+            { channels: totalChannels, trackNames: trackNames }
+        );
+        
+        return new Blob([wavBuffer], { type: 'audio/wav' });
     }
 
     /**
@@ -8524,30 +9247,73 @@ class App {
                 
                 this.showToast(`Combining ${group.baseName} (${i + 1}/${totalGroups})...`, 'info', 0);
 
-                // Load all file buffers
-                const fileBuffers = await Promise.all(
-                    group.siblings.map(sib => sib.file.arrayBuffer())
+                // Get target bit depth from selector
+                const targetBitDepthSelector = document.getElementById('combine-target-bitdepth');
+                const targetBitDepth = targetBitDepthSelector ? parseInt(targetBitDepthSelector.value) : 
+                    (group.siblings[0]?.metadata.bitDepth || 24);
+
+                // Phase 1: Convert files to target bit depth (returns WAV ArrayBuffers)
+                this.showToast(`Phase 1: Converting to ${targetBitDepth}-bit...`, 'info', 0);
+                const convertedWavBuffers = await this.convertGroupFilesToTargetBitDepth(
+                    group,
+                    targetBitDepth,
+                    (msg) => this.showToast(`Converting: ${msg}`, 'info', 0)
                 );
 
-                // Extract track names
-                const trackNames = group.siblings.map((sib, i) => {
-                    if (sib.metadata.trackNames && sib.metadata.trackNames.length > 0) {
-                        return sib.metadata.trackNames[0];
+                // Extract track names - for poly files, need ALL track names from all channels
+                // For mono files, just take the track name (if exists)
+                const trackNames = [];
+                for (let sibIdx = 0; sibIdx < group.siblings.length; sibIdx++) {
+                    const sib = group.siblings[sibIdx];
+                    const channels = sib.metadata.channels || 1;
+                    
+                    if (channels === 1) {
+                        // Mono file: take single track name
+                        if (sib.metadata.trackNames && sib.metadata.trackNames.length > 0) {
+                            trackNames.push(sib.metadata.trackNames[0]);
+                        } else {
+                            trackNames.push(`Ch${trackNames.length + 1}`);
+                        }
+                    } else {
+                        // Poly file: take all track names for all channels
+                        for (let ch = 0; ch < channels; ch++) {
+                            if (sib.metadata.trackNames && sib.metadata.trackNames[ch]) {
+                                trackNames.push(sib.metadata.trackNames[ch]);
+                            } else {
+                                trackNames.push(`Ch${trackNames.length + 1}`);
+                            }
+                        }
                     }
-                    return `Ch${i + 1}`;
-                });
+                }
 
-                // Combine audio files
-                const combinedBlob = await this.audioProcessor.combineToPolyphonic(
-                    fileBuffers,
-                    trackNames,
-                    group.metadata
-                );
+                // Phase 2: Combine WAV ArrayBuffers into polyphonic file
+                this.showToast(`Phase 2: Combining to polyphonic...`, 'info', 0);
+                
+                // Detect if combining mono or poly files
+                const firstFileChannels = group.siblings[0]?.metadata?.channels || 1;
+                let combinedBlob;
+                
+                if (firstFileChannels === 1) {
+                    // Combine mono files using the standard method
+                    combinedBlob = await this.audioProcessor.combineToPolyphonic(
+                        convertedWavBuffers,
+                        trackNames,
+                        group.metadata
+                    );
+                } else {
+                    // Combine poly files by merging channels
+                    combinedBlob = await this.combinePolyphonicFiles(
+                        convertedWavBuffers,
+                        trackNames,
+                        { ...group.metadata, bitDepth: targetBitDepth }
+                    );
+                }
 
                 // Prepare metadata for polyphonic file
                 const polyMetadata = {
                     ...group.metadata,
-                    channels: group.siblings.length,
+                    bitDepth: targetBitDepth,
+                    channels: group.siblings.reduce((sum, sib) => sum + (sib.metadata?.channels || 1), 0),
                     trackNames: trackNames
                 };
 
