@@ -31,6 +31,12 @@
                         Auto-group sibling files
                     </label>
                 </div>
+                <div class="settings-group">
+                    <label for="allow-diagnostics-toggle-settings">
+                        <input type="checkbox" id="allow-diagnostics-toggle-settings" checked>
+                        Allow Diagnostics Access
+                    </label>
+                </div>
             </div>
             <div class="modal-footer">
                 <button class="btn secondary" id="settings-ok-btn">OK</button>
@@ -117,6 +123,7 @@
             <div class="header-controls">
                 <div class="batch-actions">
                     <button id="import-btn" class="btn secondary">Import</button>
+                    <button id="auto-group-btn" class="btn secondary" disabled>Group Siblings</button>
                     <button id="batch-remove-btn" class="btn secondary" disabled>Remove</button>
                     <button id="batch-delete-btn" class="btn secondary" disabled>Delete</button>
                     <button id="batch-edit-btn" class="btn secondary" disabled>Batch Edit</button>
@@ -166,7 +173,6 @@
             <button id="normalize-btn" class="btn secondary" disabled>Normalize / Bit Depth</button>
             <button id="rename-btn" class="btn secondary" disabled>Rename</button>
             <button id="report-btn" class="btn secondary">Report</button>
-            <button id="auto-group-btn" class="btn secondary" disabled>Group Siblings</button>
             <button id="diagnostics-btn" class="btn secondary" disabled>Diagnostics</button>
         </div>
 
@@ -284,7 +290,7 @@
                             <input type="checkbox" id="apply-fps" class="apply-checkbox">
                             <label for="apply-fps">FPS:</label>
                             <select id="batch-fps">
-                                <option value="23.976">23.976</option>
+                                <option value="23.98">23.98</option>
                                 <option value="24">24</option>
                                 <option value="25">25</option>
                                 <option value="29.97">29.97</option>
@@ -354,13 +360,12 @@
                     </div>
                     <div id="tools-tab-content" class="tab-content">
                         <div style="padding: 1rem;">
-                            <h3>iXML Testing Tools</h3>
-                            <p>Use these tools to test iXML repair functionality:</p>
+                            <p>Click Repair iXML to repair or insert iXML chunk:</p>
                             <div style="margin-top: 1rem;">
-                                <button id="corrupt-ixml-modal-btn" class="btn secondary" style="background-color: #ff6b6b; color: white; margin-right: 1rem;">Corrupt iXML (Test)</button>
+                                <button id="corrupt-ixml-modal-btn" class="btn secondary" style="background-color: #ff6b6b; color: white; margin-right: 1rem; display: none;">Corrupt iXML (Test)</button>
                                 <button id="repair-ixml-modal-btn" class="btn secondary" title="Repair the iXML metadata in the selected file">Repair iXML</button>
                             </div>
-                            <p style="margin-top: 1rem; font-size: 0.9rem; color: var(--text-secondary);">Note: Corrupt iXML only works on a single file. Repair iXML works on one or more selected files.</p>
+                            <p style="margin-top: 1rem; font-size: 0.9rem; color: var(--text-secondary);">Note: Repair iXML works on one or more selected files.</p>
                         </div>
                     </div>
                 </div>

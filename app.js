@@ -164,6 +164,9 @@ class App {
         // Auto-group sibling files
         this.autoGroupEnabled = localStorage.getItem('autoGroupSiblings') !== 'false'; // Default true
 
+        // Allow diagnostics access
+        this.allowDiagnosticsAccess = localStorage.getItem('allowDiagnosticsAccess') !== 'false'; // Default true
+
         this.initEventListeners();
         this.initDragAndDrop();
         this.initColumnDragDrop();
@@ -176,6 +179,7 @@ class App {
 
         // Initialize UI button states
         this.updateSelectionUI();
+        this.updateDiagnosticsButtonVisibility();
 
         // Animation loop
         this.animate = this.animate.bind(this);
@@ -405,6 +409,16 @@ class App {
         settingsAutoGroupCheckbox.addEventListener('change', (e) => {
             this.autoGroupEnabled = e.target.checked;
             localStorage.setItem('autoGroupSiblings', this.autoGroupEnabled);
+        });
+
+        // Allow diagnostics access toggle
+        const settingsAllowDiagnosticsCheckbox = document.getElementById('allow-diagnostics-toggle-settings');
+        
+        settingsAllowDiagnosticsCheckbox.checked = this.allowDiagnosticsAccess;
+        settingsAllowDiagnosticsCheckbox.addEventListener('change', (e) => {
+            this.allowDiagnosticsAccess = e.target.checked;
+            localStorage.setItem('allowDiagnosticsAccess', this.allowDiagnosticsAccess);
+            this.updateDiagnosticsButtonVisibility();
         });
 
         // Mixer save/load controls
@@ -2512,16 +2526,15 @@ class App {
         const canUngroup = selectedGroups.length > 0;
         
         // Check if any selected individual (non-group) files are polyphonic (>1 channel)
-        // Only gray out for individual poly files, not for groups (which can be ungrouped)
+        // Note: poly files CAN now be grouped if they have matching TC Start and duration
         const selectedFiles = Array.from(this.selectedIndices).map(idx => this.files[idx]);
-        const hasPolySelected = selectedFiles.some(f => f && !f.isGroup && f.metadata && f.metadata.channels > 1);
         
         const autoGroupBtn = document.getElementById('auto-group-btn');
         if (autoGroupBtn) {
-            autoGroupBtn.disabled = (!hasSelection && !hasUngroupedFiles && !canUngroup) || hasPolySelected;
+            autoGroupBtn.disabled = !hasSelection && !hasUngroupedFiles && !canUngroup;
             autoGroupBtn.textContent = canUngroup ? 'Ungroup Siblings' : 'Group Siblings';
         }
-        safeSetDisabled('auto-group-btn', (!hasSelection && !hasUngroupedFiles && !canUngroup) || hasPolySelected);
+        safeSetDisabled('auto-group-btn', !hasSelection && !hasUngroupedFiles && !canUngroup);
         
         safeSetDisabled('diagnostics-btn', this.selectedIndices.size !== 1 || this.selectedChildren.size > 0);
         safeSetDisabled('corrupt-ixml-modal-btn', this.selectedIndices.size !== 1);
@@ -2541,9 +2554,16 @@ class App {
         // Check if any selected file is part of a sibling group
         const selectedFilesInGroups = Array.from(this.selectedIndices).some(idx => {
             const selectedFile = this.files[idx];
-            if (!selectedFile || selectedFile.isGroup) return false;
+            if (!selectedFile) return false;
             
-            // Check if this file is a sibling in any group
+            // If the selected item IS a sibling group, it's combinable
+            if (selectedFile.isGroup && selectedFile.siblings && selectedFile.siblings.length > 0) {
+                return true;
+            }
+            
+            // If not a group, check if this file is a sibling in any group
+            if (selectedFile.isGroup) return false;
+            
             return this.files.some(item => 
                 item.isGroup && 
                 item.siblings && 
@@ -2621,10 +2641,10 @@ class App {
             );
             
             if (allMono) {
-                // Group files by TC Start and audio size
+                // Group files by TC Start and duration (consistent with poly file logic)
                 const groups = new Map();
                 for (const file of selectedFiles) {
-                    const key = `${file.metadata.tcStart}_${file.metadata.audioDataSize}`;
+                    const key = `${file.metadata.tcStart}_${file.metadata.duration}`;
                     if (!groups.has(key)) {
                         groups.set(key, []);
                     }
@@ -2960,6 +2980,11 @@ class App {
             saveBtn.style.opacity = '';
             saveBtn.title = '';
         }
+    }
+
+    updateDiagnosticsButtonVisibility() {
+        const diagnosticsBtn = document.getElementById('diagnostics-btn');
+        diagnosticsBtn.style.display = this.allowDiagnosticsAccess ? 'inline-block' : 'none';
     }
 
     openBatchEditModal() {
@@ -3348,35 +3373,29 @@ class App {
             return;
         }
         
-        // Group by tcStart + audioDataSize
+        // Group by tcStart + duration (independent of channel count and file size)
         const groups = new Map();
         filesToProcess.forEach(item => {
-            const key = `${item.file.metadata.tcStart}_${item.file.metadata.audioDataSize}`;
+            const key = `${item.file.metadata.tcStart}_${item.file.metadata.duration}`;
             if (!groups.has(key)) {
                 groups.set(key, []);
             }
             groups.get(key).push(item);
         });
         
-        // Filter to only groups with 2+ files and all mono
+        // Filter to only groups with 2+ files
         const validGroups = [];
         for (const [key, items] of groups.entries()) {
             if (items.length < 2) continue;
             
-            // Check all files in group are mono
-            const allMono = items.every(item => item.file.metadata.channels === 1);
-            if (!allMono) {
-                console.warn(`Skipping group with key ${key} - contains non-mono files`);
-                continue;
-            }
-            
+            // Accept both mono and poly files as long as they have matching TC start and duration
             validGroups.push(items);
         }
         
         if (validGroups.length === 0) {
             const msg = isSelection 
-                ? 'No groupable files found in selection.\n\nFiles must:\n• Be monophonic (1 channel)\n• Have matching TC Start and duration\n• Have at least 2 files per group'
-                : 'No groupable files found.\n\nFiles must:\n• Be monophonic (1 channel)\n• Have matching TC Start and duration\n• Have at least 2 files per group';
+                ? 'No groupable files found in selection.\n\nFiles must:\n• Have matching TC Start and duration\n• Have at least 2 files per group'
+                : 'No groupable files found.\n\nFiles must:\n• Have matching TC Start and duration\n• Have at least 2 files per group';
             alert(msg);
             return;
         }
@@ -3433,7 +3452,7 @@ class App {
                 metadata: {
                     ...firstFile.metadata,
                     filename: groupName,
-                    channels: groupItems.length, // Number of siblings (files in group)
+                    channels: groupItems.reduce((sum, item) => sum + (item.file.metadata.channels || 1), 0), // Total channels across all siblings
                     trackNames: trackNames // Track names from all siblings
                 },
                 siblings: groupItems.map((item, idx) => ({
@@ -7160,6 +7179,7 @@ class App {
         try {
             const indices = Array.from(this.selectedIndices);
             let processedCount = 0;
+            const affectedIndices = new Set();
 
             for (const index of indices) {
                 const item = this.files[index];
@@ -7251,6 +7271,9 @@ class App {
 
                     // Refresh file object on the target
                     target.file = await target.handle.getFile();
+                    
+                    // Track which file indices were affected
+                    affectedIndices.add(index);
                 }
 
                 // If Group, update the main item convenience ref too
@@ -7268,6 +7291,25 @@ class App {
 
             const action = bypassNormalize ? 'converted' : 'normalized and converted';
             alert(`Successfully ${action} ${processedCount} file(s).`);
+            
+            // Update group metadata if any groups had their members processed
+            for (let i = 0; i < this.files.length; i++) {
+                const item = this.files[i];
+                if (item.isGroup && item.siblings && item.siblings.length > 0) {
+                    // Update group's representative metadata from first sibling
+                    // This ensures group display reflects updated member metadata (e.g., bit depth)
+                    item.metadata = { ...item.siblings[0].metadata };
+                    
+                    // Keep group-specific properties
+                    item.metadata.channels = item.siblings.reduce((sum, sib) => sum + (sib.metadata.channels || 1), 0);
+                }
+            }
+            
+            // Re-render table to show updated metadata
+            const tbody = document.getElementById('file-list-body');
+            tbody.innerHTML = '';
+            this.files.forEach((file, i) => this.addTableRow(i, file.metadata));
+            this.updateSelectionUI();
 
         } catch (err) {
             console.error('Operation failed:', err);
