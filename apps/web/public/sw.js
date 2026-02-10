@@ -1,21 +1,13 @@
-const CACHE_NAME = 'wave-agent-x-v73';
-const ASSETS = [
+const CACHE_NAME = 'wave-agent-x-runtime-v1';
+const SHELL_ASSETS = [
   './',
   './index.html',
   './user-guide.html',
-  './style.css',
-  './app.js',
-  './metadata-handler.js',
-  './audio-engine.js',
-  './audio-processor.js',
-  './mixer.js',
-  './mixer-metadata.js',
-  './file-io.js',
-  './lame.min.js',
   './manifest.json',
   './favicon.ico',
   './icon-192.png',
-  './icon-512.png'
+  './icon-512.png',
+  './lame.min.js',
 ];
 
 // Install event - cache all assets
@@ -24,8 +16,8 @@ self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then((cache) => {
-        console.log('[Service Worker] Caching all assets');
-        return cache.addAll(ASSETS);
+        console.log('[Service Worker] Caching shell assets');
+        return cache.addAll(SHELL_ASSETS);
       })
       .then(() => {
         console.log('[Service Worker] All assets cached');
@@ -56,8 +48,17 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// Fetch event - CACHE FIRST strategy for offline support
+// Fetch event - cache first for same-origin GET requests
 self.addEventListener('fetch', (event) => {
+  if (event.request.method !== 'GET') {
+    return;
+  }
+
+  const requestUrl = new URL(event.request.url);
+  if (requestUrl.origin !== self.location.origin) {
+    return;
+  }
+
   event.respondWith(
     caches.match(event.request)
       .then((cachedResponse) => {
@@ -71,8 +72,8 @@ self.addEventListener('fetch', (event) => {
         console.log('[Service Worker] Fetching from network:', event.request.url);
         return fetch(event.request)
           .then((networkResponse) => {
-            // Don't cache non-GET requests or non-ok responses
-            if (event.request.method !== 'GET' || !networkResponse || networkResponse.status !== 200) {
+            // Only cache successful responses
+            if (!networkResponse || networkResponse.status !== 200) {
               return networkResponse;
             }
 
@@ -91,8 +92,9 @@ self.addEventListener('fetch', (event) => {
             // Network failed and not in cache
             console.log('[Service Worker] Fetch failed, offline:', error);
 
-            // If requesting an HTML page, return the cached index.html
-            if (event.request.headers.get('accept').includes('text/html')) {
+            // If requesting an HTML page, return the cached index shell
+            const accept = event.request.headers.get('accept') || '';
+            if (accept.includes('text/html')) {
               return caches.match('./index.html');
             }
 

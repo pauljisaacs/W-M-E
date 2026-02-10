@@ -11,7 +11,7 @@ const PROXIMITY_THRESHOLD_PX = 8; // pixels for click detection
 /**
  * Individual Cue Marker
  */
-class CueMarker {
+export class CueMarker {
     constructor(id, time, label = '') {
         this.id = id; // Unique identifier
         this.time = time; // Position in seconds
@@ -36,7 +36,7 @@ class CueMarker {
 /**
  * Collection of Cue Markers with management methods
  */
-class CueMarkerCollection {
+export class CueMarkerCollection {
     constructor() {
         this.markers = []; // Array of CueMarker objects
         this.nextId = 1;
@@ -311,7 +311,7 @@ class CueMarkerCollection {
  * @param {number} canvasWidth - Canvas width in pixels
  * @returns {number} - X position in pixels
  */
-function timeToCanvasX(time, duration, canvasWidth) {
+export function timeToCanvasX(time, duration, canvasWidth) {
     if (!duration || duration === 0) return 0;
     return (time / duration) * canvasWidth;
 }
@@ -323,7 +323,7 @@ function timeToCanvasX(time, duration, canvasWidth) {
  * @param {number} duration - Total duration in seconds
  * @returns {number} - Time in seconds
  */
-function canvasXToTime(canvasX, canvasWidth, duration) {
+export function canvasXToTime(canvasX, canvasWidth, duration) {
     if (!canvasWidth || canvasWidth === 0) return 0;
     return (canvasX / canvasWidth) * duration;
 }

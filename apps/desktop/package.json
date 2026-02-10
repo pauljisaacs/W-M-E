@@ -1,0 +1,63 @@
+{
+  "name": "@app/desktop",
+  "version": "1.0.0",
+  "description": "Wave Agent X desktop application",
+  "author": "Sound Devices",
+  "private": true,
+  "main": "out/main/main.js",
+  "scripts": {
+    "generate:version": "node scripts/generate-version.mjs",
+    "dev": "npm run generate:version && node scripts/run-electron-vite.mjs dev",
+    "build": "npm run generate:version && electron-vite build",
+    "start": "npm run generate:version && node scripts/run-electron-vite.mjs preview",
+    "package": "npm run build && electron-builder --dir",
+    "make": "npm run build && electron-builder"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^24.6.2",
+    "electron": "^39.2.3",
+    "electron-builder": "^26.0.12",
+    "electron-vite": "^5.0.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.0"
+  },
+  "build": {
+    "appId": "com.sounddevices.waveagentx",
+    "productName": "Wave Agent X",
+    "directories": {
+      "output": "release/${version}"
+    },
+    "files": [
+      "out/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.utilities"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Utility"
+    }
+  }
+}

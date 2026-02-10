@@ -1,0 +1,23 @@
+{
+  "name": "wave-agent-x-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "packageManager": "pnpm@10.28.2",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:web": "pnpm --filter @app/web dev",
+    "dev:desktop": "pnpm --filter @app/desktop dev",
+    "build:web": "pnpm --filter @app/web build",
+    "build:desktop": "pnpm --filter @app/desktop build",
+    "build": "pnpm build:web && pnpm build:desktop",
+    "start:desktop": "pnpm --filter @app/desktop start",
+    "package:desktop": "pnpm --filter @app/desktop package",
+    "make:win": "pnpm --filter @app/desktop make --win",
+    "make:mac": "pnpm --filter @app/desktop make --mac",
+    "make:linux": "pnpm --filter @app/desktop make --linux",
+    "check": "pnpm build:web && pnpm build:desktop"
+  }
+}

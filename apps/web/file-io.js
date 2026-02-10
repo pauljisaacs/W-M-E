@@ -6,9 +6,11 @@ export class FileIO {
     }
 
     async openFiles() {
+        const isElectron = Boolean(window.electronAPI?.isElectron);
+
         // On file:// protocol, showOpenFilePicker often fails or behaves strictly.
         // Fallback to input element immediately to preserve user gesture.
-        if (window.location.protocol === 'file:') {
+        if (!isElectron && window.location.protocol === 'file:') {
             return null;
         }
 
@@ -20,7 +22,7 @@ export class FileIO {
                 });
                 return handles;
             } catch (err) {
-                if (err.name === 'AbortError') {
+                if (this.isAbortError(err)) {
                     return []; // User cancelled
                 }
                 console.error('File System Access API error:', err);
@@ -40,11 +42,16 @@ export class FileIO {
                 await this.scanDirectory(dirHandle, files);
                 return files;
             } catch (err) {
-                if (err.name !== 'AbortError') console.error(err);
+                if (!this.isAbortError(err)) console.error(err);
                 return [];
             }
         }
         return [];
+    }
+
+    isAbortError(err) {
+        const message = String(err?.message || '');
+        return err?.name === 'AbortError' || message.includes('aborted a request');
     }
 
     async scanDirectory(dirHandle, fileList) {

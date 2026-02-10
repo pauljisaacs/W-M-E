@@ -1,3 +1,14 @@
+import { MetadataHandler } from './metadata-handler.js';
+import { AudioEngine } from './audio-engine.js';
+import { Mixer } from './mixer.js';
+import { FileIO } from './file-io.js';
+import { AudioProcessor } from './audio-processor.js';
+import { MixerMetadata } from './mixer-metadata.js';
+import { CueMarkerCollection } from './cue-marker.js';
+import { RenameManager } from './renameUtilities.js';
+import './sound-report.js';
+import './sound-report-export.js';
+
 // --- About Modal Logic ---
 document.addEventListener('DOMContentLoaded', () => {
     // Add About menu item if not present
@@ -95,22 +106,33 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('stereo-link-mode-modal').classList.remove('active');
     });
 
-    // Dynamically load version from manifest.json
-    fetch('manifest.json')
-        .then(response => response.json())
-        .then(manifest => {
-            document.getElementById('about-version').textContent = manifest.version || 'N/A';
-        })
-        .catch(() => {
-            document.getElementById('about-version').textContent = 'N/A';
-        });
+    const aboutVersionElement = document.getElementById('about-version');
+    const setManifestVersion = () => {
+        fetch('manifest.json')
+            .then((response) => response.json())
+            .then((manifest) => {
+                aboutVersionElement.textContent = manifest.version || 'N/A';
+            })
+            .catch(() => {
+                aboutVersionElement.textContent = 'N/A';
+            });
+    };
+
+    // Prefer desktop version metadata when running in Electron.
+    if (window.electronAPI?.isElectron) {
+        window.electronAPI
+            .getVersion()
+            .then((versionInfo) => {
+                aboutVersionElement.textContent =
+                    versionInfo?.displayVersion || versionInfo?.version || 'N/A';
+            })
+            .catch(() => {
+                setManifestVersion();
+            });
+    } else {
+        setManifestVersion();
+    }
 });
-import { MetadataHandler } from './metadata-handler.js?v=2';
-import { AudioEngine } from './audio-engine.js?v=3';
-import { Mixer } from './mixer.js?v=4';
-import { FileIO } from './file-io.js';
-import { AudioProcessor } from './audio-processor.js';
-import { MixerMetadata } from './mixer-metadata.js';
 
 
 

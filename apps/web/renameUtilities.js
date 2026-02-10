@@ -2,7 +2,7 @@
  * RenameManager - Shared utilities for file renaming across modals
  * Handles: Dedicated Rename Modal, Multi-Process Rename, Combine Modal Rename
  */
-class RenameManager {
+export class RenameManager {
     constructor(app) {
         this.app = app;
     }
@@ -246,9 +246,4 @@ class RenameManager {
 
         return { renamedCount, failedCount, renamedIndices };
     }
-}
-
-// Export for use in app.js
-if (typeof module !== 'undefined' && module.exports) {
-    module.exports = RenameManager;
 }

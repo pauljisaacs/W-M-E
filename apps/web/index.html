@@ -198,7 +198,7 @@
             </div>
             <div class="section-content">
                 <div id="region-selector" class="region-selector">
-                    <span class="region-hint">Click and drag = create region. Drag region edges to resize. Click and drag region to move it. M = add marker. Delete = remove selected marker. Click and drag marker to move it. <,> = Skip to next/previous. Double-click marker to name.</span>
+                    <span class="region-hint">Click and drag = create region. Drag region edges to resize. Click and drag region to move it. M = add marker. Delete = remove selected marker. Click and drag marker to move it. &lt;,&gt; = Skip to next/previous. Double-click marker to name.</span>
                     <div id="region-tooltip" class="region-tooltip" style="display:none;"></div>
                 </div>
                 <div class="waveform-wrapper">
@@ -973,11 +973,11 @@
     </div>
 
     <script src="lame.min.js"></script>
-    <script src="cue-marker.js"></script>
+    <script type="module" src="electron-fs-polyfill.js"></script>
     <script type="module" src="app.js"></script>
     <script>
         // Register Service Worker for offline support
-        if ('serviceWorker' in navigator) {
+        if ('serviceWorker' in navigator && !window.electronAPI?.isElectron) {
             window.addEventListener('load', () => {
                 navigator.serviceWorker.register('./sw.js')
                     .then((registration) => {
@@ -1004,7 +1004,7 @@
                     });
             });
         } else {
-            console.warn('⚠️ Service Workers not supported in this browser');
+            console.warn('⚠️ Service worker disabled or unsupported in this environment');
         }
     </script>
 
@@ -1238,11 +1238,6 @@
         </div>
     </div>
 </div>
-
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script src="renameUtilities.js"></script>
-<script src="sound-report.js"></script>
-<script src="sound-report-export.js"></script>
 
 </body>
 

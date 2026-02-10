@@ -1,20 +1,55 @@
+# Dependencies
+node_modules
+
+# Build outputs
+dist
+out
+build
+release
+
+# Electron builder artifacts
+*.deb
+*.rpm
+*.AppImage
+*.dmg
+*.pkg
+*.exe
+*.msi
+
+# Caches
+.vite
+.cache
+.electron-vite
+*.tsbuildinfo
+.tools
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
 # OS files
 .DS_Store
 Thumbs.db
+Desktop.ini
+*.swp
+*~
 
 # Editor directories
 .vscode/
 .idea/
 
-# Node modules (if you add npm later)
-node_modules/
-
-# Logs
-*.log
-
 # Temporary files
 *.tmp
 *.temp
+tmp
 
-# Implementation plans (optional - keep local)
-implementation_plan_*.md
+# Auto-generated version metadata
+apps/desktop/src/version.ts

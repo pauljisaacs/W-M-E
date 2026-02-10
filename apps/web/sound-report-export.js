@@ -1,5 +1,6 @@
+import { jsPDF } from 'jspdf';
+
 // Sound Report Export Logic
-// Requires jsPDF (for PDF) and window.app.files
 
 // Utility: get current header field values
 function getSoundReportHeaderValues() {
@@ -74,8 +75,6 @@ async function exportSoundReportCSV() {
 
 // PDF Export (striped rows, logo, header, table)
 async function exportSoundReportPDF() {
-  if (!window.jspdf) { alert('jsPDF not loaded'); return; }
-  const { jsPDF } = window.jspdf;
   const headerFields = getSoundReportHeaderValues();
   const { files, maxTracks } = getSoundReportTakeListData();
   const notesSeperateLine = document.getElementById('report-notes-separate-line')?.checked;
