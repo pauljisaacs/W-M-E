@@ -18,14 +18,14 @@ Desktop packaging targets:
 From repo root:
 
 ```bash
-pnpm install
-pnpm dev:web
-pnpm dev:desktop
-pnpm build:web
-pnpm build:desktop
-pnpm make:win
-pnpm make:mac
-pnpm make:linux
+bash scripts/pnpmw.sh install
+bash scripts/pnpmw.sh dev:web
+bash scripts/dev-desktop.sh
+bash scripts/pnpmw.sh build:web
+bash scripts/pnpmw.sh build:desktop
+bash scripts/pnpmw.sh make:win
+bash scripts/pnpmw.sh make:mac
+bash scripts/pnpmw.sh make:linux
 ```
 
 ## Recommended Onboarding
@@ -35,6 +35,12 @@ bash scripts/bootstrap.sh
 ```
 
 This script performs install, doctor checks, and smoke builds.
+
+For a one-command desktop startup (including first-run setup/repair):
+
+```bash
+bash scripts/run-desktop.sh
+```
 
 ## Desktop Versioning
 
@@ -95,15 +101,13 @@ bash scripts/doctor.sh
 ### pnpm install issues
 
 ```bash
-corepack enable
-corepack prepare pnpm@10.28.2 --activate
-pnpm install
+bash scripts/bootstrap.sh
 ```
 
 ### Desktop packaging failures
 
-1. Re-run `pnpm build:desktop`
-2. Re-run platform package command
+1. Re-run `bash scripts/pnpmw.sh build:desktop`
+2. Re-run platform package command with `bash scripts/pnpmw.sh make:<platform>`
 3. Inspect `apps/desktop/release/` and build logs
 
 ### Desktop preview/dev fails with `ipcMain` undefined

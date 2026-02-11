@@ -24,6 +24,7 @@ echo
 
 missing=false
 expected_pnpm=""
+resolved_pnpm=""
 
 if command -v node >/dev/null 2>&1; then
   echo "node: $(command -v node) ($(node -v))"
@@ -37,26 +38,37 @@ if command -v npm >/dev/null 2>&1; then
   echo "npm:  $(command -v npm) ($(npm -v))"
 else
   echo "npm:  missing"
-  missing=true
+fi
+
+if command -v corepack >/dev/null 2>&1; then
+  echo "corepack: $(command -v corepack) ($(corepack --version))"
+else
+  echo "corepack: missing"
 fi
 
 if command -v pnpm >/dev/null 2>&1; then
-  echo "pnpm: $(command -v pnpm) ($(pnpm -v))"
+  echo "pnpm (binary): $(command -v pnpm) ($(pnpm -v))"
 else
-  echo "pnpm: missing"
-  missing=true
+  echo "pnpm (binary): missing"
+fi
+
+if [ "$missing" = false ]; then
+  if pnpm_probe="$(bash scripts/pnpmw.sh --version 2>&1)"; then
+    resolved_pnpm="$(printf '%s\n' "$pnpm_probe" | awk 'NF {line=$0} END {print line}')"
+    echo "pnpm (resolved): $resolved_pnpm"
+  else
+    echo "pnpm (resolved): unavailable"
+    printf '%s\n' "$pnpm_probe" | sed 's/^/  /'
+    missing=true
+  fi
 fi
 
 if [ "$missing" = true ]; then
   echo
-  echo "Missing required tools."
+  echo "Missing required tools or pnpm resolution failed."
   echo
-  if [ -n "${expected_pnpm:-}" ]; then
-    echo "Enable/install pnpm and run install:"
-    echo "  corepack enable"
-    echo "  corepack prepare pnpm@${expected_pnpm} --activate"
-    echo "  pnpm install"
-  fi
+  echo "Run the bootstrap script to auto-repair toolchain setup:"
+  echo "  bash scripts/bootstrap.sh"
   exit 1
 fi
 
@@ -67,11 +79,10 @@ if [ "$node_major" -lt 20 ]; then
   exit 1
 fi
 
-actual_pnpm="$(pnpm -v)"
-if [ -n "$expected_pnpm" ] && [ "$expected_pnpm" != "$actual_pnpm" ]; then
+if [ -n "$expected_pnpm" ] && [ -n "$resolved_pnpm" ] && [ "$expected_pnpm" != "$resolved_pnpm" ]; then
   echo
-  echo "Warning: pnpm version mismatch (expected $expected_pnpm, got $actual_pnpm)."
-  echo "Tip: run 'corepack enable && corepack prepare pnpm@$expected_pnpm --activate'."
+  echo "Warning: pnpm version mismatch (expected $expected_pnpm, got $resolved_pnpm)."
+  echo "Tip: run 'bash scripts/bootstrap.sh' to align the pinned version."
 fi
 
 if [ "$is_wsl" = true ]; then

@@ -2,10 +2,10 @@
 
 Run from repo root:
 
-1. `pnpm install`
-2. `pnpm dev:web`
+1. `bash scripts/bootstrap.sh`
+2. `bash scripts/pnpmw.sh dev:web`
 
 Build:
 
-- `pnpm build:web`
-- `pnpm --filter @app/web preview`
+- `bash scripts/pnpmw.sh build:web`
+- `bash scripts/pnpmw.sh --filter @app/web preview`

@@ -10,14 +10,7 @@ Both web and desktop share the same renderer code from `apps/web`.
 ## Prerequisites
 
 - Node.js 20+ (`.nvmrc` is pinned to `20`)
-- pnpm (repo pins `pnpm@10.28.2`)
-
-Recommended setup:
-
-```bash
-corepack enable
-corepack prepare pnpm@10.28.2 --activate
-```
+- No global `corepack` install is required
 
 ## First Run (Recommended)
 
@@ -27,7 +20,7 @@ bash scripts/bootstrap.sh
 
 This script:
 
-1. Verifies Node/pnpm toolchain
+1. Resolves pnpm automatically (`corepack` -> `pnpm` binary -> `npm exec pnpm@...`)
 2. Installs dependencies
 3. Runs doctor checks
 4. Runs smoke builds for web + desktop
@@ -45,21 +38,20 @@ xcode-select --install
 git clone <your-repo-url> W-M-E
 cd W-M-E
 ```
-3. Set up Node/pnpm and install dependencies:
+3. Install dependencies and validate tooling:
 ```bash
-corepack enable
-corepack prepare pnpm@10.28.2 --activate
-pnpm install
+bash scripts/bootstrap.sh
 ```
-4. Optional sanity check (recommended):
+4. Launch the desktop app (single command):
 ```bash
-pnpm dev:desktop
+bash scripts/run-desktop.sh
 ```
+Or in Finder, double-click `Run-Wave-Agent-X.command`.
 Close the app after it opens.
 
 5. Build the macOS installer:
 ```bash
-pnpm make:mac
+bash scripts/pnpmw.sh make:mac
 ```
 
 6. Find the output files in:
@@ -81,25 +73,28 @@ If macOS blocks launch because the app is unsigned, right-click the app and choo
 # Verify local toolchain
 bash scripts/doctor.sh
 
+# One-command desktop startup (auto-bootstrap/repair)
+bash scripts/run-desktop.sh
+
 # Web development
-pnpm dev:web
+bash scripts/pnpmw.sh dev:web
 
 # Desktop development (Electron)
-pnpm dev:desktop
+bash scripts/dev-desktop.sh
 
 # Build web
-pnpm build:web
+bash scripts/pnpmw.sh build:web
 
 # Build desktop (no installer)
-pnpm build:desktop
+bash scripts/pnpmw.sh build:desktop
 
 # Run desktop preview build
-pnpm start:desktop
+bash scripts/pnpmw.sh start:desktop
 
 # Build installers
-pnpm make:win
-pnpm make:mac   # Requires macOS build host/runner
-pnpm make:linux
+bash scripts/pnpmw.sh make:win
+bash scripts/pnpmw.sh make:mac   # Requires macOS build host/runner
+bash scripts/pnpmw.sh make:linux
 ```
 
 ## Packaging Output
@@ -134,9 +129,16 @@ See `docs/BUILD_AND_DEPLOY.md` for full details.
 Run:
 
 ```bash
-corepack enable
-corepack prepare pnpm@10.28.2 --activate
-pnpm install
+bash scripts/bootstrap.sh
+```
+
+### `npm install -g corepack` fails with `EEXIST` on macOS
+
+If you see an error like `EEXIST: file already exists` for `/opt/homebrew/bin/pnpm`,
+do not force-overwrite it. Run:
+
+```bash
+bash scripts/bootstrap.sh
 ```
 
 ### WSL mixed with Windows node/npm/pnpm
@@ -146,8 +148,8 @@ If commands resolve to `/mnt/c/...`, use one environment per clone (all-WSL or a
 
 ### Electron desktop build fails
 
-- Re-run `pnpm install`
-- Re-run `pnpm build:desktop`
+- Re-run `bash scripts/bootstrap.sh`
+- Re-run `bash scripts/pnpmw.sh build:desktop`
 - Check `apps/desktop/release/` for partial outputs and logs
 
 ### Desktop app starts in Node mode (`ipcMain` undefined)
