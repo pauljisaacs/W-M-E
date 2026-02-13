@@ -141,7 +141,7 @@ ipcMain.handle('fs:open-files', async (_event, options?: { multiple?: boolean; f
 
 ipcMain.handle('fs:open-directory', async () => {
   const result = await dialog.showOpenDialog(mainWindow ?? undefined, {
-    properties: ['openDirectory'],
+    properties: ['openDirectory', 'createDirectory'],
   });
 
   if (result.canceled || result.filePaths.length === 0) {

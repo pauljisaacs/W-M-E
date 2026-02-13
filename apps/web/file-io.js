@@ -85,4 +85,67 @@ export class FileIO {
             return false;
         }
     }
+
+    async openCSVFile() {
+        const isElectron = Boolean(window.electronAPI?.isElectron);
+
+        if (isElectron && window.electronFS) {
+            // Electron path
+            try {
+                const result = await window.electronFS.openFiles({
+                    multiple: false,
+                    filters: [
+                        { name: 'CSV Files', extensions: ['csv'] }
+                    ]
+                });
+
+                if (!result || result.length === 0) {
+                    return null; // User cancelled
+                }
+
+                // In Electron, we get file paths. Need to read the file content.
+                const filePath = result[0];
+                const fileContent = await window.electronFS.readFile(filePath);
+                
+                // Get filename from path
+                const filename = window.electronFS.basename ? 
+                    await window.electronFS.basename(filePath) : 
+                    filePath.split(/[\/\\]/).pop();
+
+                // Return object with text content and filename
+                return {
+                    text: () => Promise.resolve(new TextDecoder().decode(fileContent)),
+                    name: filename
+                };
+            } catch (err) {
+                if (this.isAbortError(err)) {
+                    return null; // User cancelled
+                }
+                console.error('Electron file picker error:', err);
+                return null;
+            }
+        } else if ('showOpenFilePicker' in window) {
+            // Web path
+            try {
+                const [fileHandle] = await window.showOpenFilePicker({
+                    types: [{
+                        description: 'CSV Files',
+                        accept: { 'text/csv': ['.csv'] }
+                    }],
+                    multiple: false
+                });
+
+                const file = await fileHandle.getFile();
+                return file; // Returns File object with .text() method
+            } catch (err) {
+                if (this.isAbortError(err)) {
+                    return null; // User cancelled
+                }
+                console.error('File System Access API error:', err);
+                return null;
+            }
+        }
+
+        return null;
+    }
 }

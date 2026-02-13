@@ -801,32 +801,12 @@ class App {
         canvas.addEventListener('mousemove', (e) => {
             if (!this.audioEngine.buffer) return;
 
-            const rect = canvas.getBoundingClientRect();
-            const x = e.clientX - rect.left;
-
-            if (isDraggingCueMarker && draggedCueMarkerId) {
-                // Update cue marker position
-                const time = canvasXToTime(x, rect.width, this.audioEngine.buffer.duration);
-                const clampedTime = Math.max(0, Math.min(time, this.audioEngine.buffer.duration));
-                this.cueMarkers.updateTime(draggedCueMarkerId, clampedTime);
-                this.refreshWaveform();
-                return;
-            }
-
             if (isDragging) {
                 updatePlayheadPosition(e);
             }
         });
 
         canvas.addEventListener('mouseup', (e) => {
-            if (isDraggingCueMarker) {
-                // Finished dragging cue marker - save changes
-                isDraggingCueMarker = false;
-                draggedCueMarkerId = null;
-                this.saveCueMarkers();
-                return;
-            }
-
             if (isDragging) {
                 isDragging = false; // Set this FIRST to prevent mouseleave from also firing
                 const result = updatePlayheadPosition(e);
@@ -960,6 +940,14 @@ class App {
             const percent = x / rect.width;
             const time = percent * this.audioEngine.buffer.duration;
 
+            // Handle cue marker dragging (works even when mouse leaves canvas)
+            if (isDraggingCueMarker && draggedCueMarkerId) {
+                const clampedTime = Math.max(0, Math.min(time, this.audioEngine.buffer.duration));
+                this.cueMarkers.updateTime(draggedCueMarkerId, clampedTime);
+                this.refreshWaveform();
+                return;
+            }
+
             // Handle region dragging (moving entire region)
             if (isDraggingRegion) {
                 const deltaX = e.clientX - regionDragStartX;
@@ -1027,6 +1015,14 @@ class App {
 
         // Listen to document for mouseup so we catch it even outside the element
         document.addEventListener('mouseup', () => {
+            if (isDraggingCueMarker) {
+                // Finished dragging cue marker - save changes
+                isDraggingCueMarker = false;
+                draggedCueMarkerId = null;
+                this.saveCueMarkers();
+                return;
+            }
+
             if (isDraggingRegion) {
                 isDraggingRegion = false;
                 // Hide tooltip when done dragging region
@@ -7005,15 +7001,12 @@ class App {
 
     async handleMPChooseCSV() {
         try {
-            const [fileHandle] = await window.showOpenFilePicker({
-                types: [{
-                    description: 'CSV Files',
-                    accept: { 'text/csv': ['.csv'] }
-                }],
-                multiple: false
-            });
+            const file = await this.fileIO.openCSVFile();
+            
+            if (!file) {
+                return; // User cancelled
+            }
 
-            const file = await fileHandle.getFile();
             const csvText = await file.text();
 
             // Parse and validate CSV
@@ -7051,15 +7044,12 @@ class App {
 
     async handleChooseCSV() {
         try {
-            const [fileHandle] = await window.showOpenFilePicker({
-                types: [{
-                    description: 'CSV Files',
-                    accept: { 'text/csv': ['.csv'] }
-                }],
-                multiple: false
-            });
+            const file = await this.fileIO.openCSVFile();
+            
+            if (!file) {
+                return; // User cancelled
+            }
 
-            const file = await fileHandle.getFile();
             const csvText = await file.text();
 
             // Parse and validate CSV
