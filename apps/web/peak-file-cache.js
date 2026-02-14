@@ -317,6 +317,20 @@ export class PeakFileCache {
         const elapsedTime = performance.now() - startTime;
         console.log(`[PeakCache] Generated ${peaks[0].length} peaks in ${elapsedTime.toFixed(0)}ms`);
         
+        // Debug: Check for uninitialized peaks
+        let uninitializedCount = 0;
+        for (let ch = 0; ch < channels; ch++) {
+            for (let p = 0; p < peaks[ch].length; p++) {
+                const peak = peaks[ch][p];
+                if (peak.min > peak.max) {
+                    uninitializedCount++;
+                }
+            }
+        }
+        if (uninitializedCount > 0) {
+            console.warn(`[PeakCache] WARNING: ${uninitializedCount} peaks remain uninitialized! (min > max)`);
+        }
+        
         const peakData = {
             peaks,
             channels,

@@ -3932,6 +3932,7 @@ class App {
             const canvas = document.getElementById('waveform-canvas');
             canvas.width = canvas.parentElement.clientWidth;
             canvas.height = canvas.parentElement.clientHeight;
+            console.log(`[Streaming Mode] Canvas sized: ${canvas.width}x${canvas.height}`);
 
             // Render waveform from peaks
             this.renderWaveformFromPeaks(canvas, peakData, this.mixer.channels);
@@ -4062,6 +4063,8 @@ class App {
         const width = canvas.width;
         const height = canvas.height;
         const channelCount = peakData.channels;
+
+        console.log(`[Render] Canvas: ${width}x${height}, Peaks: ${peakData.peaks[0].length}, Channels: ${channelCount}`);
 
         // Clear canvas
         ctx.fillStyle = '#121212';
@@ -8472,7 +8475,17 @@ class App {
      */
     refreshWaveform() {
         const canvas = document.getElementById('waveform-canvas');
-        if (this.audioEngine.buffer && canvas) {
+        if (!canvas) return;
+        
+        // Check if we're in streaming mode
+        if (this.audioEngine.isStreamingMode()) {
+            // Re-render from peaks
+            const peakData = this.audioEngine.peakData;
+            if (peakData) {
+                this.renderWaveformFromPeaks(canvas, peakData, this.mixer.channels);
+            }
+        } else if (this.audioEngine.buffer) {
+            // Legacy mode - render from buffer
             this.audioEngine.renderWaveform(canvas, this.audioEngine.buffer, this.mixer.channels, this.cueMarkers, this.selectedCueMarkerId);
         }
     }
