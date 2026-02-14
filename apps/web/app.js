@@ -2445,12 +2445,14 @@ class App {
             const fileSizeGB = item.file.size / (1024 * 1024 * 1024);
 
             // Skip audio loading for files > 2GB (JavaScript ArrayBuffer limitation - even in Electron)
+            // BUT: If streaming mode is enabled, we can handle >2GB files using peak files
             const isElectron = Boolean(window.electronAPI?.isElectron);
             const TWO_GB = 2 * 1024 * 1024 * 1024;
             
             // JavaScript has a hard ~2GB limit on ArrayBuffer size, even in Electron
             // For files > 2GB, we cannot load the full audio into memory
-            if (item.file.size > TWO_GB) {
+            // UNLESS streaming mode is enabled - then we use peak files instead
+            if (item.file.size > TWO_GB && !this.useStreamingLoad) {
                 console.warn(`File ${item.metadata.filename} is ${fileSizeGB.toFixed(2)} GB - exceeds JavaScript ArrayBuffer limit (Metadata Only mode)`);
 
                 // Clear the audio buffer so playback doesn't use old file's audio
