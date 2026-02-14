@@ -11,7 +11,7 @@
 export class PeakFileCache {
     constructor() {
         this.dbName = 'WaveAgentXPeaks';
-        this.dbVersion = 5; // Bumped: v4 had uninitialized peaks at chunk boundaries
+        this.dbVersion = 6; // Bumped: v5 had unaligned chunk boundaries
         this.db = null;
         this.initPromise = this.initDB();
     }
@@ -44,12 +44,13 @@ export class PeakFileCache {
                 // v2: still had boundary issues with continue vs break
                 // v3: lost samples at chunk boundaries (no global sample tracking)
                 // v4: accessed uninitialized peaks (not pre-allocated)
-                // v5: fixed with pre-allocated peak arrays
-                if (oldVersion < 5) {
+                // v5: chunk boundaries not frame-aligned, leaving orphaned bytes
+                // v6: fixed with frame-aligned chunks
+                if (oldVersion < 6) {
                     const transaction = event.target.transaction;
                     const store = transaction.objectStore('peaks');
                     store.clear();
-                    console.log(`[PeakCache] Cleared old peak cache (upgrading from v${oldVersion} to v5)`);
+                    console.log(`[PeakCache] Cleared old peak cache (upgrading from v${oldVersion} to v6)`);
                 }
             };
         });
@@ -265,9 +266,14 @@ export class PeakFileCache {
         let processedBytes = 0;
         let globalSampleIndex = 0; // Track sample position across chunks
         
+        // Adjust chunk size to align with frame boundaries
+        // This ensures we never split frames across chunks
+        const alignedChunkSize = Math.floor(chunkSize / frameSize) * frameSize;
+        console.log(`[PeakCache] Using frame-aligned chunks: ${(alignedChunkSize / 1024 / 1024).toFixed(2)}MB per chunk`);
+        
         // Process audio data in chunks
-        for (let chunkStart = dataOffset; chunkStart < dataOffset + dataSize; chunkStart += chunkSize) {
-            const chunkEnd = Math.min(chunkStart + chunkSize, dataOffset + dataSize);
+        for (let chunkStart = dataOffset; chunkStart < dataOffset + dataSize; chunkStart += alignedChunkSize) {
+            const chunkEnd = Math.min(chunkStart + alignedChunkSize, dataOffset + dataSize);
             const blob = file.slice(chunkStart, chunkEnd);
             const arrayBuffer = await blob.arrayBuffer();
             const dataView = new DataView(arrayBuffer);
@@ -316,6 +322,12 @@ export class PeakFileCache {
         
         const elapsedTime = performance.now() - startTime;
         console.log(`[PeakCache] Generated ${peaks[0].length} peaks in ${elapsedTime.toFixed(0)}ms`);
+        console.log(`[PeakCache] Processed ${globalSampleIndex} / ${totalSamples} samples (${((globalSampleIndex / totalSamples) * 100).toFixed(2)}%)`);
+        
+        // Verify we processed all samples
+        if (globalSampleIndex !== totalSamples) {
+            console.warn(`[PeakCache] WARNING: Sample count mismatch! Processed ${globalSampleIndex} but expected ${totalSamples}`);
+        }
         
         // Debug: Check for uninitialized peaks
         let uninitializedCount = 0;
