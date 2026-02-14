@@ -11,7 +11,7 @@
 export class PeakFileCache {
     constructor() {
         this.dbName = 'WaveAgentXPeaks';
-        this.dbVersion = 2; // Bumped to invalidate old peaks with boundary bugs
+        this.dbVersion = 3; // Bumped to invalidate v2 peaks with boundary issues
         this.db = null;
         this.initPromise = this.initDB();
     }
@@ -39,13 +39,15 @@ export class PeakFileCache {
                     store.createIndex('timestamp', 'timestamp', { unique: false });
                 }
                 
-                // Clear all cached peaks when upgrading from v1 to v2
-                // (v1 had chunk boundary bugs that created invalid peaks)
-                if (oldVersion < 2) {
+                // Clear all cached peaks when upgrading
+                // v1: had chunk boundary bugs
+                // v2: still had boundary issues with continue vs break
+                // v3: fixed to use break and proper sample counting
+                if (oldVersion < 3) {
                     const transaction = event.target.transaction;
                     const store = transaction.objectStore('peaks');
                     store.clear();
-                    console.log('[PeakCache] Cleared old peak cache (v1 had chunk boundary bugs)');
+                    console.log(`[PeakCache] Cleared old peak cache (upgrading from v${oldVersion} to v3)`);
                 }
             };
         });
@@ -264,7 +266,7 @@ export class PeakFileCache {
                 // Check if we have enough bytes for at least one complete frame
                 // (A frame = one sample for all channels interleaved)
                 if (i + frameSize > arrayBuffer.byteLength) {
-                    continue; // Skip incomplete frames at chunk boundaries
+                    break; // Stop at chunk boundaries - next chunk will continue
                 }
                 
                 // Calculate min/max for each channel in this peak window
@@ -273,7 +275,7 @@ export class PeakFileCache {
                     let max = -1.0;
                     let samplesRead = 0;
                     
-                    // Sample within peak window
+                    // Sample within peak window (up to 256 samples)
                     for (let s = 0; s < samplesPerPeak * frameSize && i + s < arrayBuffer.byteLength; s += frameSize) {
                         const byteOffset = i + s + (ch * bytesPerSample);
                         
@@ -299,11 +301,9 @@ export class PeakFileCache {
                         samplesRead++;
                     }
                     
-                    // Store peak (or zero if no samples were read, which shouldn't happen due to check above)
+                    // Only store peak if we successfully read samples
                     if (samplesRead > 0) {
                         peaks[ch].push({ min, max });
-                    } else {
-                        peaks[ch].push({ min: 0, max: 0 });
                     }
                 }
             }
