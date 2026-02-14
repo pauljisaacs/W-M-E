@@ -11,7 +11,7 @@
 export class PeakFileCache {
     constructor() {
         this.dbName = 'WaveAgentXPeaks';
-        this.dbVersion = 1;
+        this.dbVersion = 2; // Bumped to invalidate old peaks with boundary bugs
         this.db = null;
         this.initPromise = this.initDB();
     }
@@ -31,11 +31,21 @@ export class PeakFileCache {
 
             request.onupgradeneeded = (event) => {
                 const db = event.target.result;
+                const oldVersion = event.oldVersion;
                 
-                // Create object store for peak data
+                // Create object store for peak data (v1)
                 if (!db.objectStoreNames.contains('peaks')) {
                     const store = db.createObjectStore('peaks', { keyPath: 'fileKey' });
                     store.createIndex('timestamp', 'timestamp', { unique: false });
+                }
+                
+                // Clear all cached peaks when upgrading from v1 to v2
+                // (v1 had chunk boundary bugs that created invalid peaks)
+                if (oldVersion < 2) {
+                    const transaction = event.target.transaction;
+                    const store = transaction.objectStore('peaks');
+                    store.clear();
+                    console.log('[PeakCache] Cleared old peak cache (v1 had chunk boundary bugs)');
                 }
             };
         });
@@ -251,10 +261,26 @@ export class PeakFileCache {
             
             // Process samples in this chunk
             for (let i = 0; i < arrayBuffer.byteLength; i += frameSize * samplesPerPeak) {
+                // First check if we have enough data for all channels
+                let hasCompleteFrame = true;
+                for (let ch = 0; ch < channels; ch++) {
+                    const firstByteOffset = i + (ch * bytesPerSample);
+                    if (firstByteOffset + bytesPerSample > arrayBuffer.byteLength) {
+                        hasCompleteFrame = false;
+                        break;
+                    }
+                }
+                
+                // Skip this peak window if we don't have data for all channels
+                if (!hasCompleteFrame) {
+                    continue;
+                }
+                
                 // Calculate min/max for each channel in this peak window
                 for (let ch = 0; ch < channels; ch++) {
                     let min = 1.0;
                     let max = -1.0;
+                    let samplesRead = 0;
                     
                     // Sample within peak window
                     for (let s = 0; s < samplesPerPeak * frameSize && i + s < arrayBuffer.byteLength; s += frameSize) {
@@ -279,10 +305,15 @@ export class PeakFileCache {
                         
                         if (sample < min) min = sample;
                         if (sample > max) max = sample;
+                        samplesRead++;
                     }
                     
-                    // Store min/max pair
-                    peaks[ch].push({ min, max });
+                    // Store peak (or zero if no samples were read, which shouldn't happen due to check above)
+                    if (samplesRead > 0) {
+                        peaks[ch].push({ min, max });
+                    } else {
+                        peaks[ch].push({ min: 0, max: 0 });
+                    }
                 }
             }
             
