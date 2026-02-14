@@ -11,7 +11,7 @@
 export class PeakFileCache {
     constructor() {
         this.dbName = 'WaveAgentXPeaks';
-        this.dbVersion = 4; // Bumped: v3 lost samples at chunk boundaries
+        this.dbVersion = 5; // Bumped: v4 had uninitialized peaks at chunk boundaries
         this.db = null;
         this.initPromise = this.initDB();
     }
@@ -43,12 +43,13 @@ export class PeakFileCache {
                 // v1: had chunk boundary bugs
                 // v2: still had boundary issues with continue vs break
                 // v3: lost samples at chunk boundaries (no global sample tracking)
-                // v4: fixed with global sample index across chunks
-                if (oldVersion < 4) {
+                // v4: accessed uninitialized peaks (not pre-allocated)
+                // v5: fixed with pre-allocated peak arrays
+                if (oldVersion < 5) {
                     const transaction = event.target.transaction;
                     const store = transaction.objectStore('peaks');
                     store.clear();
-                    console.log(`[PeakCache] Cleared old peak cache (upgrading from v${oldVersion} to v4)`);
+                    console.log(`[PeakCache] Cleared old peak cache (upgrading from v${oldVersion} to v5)`);
                 }
             };
         });
@@ -248,11 +249,18 @@ export class PeakFileCache {
         
         console.log(`[PeakCache] Audio: ${channels}ch, ${bitDepth}bit, ${sampleRate}Hz, ${duration.toFixed(2)}s`);
         
-        // Initialize peak arrays (one per channel)
+        // Pre-allocate peak arrays based on total samples
+        const totalPeaks = Math.ceil(totalSamples / samplesPerPeak);
         const peaks = [];
         for (let c = 0; c < channels; c++) {
-            peaks.push([]);
+            const channelPeaks = [];
+            for (let p = 0; p < totalPeaks; p++) {
+                channelPeaks.push({ min: 1.0, max: -1.0 });
+            }
+            peaks.push(channelPeaks);
         }
+        
+        console.log(`[PeakCache] Pre-allocated ${totalPeaks} peaks (${totalSamples} samples / ${samplesPerPeak} samples per peak)`);
         
         let processedBytes = 0;
         let globalSampleIndex = 0; // Track sample position across chunks
@@ -269,14 +277,6 @@ export class PeakFileCache {
             // Process samples in this chunk
             for (let sampleIdx = 0; sampleIdx < samplesInChunk; sampleIdx++) {
                 const globalPeakIndex = Math.floor(globalSampleIndex / samplesPerPeak);
-                const sampleInPeak = globalSampleIndex % samplesPerPeak;
-                
-                // Start a new peak window when we hit a multiple of samplesPerPeak
-                if (sampleInPeak === 0) {
-                    for (let ch = 0; ch < channels; ch++) {
-                        peaks[ch].push({ min: 1.0, max: -1.0 });
-                    }
-                }
                 
                 // Read sample for each channel
                 const byteOffset = sampleIdx * frameSize;
