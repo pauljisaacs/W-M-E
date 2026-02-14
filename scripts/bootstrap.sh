@@ -28,35 +28,29 @@ if [ "$node_major" -lt 20 ]; then
   exit 1
 fi
 
-expected_pnpm="$(node -p "require('./package.json').packageManager.split('@')[1]")"
+pnpmw="$repo_root/scripts/pnpmw.sh"
 
-if ! command -v corepack >/dev/null 2>&1; then
-  echo "corepack not found. Install Node.js with corepack support."
-  exit 1
-fi
-
-echo "==> Enabling corepack + pnpm@$expected_pnpm"
-corepack enable
-corepack prepare "pnpm@$expected_pnpm" --activate
+echo "==> Resolving pnpm toolchain"
+"$pnpmw" --version >/dev/null
 
 echo "==> Installing dependencies"
-if ! corepack pnpm install --no-frozen-lockfile; then
+if ! "$pnpmw" install --no-frozen-lockfile; then
   echo "==> Install failed. Removing node_modules and retrying once..."
   rm -rf node_modules apps/*/node_modules
-  corepack pnpm install --no-frozen-lockfile
+  "$pnpmw" install --no-frozen-lockfile
 fi
 
 echo "==> Running toolchain doctor"
 bash scripts/doctor.sh
 
 echo "==> Running smoke builds"
-corepack pnpm build:web
-corepack pnpm build:desktop
+"$pnpmw" build:web
+"$pnpmw" build:desktop
 
 echo
 echo "Bootstrap complete."
 echo "Next commands:"
-echo "  pnpm dev:web"
-echo "  pnpm dev:desktop"
-echo "  pnpm make:win"
-echo "  pnpm make:mac   # requires macOS build host"
+echo "  bash scripts/pnpmw.sh dev:web"
+echo "  bash scripts/run-desktop.sh"
+echo "  bash scripts/pnpmw.sh make:win"
+echo "  bash scripts/pnpmw.sh make:mac   # requires macOS build host"
