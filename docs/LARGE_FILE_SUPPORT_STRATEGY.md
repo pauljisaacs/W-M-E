@@ -1,7 +1,7 @@
 # Large File Support Strategy (>2GB)
 **Author:** GitHub Copilot  
 **Date:** February 14, 2026  
-**Status:** Phase 1 IMPLEMENTED (Foundation Complete)
+**Status:** Phase 2 IMPLEMENTED (Core Streaming Complete)
 
 ## Implementation Progress
 
@@ -29,9 +29,38 @@
    - `parseDS64Chunk()` for RF64 extended sizes
    - Updated parseWav() to use new helpers
 
-**Status:** NON-BREAKING - All changes behind feature flag, existing functionality unaffected.
+### ✅ Phase 2: Core Streaming (COMPLETED)
+**Completion Date:** February 14, 2026
 
-**Next Steps:** Phase 2 (Core Playback Refactoring)
+**Implemented:**
+1. ✅ Peak-based waveform rendering
+   - `loadAudioWithStreaming()` - Streaming file load path
+   - `renderWaveformFromPeaks()` - Renders waveform from peak data
+   - `renderCueMarkersFromPeaks()` - Marker rendering without AudioBuffer
+   - Respects mixer mute/solo state
+2. ✅ AudioEngine streaming support
+   - `playStreaming()` - Loads and plays audio in chunks
+   - `isStreamingMode()` - Detects streaming vs legacy mode
+   - `clearStreaming()` - Cleanup method
+   - Streaming metadata storage (file, metadata, peaks)
+3. ✅ Integrated playback
+   - Updated `togglePlay()` to support both modes
+   - Automatic mode detection
+   - Mixer integration maintained
+4. ✅ UI indicators
+   - Shows "(Streaming Mode)" in player filename
+   - Peak generation progress display
+   - Maintains all existing UI controls
+
+**Status:** BETA - Ready for testing with files <2GB. Files >2GB will load up to 2GB for playback.
+
+**Limitations (Phase 2):**
+- Grouped files not yet supported in streaming mode
+- Large files (>2GB) load first 2GB only for playback
+- No chunk pre-buffering (may have gaps on large files)
+- No loop support in streaming mode yet
+
+**Next Steps:** Phase 3 (Advanced Features - Splitting, Combining, Export)
 
 ---
 

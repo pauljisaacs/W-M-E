@@ -3881,7 +3881,297 @@ class App {
         return newBuffer.buffer;
     }
 
+    /**
+     * Load audio using streaming mode (Phase 2)
+     * Generates peak files for waveform display without loading full audio
+     */
+    async loadAudioWithStreaming(index) {
+        const item = this.files[index];
+        const targetFiles = item.isGroup ? item.siblings : [item];
+        const isGroup = item.isGroup;
+        
+        console.log(`[Streaming Mode] Loading ${isGroup ? 'Group' : 'Single File'}: ${item.metadata.filename}`);
+
+        // Mark as loading
+        this.isLoadingAudio = true;
+        const playBtn = document.getElementById('play-btn');
+        playBtn.disabled = true;
+
+        const loadingOverlay = document.getElementById('loading-overlay');
+        const progressFill = document.getElementById('progress-fill');
+        const progressText = document.getElementById('progress-text');
+        const loadingText = document.querySelector('.loading-text');
+
+        loadingOverlay.style.display = 'flex';
+        loadingText.textContent = 'Generating waveform peaks...';
+        progressFill.style.width = '0%';
+        progressText.textContent = '0%';
+
+        try {
+            // For now, handle single files only (groups will come later)
+            if (isGroup) {
+                throw new Error('Streaming mode for grouped files not yet implemented');
+            }
+
+            const file = item.file;
+            const metadata = item.metadata;
+
+            // Generate or retrieve peaks
+            const peakData = await this.peakCache.getPeaks(file, metadata, (progress) => {
+                progressFill.style.width = `${progress}%`;
+                progressText.textContent = `${progress}%`;
+            });
+
+            console.log(`[Streaming Mode] Peaks ready: ${peakData.peaks[0].length} peaks, ${peakData.channels} channels`);
+
+            // Update text
+            loadingText.textContent = 'Rendering waveform...';
+            progressFill.style.width = '100%';
+
+            // Setup canvas
+            const canvas = document.getElementById('waveform-canvas');
+            canvas.width = canvas.parentElement.clientWidth;
+            canvas.height = canvas.parentElement.clientHeight;
+
+            // Render waveform from peaks
+            this.renderWaveformFromPeaks(canvas, peakData, this.mixer.channels);
+
+            // Setup mixer
+            const trackCount = peakData.channels;
+            console.log(`[Streaming Mode] Building mixer for ${trackCount} tracks...`);
+
+            // Update mixer callbacks
+            this.mixer.onTrackNameChange = (trackIndex, newName) => {
+                // Update track names for selected files
+                let updatedCount = 0;
+                
+                for (const selectedIndex of this.selectedIndices) {
+                    const selectedItem = this.files[selectedIndex];
+                    if (!selectedItem) continue;
+                    
+                    if (selectedItem.metadata.channels === trackCount) {
+                        if (!selectedItem.metadata.trackNames) selectedItem.metadata.trackNames = [];
+                        selectedItem.metadata.trackNames[trackIndex] = newName;
+                        updatedCount++;
+                    }
+                }
+                
+                console.log(`Track ${trackIndex} renamed to "${newName}" for ${updatedCount} file(s)`);
+                document.getElementById('batch-save-btn').disabled = false;
+                
+                if (this.autoSaveEnabled) {
+                    this.scheduleAutoSave();
+                }
+            };
+
+            this.mixer.onStateChange = () => {
+                // Re-render waveform when mute/solo changes
+                this.renderWaveformFromPeaks(canvas, peakData, this.mixer.channels);
+            };
+
+            // Collect track names
+            let trackNames = item.metadata.trackNames;
+
+            // Preserve current fader height
+            const mixerContainer = document.getElementById('mixer-container');
+            let currentHeight = 100;
+            if (mixerContainer) {
+                const existingFaderContainer = mixerContainer.querySelector('.fader-container');
+                if (existingFaderContainer) {
+                    currentHeight = parseInt(getComputedStyle(existingFaderContainer).height) || 100;
+                }
+            }
+
+            // Build mixer UI
+            this.mixer.buildUI(trackCount, trackNames);
+            this.resetFaderHeights(currentHeight);
+
+            // Load cue markers
+            await this.loadCueMarkers(item);
+
+            // Re-render with markers
+            this.renderWaveformFromPeaks(canvas, peakData, this.mixer.channels);
+
+            // Show controls
+            const stopBtn = document.getElementById('stop-btn');
+            const loopBtn = document.getElementById('loop-btn');
+            const timeDisplays = document.querySelectorAll('.time-display');
+            
+            if (playBtn) playBtn.style.display = 'flex';
+            if (stopBtn) stopBtn.style.display = 'flex';
+            if (loopBtn) loopBtn.style.display = 'flex';
+            timeDisplays.forEach(el => el.style.display = 'flex');
+
+            // Update time display
+            const durationStr = this.formatDuration(peakData.duration);
+            document.getElementById('total-time').textContent = durationStr;
+
+            // Store metadata
+            this.currentFileMetadata = item.metadata;
+
+            // Update player header
+            const playerFilename = document.getElementById('player-filename');
+            if (playerFilename) {
+                playerFilename.innerHTML = `${item.metadata.filename} <span style="color: #00d4ff; font-size: 0.8em;">(Streaming Mode)</span>`;
+            }
+
+            // Store peak data and file reference for playback
+            this.audioEngine.peakData = peakData;
+            this.audioEngine.streamingFile = file;
+            this.audioEngine.streamingMetadata = metadata;
+
+            // Mark as complete
+            this.isLoadingAudio = false;
+            playBtn.disabled = false;
+            playBtn.textContent = '▶';
+
+            console.log('[Streaming Mode] Load complete');
+
+        } catch (err) {
+            console.error('[Streaming Mode] Error:', err);
+
+            this.isLoadingAudio = false;
+            playBtn.disabled = false;
+
+            const playerFilename = document.getElementById('player-filename');
+            if (playerFilename) {
+                playerFilename.innerHTML = `${item.metadata.filename} <span style="color: #ffcf44; font-size: 0.8em;">(Error)</span>`;
+            }
+
+            const canvas = document.getElementById('waveform-canvas');
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#2a2a2a';
+            ctx.font = '14px Inter';
+            ctx.fillText('Streaming mode error', 20, 30);
+
+            alert(`Error in streaming mode for "${item.metadata.filename}": ${err.message}`);
+        } finally {
+            loadingOverlay.style.display = 'none';
+        }
+    }
+
+    /**
+     * Render waveform from peak data (streaming mode)
+     * @param {HTMLCanvasElement} canvas
+     * @param {Object} peakData - { peaks, channels, duration, samplesPerPeak }
+     * @param {Array} channelStates - Mixer channel states (mute/solo)
+     */
+    renderWaveformFromPeaks(canvas, peakData, channelStates = []) {
+        const ctx = canvas.getContext('2d');
+        const width = canvas.width;
+        const height = canvas.height;
+        const channelCount = peakData.channels;
+
+        // Clear canvas
+        ctx.fillStyle = '#121212';
+        ctx.fillRect(0, 0, width, height);
+
+        // Colors for tracks (same as AudioEngine)
+        const colors = [
+            'rgba(3, 218, 198, 0.7)',   // Teal
+            'rgba(187, 134, 252, 0.7)', // Purple
+            'rgba(207, 102, 121, 0.7)', // Red
+            'rgba(255, 179, 0, 0.7)',   // Amber
+            'rgba(33, 150, 243, 0.7)',  // Blue
+            'rgba(76, 175, 80, 0.7)',   // Green
+            'rgba(255, 87, 34, 0.7)',   // Deep Orange
+            'rgba(0, 188, 212, 0.7)'    // Cyan
+        ];
+
+        const amp = height / 2;
+
+        // Determine which channels to draw
+        const anySolo = channelStates.some(ch => ch && ch.isSoloed);
+
+        // Draw tracks in reverse order so Track 1 is on top
+        for (let c = channelCount - 1; c >= 0; c--) {
+            // Check visibility
+            if (channelStates[c]) {
+                if (anySolo && !channelStates[c].isSoloed) {
+                    continue; // Skip non-soloed channels
+                }
+            }
+
+            const channelPeaks = peakData.peaks[c];
+            const color = colors[c % colors.length];
+
+            ctx.fillStyle = color;
+
+            // Downsample peaks to fit canvas width
+            const peaksPerPixel = Math.max(1, Math.ceil(channelPeaks.length / width));
+
+            for (let i = 0; i < width; i++) {
+                const startPeak = Math.floor(i * peaksPerPixel);
+                const endPeak = Math.min(startPeak + peaksPerPixel, channelPeaks.length);
+
+                // Find min/max within this pixel's range
+                let min = 1.0;
+                let max = -1.0;
+
+                for (let p = startPeak; p < endPeak; p++) {
+                    const peak = channelPeaks[p];
+                    if (peak.min < min) min = peak.min;
+                    if (peak.max > max) max = peak.max;
+                }
+
+                // Draw vertical bar
+                ctx.fillRect(i, (1 + min) * amp, 1, Math.max(1, (max - min) * amp));
+            }
+        }
+
+        // Render cue markers
+        if (this.cueMarkers && peakData.duration) {
+            this.renderCueMarkersFromPeaks(ctx, canvas, peakData.duration);
+        }
+    }
+
+    /**
+     * Render cue markers on waveform (streaming mode)
+     */
+    renderCueMarkersFromPeaks(ctx, canvas, duration) {
+        const markers = this.cueMarkers.getAllSorted();
+        const width = canvas.width;
+        const height = canvas.height;
+
+        markers.forEach(marker => {
+            const x = (marker.time / duration) * width;
+            const isSelected = marker.id === this.selectedCueMarkerId;
+
+            // Draw vertical line
+            ctx.strokeStyle = isSelected ? '#ffcf44' : '#00d4ff';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([4, 4]);
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, height);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            // Draw label
+            ctx.fillStyle = isSelected ? '#ffcf44' : '#00d4ff';
+            ctx.font = '11px Inter';
+            ctx.fillText(marker.label || 'M', x + 3, 15);
+        });
+    }
+
+    /**
+     * Format duration in seconds to HH:MM:SS
+     */
+    formatDuration(seconds) {
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        const secs = Math.floor(seconds % 60);
+        return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }
+
     async loadAudioForFile(index) {
+        // Use streaming mode if enabled (beta)
+        if (this.useStreamingLoad) {
+            return await this.loadAudioWithStreaming(index);
+        }
+        
+        // Legacy full-load mode
         const item = this.files[index];
         const targetFiles = item.isGroup ? item.siblings : [item];
         const isGroup = item.isGroup;
@@ -4237,7 +4527,7 @@ class App {
         return combined.buffer;
     }
 
-    togglePlay() {
+    async togglePlay() {
         if (this.files.length === 0) return;
 
         this.isStopped = false; // Allow animation
@@ -4247,20 +4537,29 @@ class App {
             this.mixer.stopRecording(); // Stop automation recording
             document.getElementById('play-btn').textContent = '▶';
         } else {
+            // Check for streaming mode
+            const isStreaming = this.audioEngine.isStreamingMode();
+
             // If no file loaded, load selected
-            if (!this.audioEngine.buffer && this.selectedIndices.size > 0) {
+            if (!this.audioEngine.buffer && !isStreaming && this.selectedIndices.size > 0) {
                 // ... logic to load ...
                 // For now assume loaded
             }
 
-            if (this.audioEngine.buffer) {
-                // If region is selected, start from region start
+            if (this.audioEngine.buffer || isStreaming) {
+                // Calculate start time
                 let startTime = this.audioEngine.pauseTime;
                 if (this.region.start !== null && this.region.end !== null) {
                     startTime = Math.min(this.region.start, this.region.end);
                 }
 
-                this.audioEngine.play(startTime);
+                // Play based on mode
+                if (isStreaming) {
+                    await this.audioEngine.playStreaming(startTime);
+                } else {
+                    this.audioEngine.play(startTime);
+                }
+
                 this.mixer.startRecording(startTime); // Start automation recording
                 document.getElementById('play-btn').textContent = '⏸';
             }

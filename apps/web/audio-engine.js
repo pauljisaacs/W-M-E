@@ -9,6 +9,11 @@ export class AudioEngine {
         this.splitter = null;
         this.merger = null;
         this.mixerNodes = [];
+        
+        // Streaming mode support (Phase 2)
+        this.peakData = null; // Peak data for waveform rendering
+        this.streamingFile = null; // Original file for streaming playback
+        this.streamingMetadata = null; // File metadata
     }
 
     setMixerNodes(nodes) {
@@ -294,6 +299,87 @@ export class AudioEngine {
             return this.audioCtx.currentTime - this.startTime;
         }
         return this.pauseTime;
+    }
+
+    /**
+     * Streaming playback support (Phase 2)
+     * Note: This is a simplified implementation for beta testing
+     * Full implementation will support seeking, looping, and chunk pre-buffering
+     */
+    async playStreaming(startOffset = 0) {
+        if (!this.streamingFile || !this.streamingMetadata) {
+            console.warn('[Streaming] No streaming file loaded');
+            return;
+        }
+
+        console.log(`[Streaming] Starting playback at ${startOffset.toFixed(2)}s`);
+
+        // For Phase 2 MVP: Load first chunk and play it
+        // Full implementation will load and play chunks sequentially
+        
+        // Create ChunkedAudioFile instance
+        const ChunkedAudioFile = (await import('./chunked-audio-file.js')).ChunkedAudioFile;
+        const chunkedFile = new ChunkedAudioFile(this.streamingFile, 100); // 100MB chunks
+        await chunkedFile.init();
+
+        // For MVP, load entire file if <2GB, otherwise load first 2GB
+        const maxLoadSize = 2 * 1024 * 1024 * 1024; // 2GB limit
+        const loadSize = Math.min(this.streamingFile.size, maxLoadSize);
+
+        if (this.streamingFile.size > maxLoadSize) {
+            console.warn(`[Streaming] File >2GB, loading first 2GB only for playback`);
+        }
+
+        // Read and combine chunks up to loadSize
+        const audioChunkCount = Math.ceil(loadSize / chunkedFile.chunkSize);
+        const chunks = [];
+
+        for (let i = 0; i < audioChunkCount; i++) {
+            const chunk = await chunkedFile.readChunk(i);
+            chunks.push(new Uint8Array(chunk));
+        }
+
+        // Combine chunks
+        const totalLength = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+        const combined = new Uint8Array(totalLength);
+        let position = 0;
+
+        for (const chunk of chunks) {
+            combined.set(chunk, position);
+            position += chunk.byteLength;
+        }
+
+        // Decode the combined audio
+        const buffer = await this.decodeFile(combined.buffer);
+
+        // Store buffer and play
+        this.buffer = buffer;
+        
+        // Setup routing if needed
+        if (!this.splitter) {
+            this.setupRouting();
+        }
+
+        // Play from offset
+        this.play(startOffset);
+
+        console.log('[Streaming] Playback started');
+    }
+
+    /**
+     * Check if in streaming mode
+     */
+    isStreamingMode() {
+        return this.streamingFile !== null;
+    }
+
+    /**
+     * Clear streaming mode data
+     */
+    clearStreaming() {
+        this.peakData = null;
+        this.streamingFile = null;
+        this.streamingMetadata = null;
     }
 
     renderWaveform(canvas, buffer, channelStates = [], cueMarkers = null, selectedCueMarkerId = null) {
