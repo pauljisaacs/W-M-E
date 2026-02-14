@@ -261,19 +261,10 @@ export class PeakFileCache {
             
             // Process samples in this chunk
             for (let i = 0; i < arrayBuffer.byteLength; i += frameSize * samplesPerPeak) {
-                // First check if we have enough data for all channels
-                let hasCompleteFrame = true;
-                for (let ch = 0; ch < channels; ch++) {
-                    const firstByteOffset = i + (ch * bytesPerSample);
-                    if (firstByteOffset + bytesPerSample > arrayBuffer.byteLength) {
-                        hasCompleteFrame = false;
-                        break;
-                    }
-                }
-                
-                // Skip this peak window if we don't have data for all channels
-                if (!hasCompleteFrame) {
-                    continue;
+                // Check if we have enough bytes for at least one complete frame
+                // (A frame = one sample for all channels interleaved)
+                if (i + frameSize > arrayBuffer.byteLength) {
+                    continue; // Skip incomplete frames at chunk boundaries
                 }
                 
                 // Calculate min/max for each channel in this peak window
@@ -349,10 +340,12 @@ export class PeakFileCache {
         // Check cache first
         const cached = await this.getCachedPeaks(file);
         if (cached) {
+            console.log(`[PeakCache] Using cached peaks (v${this.dbVersion})`);
             return cached;
         }
         
         // Generate if not cached
+        console.log(`[PeakCache] Cache miss - generating new peaks (v${this.dbVersion})`);
         return await this.generatePeaks(file, metadata, onProgress);
     }
 
