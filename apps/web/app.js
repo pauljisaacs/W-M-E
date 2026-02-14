@@ -3934,10 +3934,7 @@ class App {
             canvas.height = canvas.parentElement.clientHeight;
             console.log(`[Streaming Mode] Canvas sized: ${canvas.width}x${canvas.height}`);
 
-            // Render waveform from peaks
-            this.renderWaveformFromPeaks(canvas, peakData, this.mixer.channels);
-
-            // Setup mixer
+            // Setup mixer FIRST (before rendering waveform)
             const trackCount = peakData.channels;
             console.log(`[Streaming Mode] Building mixer for ${trackCount} tracks...`);
 
