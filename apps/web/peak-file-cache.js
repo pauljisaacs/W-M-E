@@ -11,7 +11,7 @@
 export class PeakFileCache {
     constructor() {
         this.dbName = 'WaveAgentXPeaks';
-        this.dbVersion = 3; // Bumped to invalidate v2 peaks with boundary issues
+        this.dbVersion = 4; // Bumped: v3 lost samples at chunk boundaries
         this.db = null;
         this.initPromise = this.initDB();
     }
@@ -42,12 +42,13 @@ export class PeakFileCache {
                 // Clear all cached peaks when upgrading
                 // v1: had chunk boundary bugs
                 // v2: still had boundary issues with continue vs break
-                // v3: fixed to use break and proper sample counting
-                if (oldVersion < 3) {
+                // v3: lost samples at chunk boundaries (no global sample tracking)
+                // v4: fixed with global sample index across chunks
+                if (oldVersion < 4) {
                     const transaction = event.target.transaction;
                     const store = transaction.objectStore('peaks');
                     store.clear();
-                    console.log(`[PeakCache] Cleared old peak cache (upgrading from v${oldVersion} to v3)`);
+                    console.log(`[PeakCache] Cleared old peak cache (upgrading from v${oldVersion} to v4)`);
                 }
             };
         });
@@ -94,7 +95,8 @@ export class PeakFileCache {
             request.onsuccess = () => {
                 const result = request.result;
                 if (result) {
-                    console.log(`[PeakCache] Retrieved cached peaks for ${file.name} (${result.peaks.length} peaks)`);
+                    const peakCount = result.peaks[0]?.length || 0;
+                    console.log(`[PeakCache] Retrieved cached peaks for ${file.name} (${peakCount} peaks per channel, ${result.peaks.length} channels)`);
                     resolve(result);
                 } else {
                     resolve(null);
@@ -253,6 +255,7 @@ export class PeakFileCache {
         }
         
         let processedBytes = 0;
+        let globalSampleIndex = 0; // Track sample position across chunks
         
         // Process audio data in chunks
         for (let chunkStart = dataOffset; chunkStart < dataOffset + dataSize; chunkStart += chunkSize) {
@@ -261,51 +264,47 @@ export class PeakFileCache {
             const arrayBuffer = await blob.arrayBuffer();
             const dataView = new DataView(arrayBuffer);
             
+            const samplesInChunk = Math.floor(arrayBuffer.byteLength / frameSize);
+            
             // Process samples in this chunk
-            for (let i = 0; i < arrayBuffer.byteLength; i += frameSize * samplesPerPeak) {
-                // Check if we have enough bytes for at least one complete frame
-                // (A frame = one sample for all channels interleaved)
-                if (i + frameSize > arrayBuffer.byteLength) {
-                    break; // Stop at chunk boundaries - next chunk will continue
+            for (let sampleIdx = 0; sampleIdx < samplesInChunk; sampleIdx++) {
+                const globalPeakIndex = Math.floor(globalSampleIndex / samplesPerPeak);
+                const sampleInPeak = globalSampleIndex % samplesPerPeak;
+                
+                // Start a new peak window when we hit a multiple of samplesPerPeak
+                if (sampleInPeak === 0) {
+                    for (let ch = 0; ch < channels; ch++) {
+                        peaks[ch].push({ min: 1.0, max: -1.0 });
+                    }
                 }
                 
-                // Calculate min/max for each channel in this peak window
+                // Read sample for each channel
+                const byteOffset = sampleIdx * frameSize;
                 for (let ch = 0; ch < channels; ch++) {
-                    let min = 1.0;
-                    let max = -1.0;
-                    let samplesRead = 0;
+                    const sampleByteOffset = byteOffset + (ch * bytesPerSample);
                     
-                    // Sample within peak window (up to 256 samples)
-                    for (let s = 0; s < samplesPerPeak * frameSize && i + s < arrayBuffer.byteLength; s += frameSize) {
-                        const byteOffset = i + s + (ch * bytesPerSample);
-                        
-                        if (byteOffset + bytesPerSample > arrayBuffer.byteLength) break;
-                        
-                        let sample = 0;
-                        if (bitDepth === 16) {
-                            sample = dataView.getInt16(byteOffset, true) / 32768.0;
-                        } else if (bitDepth === 24) {
-                            // 24-bit is stored as 3 bytes, little-endian
-                            const byte1 = dataView.getUint8(byteOffset);
-                            const byte2 = dataView.getUint8(byteOffset + 1);
-                            const byte3 = dataView.getInt8(byteOffset + 2); // Signed for sign extension
-                            const int24 = (byte3 << 16) | (byte2 << 8) | byte1;
-                            sample = int24 / 8388608.0; // 2^23
-                        } else if (bitDepth === 32) {
-                            // Assume 32-bit float
-                            sample = dataView.getFloat32(byteOffset, true);
-                        }
-                        
-                        if (sample < min) min = sample;
-                        if (sample > max) max = sample;
-                        samplesRead++;
+                    let sample = 0;
+                    if (bitDepth === 16) {
+                        sample = dataView.getInt16(sampleByteOffset, true) / 32768.0;
+                    } else if (bitDepth === 24) {
+                        // 24-bit is stored as 3 bytes, little-endian
+                        const byte1 = dataView.getUint8(sampleByteOffset);
+                        const byte2 = dataView.getUint8(sampleByteOffset + 1);
+                        const byte3 = dataView.getInt8(sampleByteOffset + 2); // Signed for sign extension
+                        const int24 = (byte3 << 16) | (byte2 << 8) | byte1;
+                        sample = int24 / 8388608.0; // 2^23
+                    } else if (bitDepth === 32) {
+                        // Assume 32-bit float
+                        sample = dataView.getFloat32(sampleByteOffset, true);
                     }
                     
-                    // Only store peak if we successfully read samples
-                    if (samplesRead > 0) {
-                        peaks[ch].push({ min, max });
-                    }
+                    // Update min/max for current peak
+                    const peak = peaks[ch][globalPeakIndex];
+                    if (sample < peak.min) peak.min = sample;
+                    if (sample > peak.max) peak.max = sample;
                 }
+                
+                globalSampleIndex++;
             }
             
             processedBytes += arrayBuffer.byteLength;
