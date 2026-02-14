@@ -3986,6 +3986,11 @@ class App {
             this.mixer.buildUI(trackCount, trackNames);
             this.resetFaderHeights(currentHeight);
 
+            // Connect Mixer to Audio Engine (for playback routing and metering)
+            const mixerNodes = this.mixer.getChannelNodes();
+            this.audioEngine.setMixerNodes(mixerNodes);
+            console.log('[Streaming Mode] Mixer connected');
+
             // Load cue markers
             await this.loadCueMarkers(item);
 
