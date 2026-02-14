@@ -6,6 +6,8 @@ import { AudioProcessor } from './audio-processor.js';
 import { MixerMetadata } from './mixer-metadata.js';
 import { CueMarkerCollection } from './cue-marker.js';
 import { RenameManager } from './renameUtilities.js';
+import { PeakFileCache } from './peak-file-cache.js';
+import { ChunkedAudioFile } from './chunked-audio-file.js';
 import './sound-report.js';
 import './sound-report-export.js';
 
@@ -144,6 +146,7 @@ class App {
         this.audioEngine = new AudioEngine();
         this.audioProcessor = new AudioProcessor();
         this.audioProcessor.metadataHandler = this.metadataHandler; // Link metadata handler
+        this.peakCache = new PeakFileCache(); // Peak file cache for large file support
         this.mixer = new Mixer(this.audioEngine.audioCtx,
             (index, name) => {
                 console.log(`Track ${index} renamed to ${name}`);
@@ -188,6 +191,13 @@ class App {
 
         // Allow diagnostics access
         this.allowDiagnosticsAccess = localStorage.getItem('allowDiagnosticsAccess') !== 'false'; // Default true
+
+        // Large file support (streaming) - BETA
+        // Default: false (disabled) - opt-in for testing
+        this.useStreamingLoad = localStorage.getItem('beta_streaming') === 'true';
+        
+        // Log feature status
+        console.log(`[Large File Support] Streaming mode: ${this.useStreamingLoad ? 'ENABLED (BETA)' : 'DISABLED'}`);
 
         this.initEventListeners();
         this.initDragAndDrop();
@@ -441,6 +451,19 @@ class App {
             this.allowDiagnosticsAccess = e.target.checked;
             localStorage.setItem('allowDiagnosticsAccess', this.allowDiagnosticsAccess);
             this.updateDiagnosticsButtonVisibility();
+        });
+
+        // Beta streaming toggle
+        const settingsBetaStreamingCheckbox = document.getElementById('beta-streaming-toggle-settings');
+        
+        settingsBetaStreamingCheckbox.checked = this.useStreamingLoad;
+        settingsBetaStreamingCheckbox.addEventListener('change', (e) => {
+            this.useStreamingLoad = e.target.checked;
+            localStorage.setItem('beta_streaming', this.useStreamingLoad);
+            // Show notification that app restart may be needed
+            if (this.useStreamingLoad) {
+                this.showToast('Large file support enabled. Reload may be needed for full effect.', 'info', 5000);
+            }
         });
 
         // Mixer save/load controls

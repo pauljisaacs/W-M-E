@@ -3,6 +3,41 @@ export class MetadataHandler {
         this.textDecoder = new TextDecoder('utf-8');
     }
 
+    /**
+     * Check if file is RF64 format (RF64 signature instead of RIFF)
+     */
+    isRF64(view) {
+        const signature = view.getUint32(0, false);
+        return signature === 0x52463634; // 'RF64' in big-endian
+    }
+
+    /**
+     * Read 64-bit unsigned integer (little-endian)
+     * JavaScript Number can safely represent integers up to 2^53 (9 PB)
+     */
+    readUint64LE(view, offset) {
+        const low = view.getUint32(offset, true);
+        const high = view.getUint32(offset + 4, true);
+        // For file sizes, this should be safe (up to 9 petabytes)
+        return high * 0x100000000 + low;
+    }
+
+    /**
+     * Parse ds64 chunk (RF64 Extended Size chunk)
+     * Contains 64-bit sizes for RIFF, data, and sample count
+     */
+    parseDS64Chunk(view, offset, chunkSize) {
+        const ds64 = {
+            riffSize: this.readUint64LE(view, offset),
+            dataSize: this.readUint64LE(view, offset + 8),
+            sampleCount: this.readUint64LE(view, offset + 16),
+            tableLength: view.getUint32(offset + 24, true)
+        };
+        
+        console.log(`[RF64] ds64 chunk: dataSize=${ds64.dataSize} bytes, samples=${ds64.sampleCount}`);
+        return ds64;
+    }
+
     async parseFile(file) {
         // For large files, metadata can be at the beginning AND at the end (after data chunk)
         // Strategy: Read beginning until we hit 'data' chunk, then read the end of the file
@@ -206,13 +241,14 @@ export class MetadataHandler {
 
     isWav(view) {
         const chunkId = view.getUint32(0, false);
-        return (chunkId === 0x52494646 || chunkId === 0x52463634) && // RIFF or RF64
-            view.getUint32(8, false) === 0x57415645;   // WAVE
+        const isRiffOrRF64 = (chunkId === 0x52494646 || chunkId === 0x52463634); // RIFF or RF64
+        const isWave = view.getUint32(8, false) === 0x57415645; // WAVE
+        return isRiffOrRF64 && isWave;
     }
 
     parseWav(view, filename, actualFileSize = null) {
         const chunkIdHeader = view.getUint32(0, false);
-        const isRF64 = chunkIdHeader === 0x52463634; // RF64
+        const isRF64 = this.isRF64(view);
 
         const metadata = {
             filename: filename,
@@ -221,7 +257,7 @@ export class MetadataHandler {
             chunks: {}
         };
 
-        let rf64DataSize = 0n;
+        let ds64Info = null; // Store ds64 chunk info
         let offset = 12; // Skip RIFF/RF64 header
 
         while (offset < view.byteLength) {
@@ -233,11 +269,7 @@ export class MetadataHandler {
 
             if (chunkId === 'ds64') {
                 // Parse ds64 chunk (RF64 64-bit sizes)
-                // RIFF Size (8), Data Size (8), Sample Count (8), Table Length (4)
-                const ds64View = new DataView(view.buffer, view.byteOffset + offset + 8, chunkSize);
-                // We primarily care about the Data Size (bytes 8-15)
-                rf64DataSize = ds64View.getBigUint64(8, true);
-                console.log(`Found ds64 chunk. Data Size: ${rf64DataSize}`);
+                ds64Info = this.parseDS64Chunk(view, offset + 8, chunkSize);
             } else if (chunkId === 'fmt ') {
                 metadata.channels = view.getUint16(offset + 10, true);
                 metadata.sampleRate = view.getUint32(offset + 12, true);
@@ -250,9 +282,9 @@ export class MetadataHandler {
                 metadata.audioDataOffset = offset + 8;
 
                 // If RF64 and size is -1 (0xFFFFFFFF), use the size from ds64
-                if (chunkSize === 0xFFFFFFFF && isRF64) {
-                    metadata.audioDataSize = Number(rf64DataSize); // Convert to Number (safe up to 9PB)
-                    console.log(`Using RF64 data size: ${metadata.audioDataSize}`);
+                if (chunkSize === 0xFFFFFFFF && isRF64 && ds64Info) {
+                    metadata.audioDataSize = ds64Info.dataSize;
+                    console.log(`[RF64] Using ds64 data size: ${metadata.audioDataSize} bytes`);
                 } else {
                     metadata.audioDataSize = chunkSize;
                 }
