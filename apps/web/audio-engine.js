@@ -355,10 +355,8 @@ export class AudioEngine {
         // Store buffer and play
         this.buffer = buffer;
         
-        // Setup routing if needed
-        if (!this.splitter) {
-            this.setupRouting();
-        }
+        // Setup routing (always reconnect to ensure mixer nodes are properly connected)
+        this.setupRouting();
 
         // Play from offset
         this.play(startOffset);

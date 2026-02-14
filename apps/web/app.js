@@ -4703,9 +4703,9 @@ class App {
             const startSampleOffset = actualStartSamples - fileStartSamples;
             const sampleCount = actualEndSamples - actualStartSamples;
 
-            // Load file audio
+            // Load file audio - use AudioEngine.decodeFile for RF64/large file support
             const arrayBuffer = await sourceFile.file.arrayBuffer();
-            const audioBuffer = await this.audioEngine.audioCtx.decodeAudioData(arrayBuffer.slice(0));
+            const audioBuffer = await this.audioEngine.decodeFile(arrayBuffer);
 
             // Extract range using OfflineAudioContext
             const channels = audioBuffer.numberOfChannels;
