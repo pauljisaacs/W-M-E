@@ -28,8 +28,52 @@ if (!isDesktop) {
     }
 
     async arrayBuffer() {
-      const bytes = await window.electronFS.readFile(this._path);
-      return toArrayBuffer(bytes);
+      // JavaScript has a hard limit on ArrayBuffer size (~2GB depending on platform)
+      // For very large files, we cannot create a single large ArrayBuffer
+      // Instead, we need to use a chunked/streaming approach
+      
+      const TWO_GB = 2 * 1024 * 1024 * 1024;
+      
+      if (this.size > TWO_GB) {
+        // For files > 2GB, we cannot create a single ArrayBuffer due to V8 limitations
+        // Throw a specific error that can be caught and handled differently
+        const error = new Error(
+          `File too large for JavaScript ArrayBuffer (${(this.size / (1024 * 1024 * 1024)).toFixed(2)} GB). ` +
+          `JavaScript has a ~2GB limit on ArrayBuffer size. Streaming decoding is required for larger files.`
+        );
+        error.code = 'FILE_TOO_LARGE_FOR_ARRAYBUFFER';
+        error.fileSize = this.size;
+        error.filePath = this._path;
+        throw error;
+      }
+      
+      // For files <= 2GB, use chunked reading with smaller chunks to avoid allocation failures
+      const chunkSize = 50 * 1024 * 1024; // 50MB chunks
+      const chunks = [];
+      let offset = 0;
+      
+      console.log(`Reading file (${(this.size / (1024 * 1024)).toFixed(2)} MB) in chunks...`);
+      
+      while (offset < this.size) {
+        const end = Math.min(offset + chunkSize, this.size);
+        const bytes = await window.electronFS.readFileSlice(this._path, offset, end);
+        chunks.push(bytes);
+        offset = end;
+      }
+      
+      // Combine chunks
+      console.log(`Combining ${chunks.length} chunks...`);
+      const totalLength = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+      const combined = new Uint8Array(totalLength);
+      let position = 0;
+      
+      for (const chunk of chunks) {
+        combined.set(new Uint8Array(chunk), position);
+        position += chunk.byteLength;
+      }
+      
+      console.log('File reading complete');
+      return combined.buffer;
     }
 
     slice(start = 0, end = this.size) {
@@ -118,6 +162,10 @@ if (!isDesktop) {
   function toArrayBuffer(value) {
     if (value instanceof ArrayBuffer) return value;
     if (ArrayBuffer.isView(value)) {
+      // For large files, avoid creating a copy with .slice() if we're using the entire buffer
+      if (value.byteOffset === 0 && value.byteLength === value.buffer.byteLength) {
+        return value.buffer;
+      }
       return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
     }
     return new Uint8Array(value).buffer;
@@ -158,11 +206,17 @@ if (!isDesktop) {
   }
 
   window.showOpenFilePicker = async function showOpenFilePicker(options = {}) {
-    const paths = await window.electronFS.openFiles({
-      multiple: options.multiple !== false,
-      filters: mapFilePickerTypes(options.types),
-    });
-    return paths.map((filePath) => new ElectronFileHandle(filePath));
+    try {
+      const paths = await window.electronFS.openFiles({
+        multiple: options.multiple !== false,
+        filters: mapFilePickerTypes(options.types),
+      });
+      return paths.map((filePath) => new ElectronFileHandle(filePath));
+    } catch (error) {
+      // Re-throw with proper error details
+      console.error('Electron showOpenFilePicker error:', error);
+      throw error;
+    }
   };
 
   window.showDirectoryPicker = async function showDirectoryPicker() {

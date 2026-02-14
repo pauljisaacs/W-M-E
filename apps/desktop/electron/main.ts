@@ -165,6 +165,19 @@ ipcMain.handle('fs:save-file', async (_event, options?: { suggestedName?: string
 });
 
 ipcMain.handle('fs:read-file', async (_event, filePath: string) => {
+  const stat = await fs.stat(filePath);
+  const fileSize = stat.size;
+  
+  // For files > 1GB, the renderer should use fs:read-file-slice for chunked reading
+  // to avoid memory allocation failures
+  const ONE_GB = 1024 * 1024 * 1024;
+  
+  if (fileSize > ONE_GB) {
+    throw new Error(
+      `File is too large (${(fileSize / ONE_GB).toFixed(2)} GB). Use chunked reading via readFileSlice instead.`
+    );
+  }
+  
   const data = await fs.readFile(filePath);
   return new Uint8Array(data);
 });

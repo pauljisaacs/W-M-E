@@ -23,10 +23,12 @@ export class AudioEngine {
     async decodeFile(arrayBuffer) {
         try {
             // Check for RF64 header OR very large file (> 2GB) to skip native decoding
-            // Native decoding requires cloning (double memory) and often crashes on large buffers
+            // Native decoding requires cloning (double memory) and often crashes on large buffers in web
+            // Electron can handle larger files better, so only restrict for web
             const view = new DataView(arrayBuffer);
             const isRF64 = view.getUint32(0, false) === 0x52463634; // RF64 signature
-            const isLargeFile = arrayBuffer.byteLength > 2 * 1024 * 1024 * 1024; // > 2GB
+            const isElectron = Boolean(window.electronAPI?.isElectron);
+            const isLargeFile = !isElectron && arrayBuffer.byteLength > 2 * 1024 * 1024 * 1024; // > 2GB (web only)
 
             if (isRF64 || isLargeFile) {
                 console.log(`Large file detected (RF64: ${isRF64}, Size: ${arrayBuffer.byteLength}), skipping native decode...`);

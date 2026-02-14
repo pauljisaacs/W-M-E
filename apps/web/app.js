@@ -1504,9 +1504,10 @@ class App {
             tr.title = 'Missing iXML chunk - use Repair iXML to add it';
         }
         
-        // Add indicator for large files that can't be edited
+        // Add indicator for large files that can't be edited (web only - Electron has no memory limit)
         const item = this.files[index];
-        const isLargeFile = item.file && item.file.size > 2 * 1024 * 1024 * 1024;
+        const isElectron = Boolean(window.electronAPI?.isElectron);
+        const isLargeFile = !isElectron && item.file && item.file.size > 2 * 1024 * 1024 * 1024;
         if (isLargeFile) {
             const fileSizeGB = (item.file.size / 1024 / 1024 / 1024).toFixed(2);
             tr.style.opacity = '0.7';
@@ -1516,7 +1517,7 @@ class App {
         const createCell = (key, val, editable = true) => {
             const td = document.createElement('td');
             
-            // Check if this is a large file (>2GB) and disable editing
+            // Check if this is a large file (>2GB) and disable editing (web only)
             if (isLargeFile) {
                 editable = false;
             }
@@ -2130,28 +2131,31 @@ class App {
     async saveSelected() {
         if (this.selectedIndices.size === 0) return;
 
-        // Check for large files that can't be saved (>2GB browser memory limit)
+        // Check for large files that can't be saved (>2GB browser memory limit - web only)
+        const isElectron = Boolean(window.electronAPI?.isElectron);
         const MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024; // 2GB
         const largeFiles = [];
         
-        for (const index of this.selectedIndices) {
-            const item = this.files[index];
-            const targets = item.isGroup ? item.siblings : [item];
-            
-            for (const target of targets) {
-                if (target.file.size > MAX_FILE_SIZE) {
-                    largeFiles.push({
-                        name: target.metadata.filename,
-                        size: (target.file.size / 1024 / 1024 / 1024).toFixed(2)
-                    });
+        if (!isElectron) {
+            for (const index of this.selectedIndices) {
+                const item = this.files[index];
+                const targets = item.isGroup ? item.siblings : [item];
+                
+                for (const target of targets) {
+                    if (target.file.size > MAX_FILE_SIZE) {
+                        largeFiles.push({
+                            name: target.metadata.filename,
+                            size: (target.file.size / 1024 / 1024 / 1024).toFixed(2)
+                        });
+                    }
                 }
             }
-        }
-        
-        if (largeFiles.length > 0) {
-            const fileList = largeFiles.map(f => `• ${f.name} (${f.size} GB)`).join('\n');
-            alert(`Cannot save files larger than 2GB due to browser memory limitations:\n\n${fileList}\n\nMetadata editing is not supported for files over 2GB.`);
-            return;
+            
+            if (largeFiles.length > 0) {
+                const fileList = largeFiles.map(f => `• ${f.name} (${f.size} GB)`).join('\n');
+                alert(`Cannot save files larger than 2GB due to browser memory limitations:\n\n${fileList}\n\nMetadata editing is not supported for files over 2GB.`);
+                return;
+            }
         }
 
         // Apply pending edits first
@@ -2417,9 +2421,14 @@ class App {
             const item = this.files[index];
             const fileSizeGB = item.file.size / (1024 * 1024 * 1024);
 
-            // Skip audio loading for files > 2GB (browser memory limit)
-            if (item.file.size > 2 * 1024 * 1024 * 1024) {
-                console.warn(`File ${item.metadata.filename} is ${fileSizeGB.toFixed(2)} GB - skipping audio loading (Metadata Only mode)`);
+            // Skip audio loading for files > 2GB (JavaScript ArrayBuffer limitation - even in Electron)
+            const isElectron = Boolean(window.electronAPI?.isElectron);
+            const TWO_GB = 2 * 1024 * 1024 * 1024;
+            
+            // JavaScript has a hard ~2GB limit on ArrayBuffer size, even in Electron
+            // For files > 2GB, we cannot load the full audio into memory
+            if (item.file.size > TWO_GB) {
+                console.warn(`File ${item.metadata.filename} is ${fileSizeGB.toFixed(2)} GB - exceeds JavaScript ArrayBuffer limit (Metadata Only mode)`);
 
                 // Clear the audio buffer so playback doesn't use old file's audio
                 this.audioEngine.buffer = null;
@@ -2438,7 +2447,10 @@ class App {
                 // Update UI to show metadata-only mode
                 const playerFilename = document.getElementById('player-filename');
                 if (playerFilename) {
-                    playerFilename.innerHTML = `${item.metadata.filename} <span style="color: #ffcf44; font-size: 0.8em;">(Metadata Only - ${fileSizeGB.toFixed(2)} GB)</span>`;
+                    const platformNote = isElectron 
+                        ? 'JavaScript ArrayBuffer limit (~2GB)' 
+                        : 'browser memory limitation';
+                    playerFilename.innerHTML = `${item.metadata.filename} <span style="color: #ffcf44; font-size: 0.8em;">(Metadata Only - ${fileSizeGB.toFixed(2)} GB - ${platformNote})</span>`;
                 }
 
                 // Clear waveform with informative message
@@ -2464,10 +2476,13 @@ class App {
                 ctx.fillStyle = '#121212';
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
                 ctx.fillStyle = '#ffcf44';
-                ctx.font = '16px Inter';
+                ctx.font = '14px Inter';
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
-                ctx.fillText('Waveform and metadata editing unavailable for files > 2GB (browser limitation). You can still view metadata.', canvas.width / 2, canvas.height / 2);
+                const line1 = 'File exceeds JavaScript ArrayBuffer limit (~2GB).';
+                const line2 = 'Waveform and playback unavailable. Metadata viewing only.';
+                ctx.fillText(line1, canvas.width / 2, canvas.height / 2 - 10);
+                ctx.fillText(line2, canvas.width / 2, canvas.height / 2 + 10);
 
                 this.currentlyLoadedFileIndex = index;
                 // Update TC counter display to new take's TC Start
@@ -3664,12 +3679,14 @@ class App {
             }
 
             // For large files, only read the last portion (bEXT chunks are typically at the end)
-            // For >3GB files, reading entire file will fail or be very slow
+            // For >3GB files in web version, reading entire file will fail or be very slow
+            // Electron can handle large files without restriction
             const fileSize = item.file.size;
-            const isLargeFile = fileSize > 2 * 1024 * 1024 * 1024; // > 2GB
+            const isElectron = Boolean(window.electronAPI?.isElectron);
+            const isLargeFile = !isElectron && fileSize > 2 * 1024 * 1024 * 1024; // > 2GB (web only)
 
             if (isLargeFile) {
-                // For large files, read only the last 256KB (bEXT is usually much smaller)
+                // For large files in web, read only the last 256KB (bEXT is usually much smaller)
                 const tailSize = Math.min(256 * 1024, fileSize);
                 const startPos = fileSize - tailSize;
                 
@@ -4075,19 +4092,49 @@ class App {
 
             // Handle large file errors gracefully
             const playerFilename = document.getElementById('player-filename');
-            if (playerFilename) {
-                playerFilename.innerHTML = `${item.metadata.filename} <span style="color: #ffcf44; font-size: 0.8em;">(Error)</span>`;
+            
+            // Check if this is the JavaScript ArrayBuffer size limitation
+            if (err.code === 'FILE_TOO_LARGE_FOR_ARRAYBUFFER') {
+                const fileSizeGB = (err.fileSize / (1024 * 1024 * 1024)).toFixed(2);
+                
+                if (playerFilename) {
+                    playerFilename.innerHTML = `${item.metadata.filename} <span style="color: #ffcf44; font-size: 0.8em;">(${fileSizeGB} GB - Metadata Only)</span>`;
+                }
+
+                // Clear waveform with informative message
+                const canvas = document.getElementById('waveform-canvas');
+                const ctx = canvas.getContext('2d');
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = '#121212';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = '#ffcf44';
+                ctx.font = '14px Inter';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('File exceeds JavaScript ArrayBuffer limit (~2GB).', canvas.width / 2, canvas.height / 2 - 10);
+                ctx.fillText('Metadata viewing only. Waveform and playback unavailable.', canvas.width / 2, canvas.height / 2 + 10);
+
+                alert(
+                    `File "${item.metadata.filename}" is too large (${fileSizeGB} GB).\n\n` +
+                    `JavaScript has a ~2GB memory limit for ArrayBuffers, even in Electron.\n\n` +
+                    `You can view and edit metadata, but audio playback and waveform display are unavailable for this file.`
+                );
+            } else {
+                // Other errors
+                if (playerFilename) {
+                    playerFilename.innerHTML = `${item.metadata.filename} <span style="color: #ffcf44; font-size: 0.8em;">(Error)</span>`;
+                }
+
+                // Clear waveform
+                const canvas = document.getElementById('waveform-canvas');
+                const ctx = canvas.getContext('2d');
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = '#2a2a2a';
+                ctx.font = '14px Inter';
+                ctx.fillText('Playback unavailable', 20, 30);
+
+                alert(`Error loading audio for "${item.metadata.filename}": ${err.message}`);
             }
-
-            // Clear waveform
-            const canvas = document.getElementById('waveform-canvas');
-            const ctx = canvas.getContext('2d');
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            ctx.fillStyle = '#2a2a2a';
-            ctx.font = '14px Inter';
-            ctx.fillText('Playback unavailable', 20, 30);
-
-            alert(`Error loading audio for "${item.metadata.filename}": ${err.message}`);
         } finally {
             // Hide loading overlay
             loadingOverlay.style.display = 'none';
@@ -4095,6 +4142,48 @@ class App {
     }
 
     async loadFileWithProgress(file, onProgress) {
+        // For Electron with large files, use native file reading which handles memory better
+        const isElectron = Boolean(window.electronAPI?.isElectron);
+        const hasElectronPath = Boolean(file._path);
+        
+        if (isElectron && hasElectronPath) {
+            // Electron path: read file directly using native API (better memory handling)
+            // This bypasses the chunking and uses Node.js native file reading with chunk support for >2GB
+            
+            // Show progress in steps for UI feedback
+            const progressInterval = setInterval(() => {
+                onProgress(50);
+            }, 100);
+            
+            try {
+                // This uses window.electronFS.readFile internally via the polyfill
+                // The Electron main process now handles large files with chunked reading
+                const arrayBuffer = await file.arrayBuffer();
+                clearInterval(progressInterval);
+                onProgress(100);
+                return arrayBuffer;
+            } catch (err) {
+                clearInterval(progressInterval);
+                
+                // Handle JavaScript ArrayBuffer size limitation specifically
+                if (err.code === 'FILE_TOO_LARGE_FOR_ARRAYBUFFER') {
+                    const fileSizeGB = (err.fileSize / (1024 * 1024 * 1024)).toFixed(2);
+                    const error = new Error(
+                        `File is too large (${fileSizeGB} GB) for JavaScript ArrayBuffer. ` +
+                        `JavaScript has a ~2GB memory limit for single ArrayBuffers, even in Electron. ` +
+                        `You can view and edit metadata, but audio playback and waveform are unavailable.`
+                    );
+                    error.code = 'FILE_TOO_LARGE_FOR_ARRAYBUFFER';
+                    error.fileSize = err.fileSize;
+                    throw error;
+                }
+                
+                console.error('Electron file reading failed:', err);
+                throw err;
+            }
+        }
+        
+        // Web path: use chunked reading to show progress
         const chunkSize = 10 * 1024 * 1024; // 10MB chunks
         const chunks = [];
         let loadedBytes = 0;
