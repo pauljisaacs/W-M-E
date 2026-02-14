@@ -136,37 +136,89 @@ export class PeakFileCache {
         const chunkSize = 10 * 1024 * 1024; // 10MB chunks
         
         // Parse WAV header to find data chunk
-        const headerSize = 1024; // Read first 1KB for header
-        const headerBlob = file.slice(0, headerSize);
-        const headerBuffer = await headerBlob.arrayBuffer();
-        const headerView = new DataView(headerBuffer);
+        // Use larger header size to account for metadata chunks (bEXT, iXML, etc.)
+        let headerSize = 50 * 1024; // Start with 50KB
+        const maxHeaderSize = 10 * 1024 * 1024; // Max 10MB for header search
         
-        // Find data chunk
-        let offset = 12; // Skip RIFF header
         let dataOffset = 0;
         let dataSize = 0;
+        let headerBuffer = null;
+        let headerView = null;
         
-        while (offset < headerBuffer.byteLength - 8) {
-            const chunkId = String.fromCharCode(
-                headerView.getUint8(offset),
-                headerView.getUint8(offset + 1),
-                headerView.getUint8(offset + 2),
-                headerView.getUint8(offset + 3)
-            );
-            const chunkSize = headerView.getUint32(offset + 4, true);
+        // Try to find data chunk, expanding search if needed
+        while (dataOffset === 0 && headerSize <= maxHeaderSize) {
+            const actualHeaderSize = Math.min(headerSize, file.size);
+            const headerBlob = file.slice(0, actualHeaderSize);
+            headerBuffer = await headerBlob.arrayBuffer();
+            headerView = new DataView(headerBuffer);
             
-            if (chunkId === 'data') {
-                dataOffset = offset + 8;
-                dataSize = chunkSize;
-                break;
+            // Check for valid WAV/RF64 header
+            const signature = String.fromCharCode(
+                headerView.getUint8(0),
+                headerView.getUint8(1),
+                headerView.getUint8(2),
+                headerView.getUint8(3)
+            );
+            
+            if (signature !== 'RIFF' && signature !== 'RF64') {
+                throw new Error(`Invalid WAV file signature: ${signature}`);
             }
             
-            offset += 8 + chunkSize;
-            if (offset % 2 !== 0) offset++; // Padding
+            // Scan for data chunk
+            let offset = 12; // Skip RIFF/RF64 header
+            let ds64DataSize = null;
+            
+            while (offset < headerBuffer.byteLength - 8) {
+                const chunkId = String.fromCharCode(
+                    headerView.getUint8(offset),
+                    headerView.getUint8(offset + 1),
+                    headerView.getUint8(offset + 2),
+                    headerView.getUint8(offset + 3)
+                );
+                const chunkSize = headerView.getUint32(offset + 4, true);
+                
+                // Validate chunk size
+                if (chunkSize < 0 || chunkSize > file.size) {
+                    console.warn(`[PeakCache] Invalid chunk size at offset ${offset}: ${chunkSize}`);
+                    break;
+                }
+                
+                // Handle ds64 chunk for RF64
+                if (chunkId === 'ds64' && signature === 'RF64') {
+                    // Read 64-bit data size
+                    const low = headerView.getUint32(offset + 16, true);
+                    const high = headerView.getUint32(offset + 20, true);
+                    ds64DataSize = high * 0x100000000 + low;
+                    console.log(`[PeakCache] Found RF64 ds64 chunk, dataSize=${ds64DataSize}`);
+                }
+                
+                if (chunkId === 'data') {
+                    dataOffset = offset + 8;
+                    // Use ds64 size for RF64 files with 0xFFFFFFFF placeholder
+                    dataSize = (chunkSize === 0xFFFFFFFF && ds64DataSize) ? ds64DataSize : chunkSize;
+                    console.log(`[PeakCache] Found data chunk at offset ${dataOffset}, size=${dataSize}`);
+                    break;
+                }
+                
+                // Move to next chunk
+                offset += 8 + chunkSize;
+                if (offset % 2 !== 0) offset++; // Word alignment
+                
+                // If offset exceeds current buffer, need to read more
+                if (offset >= headerBuffer.byteLength - 8) {
+                    console.log(`[PeakCache] Data chunk not found in first ${(headerSize / 1024).toFixed(0)}KB, expanding search...`);
+                    break;
+                }
+            }
+            
+            // If not found, double the search size
+            if (dataOffset === 0) {
+                headerSize *= 2;
+            }
         }
         
         if (dataOffset === 0) {
-            throw new Error('Could not find data chunk in WAV file');
+            throw new Error(`Could not find data chunk in WAV file (searched up to ${(headerSize / 1024).toFixed(0)}KB)`);
         }
         
         console.log(`[PeakCache] Data chunk: offset=${dataOffset}, size=${dataSize} bytes`);
