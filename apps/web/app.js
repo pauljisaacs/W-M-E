@@ -4099,11 +4099,10 @@ class App {
             ctx.fillStyle = color;
 
             // Downsample peaks to fit canvas width
-            const peaksPerPixel = Math.max(1, Math.ceil(channelPeaks.length / width));
-
+            // Use floating-point division for even distribution across all pixels
             for (let i = 0; i < width; i++) {
-                const startPeak = Math.floor(i * peaksPerPixel);
-                const endPeak = Math.min(startPeak + peaksPerPixel, channelPeaks.length);
+                const startPeak = Math.floor(i * channelPeaks.length / width);
+                const endPeak = Math.min(Math.ceil((i + 1) * channelPeaks.length / width), channelPeaks.length);
 
                 // Find min/max within this pixel's range
                 let min = 1.0;
@@ -4115,8 +4114,10 @@ class App {
                     if (peak.max > max) max = peak.max;
                 }
 
-                // Draw vertical bar
-                ctx.fillRect(i, (1 + min) * amp, 1, Math.max(1, (max - min) * amp));
+                // Only draw if we found valid peaks (handles edge case of empty ranges)
+                if (min <= max) {
+                    ctx.fillRect(i, (1 + min) * amp, 1, Math.max(1, (max - min) * amp));
+                }
             }
         }
 
